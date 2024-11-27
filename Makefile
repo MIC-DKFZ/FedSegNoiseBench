@@ -1,4 +1,5 @@
 # Variables
+PYTHON_VERSION = python3.10  # Specify the Python version
 VENV_DIR = .venv
 REQ_FILE = requirements.txt
 SUBMODULE_DIR = nnUNet
@@ -16,7 +17,7 @@ setup: $(VENV_DIR)/bin/activate
 
 # Create virtual environment if it doesn't exist
 $(VENV_DIR)/bin/activate:
-	python3 -m venv $(VENV_DIR)
+	$(PYTHON_VERSION) -m venv $(VENV_DIR)
 
 # Update packages from requirements.txt and submodule
 .PHONY: update
@@ -28,4 +29,3 @@ update:
 .PHONY: clean
 clean:
 	rm -rf $(VENV_DIR)
-
