@@ -1,7 +1,7 @@
 # Variables
 PYTHON_VERSION = python3.10  # Specify the Python version
-VENV_DIR = .venv
-#  = /dkfz/cluster/gpu/data/OE0441/m391k/venvs/.venv
+# VENV_DIR = .venv
+VENVDIR = /dkfz/cluster/gpu/data/OE0441/m391k/venvs/.venv
 REQ_FILE = requirements.txt
 SUBMODULE_DIR = nnUNet
 
