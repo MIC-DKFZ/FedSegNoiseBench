@@ -1,7 +1,6 @@
 # Variables
 PYTHON_VERSION = python3.10  # Specify the Python version
-# VENV_DIR = .venv
-VENVDIR = /dkfz/cluster/gpu/data/OE0441/m391k/venvs/.venv
+VENV_DIR = /dkfz/cluster/gpu/data/OE0441/m391k/venvs/.venv  # Full path to the virtual environment directory
 REQ_FILE = requirements.txt
 SUBMODULE_DIR = nnUNet
 
@@ -18,6 +17,7 @@ setup: $(VENV_DIR)/bin/activate
 
 # Create virtual environment if it doesn't exist
 $(VENV_DIR)/bin/activate:
+	@echo "Creating virtual environment in $(VENV_DIR)"
 	module load python/3.10.1 && $(PYTHON_VERSION) -m venv $(VENV_DIR)
 
 # Update packages from requirements.txt and submodule
