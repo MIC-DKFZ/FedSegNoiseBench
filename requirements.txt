@@ -1,4 +1,10 @@
+# Regular packages
 torch
 torchvision
 torchaudio
 numpy
+
+# Custom packages with custom index URL
+--extra-index-url https://read_package:gldt-uzw7Px4e1FD5y_X5mEJA@git.dkfz.de/api/v4/projects/1293/packages/pypi/simple
+httpx
+blosc2
