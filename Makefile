@@ -2,7 +2,7 @@
 # "module load python/3.10.1"
 
 # Variables
-PYTHON_VERSION = python3.10  # Specify the Python version
+PYTHON_VERSION = python3.12  # Specify the Python version
 # VENV_DIR = /dkfz/cluster/gpu/data/OE0441/m391k/venvs/.venv
 VENV_DIR = .venv
 REQ_FILE = requirements.txt
