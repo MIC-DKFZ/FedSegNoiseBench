@@ -3,6 +3,7 @@ torch
 torchvision
 torchaudio
 numpy
+pylidc
 
 # Custom packages with custom index URL
 httpx
