@@ -82,6 +82,11 @@ def process_lidc_dataset(input_dir, output_mask_dir, log_csv, mode):
         
         for ct_file in tqdm(ct_files, desc="Creating/Identifying Segmentation Mask for CT scan", unit="scan"):
             patient_id = ct_file.split("_")[0].split("-")[2]  # Extract patient ID
+
+            # check if file already exists
+            if os.path.exists(os.path.join(output_mask_dir, f"{patient_id}_fused_SEG.nii.gz")):
+                print(f"Segmentation mask for patient {patient_id} already exists, skipping.")
+                continue
             
             # Find all segmentation masks for this patient
             mask_files = [
@@ -104,9 +109,9 @@ def process_lidc_dataset(input_dir, output_mask_dir, log_csv, mode):
                 raise ValueError(f"No masks found for patient {patient_id}")
             
             for pat_nod_key, masks in nodule_masks.items():
-                if len(masks) != 4:
-                    print(f"Warning: Nodule {pat_nod_key} does not have exactly 4 masks.")
-                    continue
+                # if len(masks) != 4:
+                #     print(f"Warning: Nodule {pat_nod_key} does not have exactly 4 masks.")
+                #     continue
                 
                 if mode == "random":
                     # Randomly select one mask
