@@ -4,9 +4,8 @@ import nibabel as nib
 import numpy as np
 import csv
 from tqdm import tqdm
-import nibabel.processing
-from nibabel.processing import resample_to_output
 from scipy.ndimage import zoom
+import argparse
 
 MAX_ANNOTATORS = 4
 
@@ -33,6 +32,14 @@ def process_lidc_dataset(input_dir, output_mask_dir, log_csv, mode):
         input_dir (str): Directory containing the LIDC-IDRI CT and segmentation files.
         output_mask_dir (str): Directory to save the fused segmentation masks.
         log_csv (str): Path to the CSV log file tracking selected rater masks.
+        mode (str): Mode for selecting the segmentation mask(s) per nodule. 
+            Options: "random", "union", "lesion_majority", "annotator_majority"
+            `union`: at least one annotator marked the voxel
+            `lesion_majority`: majority voting per lesion (only annotators for
+                the respective lesion are counted)
+            `annotator_majority`: majority voting per voxel (all annotators are
+                counted)
+
     """
     # Ensure output directory exists
     os.makedirs(output_mask_dir, exist_ok=True)
@@ -86,6 +93,7 @@ def process_lidc_dataset(input_dir, output_mask_dir, log_csv, mode):
 
                 elif mode == "union" or mode == "lesion_majority" or mode == "annotator_majority":
                     tmp_nodule_mask = None
+                    count_masks_w_nodule_annotated = 0
                     # add annotator i's masks up for this nodule j
                     for mask in masks:
                         # Load annotator i's mask of nodule j
@@ -104,11 +112,15 @@ def process_lidc_dataset(input_dir, output_mask_dir, log_csv, mode):
                         # Fuse the resampled mask for current nodule
                         tmp_nodule_mask += mask_data.astype(np.uint8)
 
+                        # check if mask actually contains nodule or is empty
+                        if np.max(mask_data) != 0:
+                            count_masks_w_nodule_annotated += 1
+
                     # mode "union", "lesion_majority", "annotator_majority" logic
                     if mode == "union":
                         final_nodule_mask = (tmp_nodule_mask > 0).astype(np.uint8)
                     elif mode == "lesion_majority":
-                        final_nodule_mask = (tmp_nodule_mask >= len(masks) // 2).astype(np.uint8)
+                        final_nodule_mask = (tmp_nodule_mask >= count_masks_w_nodule_annotated // 2).astype(np.uint8)
                     elif mode == "annotator_majority":
                         final_nodule_mask = (tmp_nodule_mask >= MAX_ANNOTATORS // 2).astype(np.uint8)
                     else:
@@ -135,6 +147,10 @@ def process_lidc_dataset(input_dir, output_mask_dir, log_csv, mode):
                     final_nodule_mask = resample_mask(final_nodule_mask, final_shape)
                 # just sum them up
                 final_fused_mask += final_nodule_mask
+
+            # for binary mask, set all values > 0 to 1
+            tmp_final_fused_mask = (final_fused_mask > 0).astype(np.uint8)
+            final_fused_mask = tmp_final_fused_mask
             
             # Save fused mask to output directory
             if final_fused_mask is not None:
@@ -143,10 +159,21 @@ def process_lidc_dataset(input_dir, output_mask_dir, log_csv, mode):
                 nib.save(final_fused_mask_nifti, output_file)
                 print(f"Saved fused mask for patient {patient_id} to {output_file}")
 
-# Define paths
-input_directory = "/home/m391k/E132-Projekte/Projects/2024_Bujotzek_Noisy-Seg-Label-Benchi/data/LIDC-IDRI_raw/LIDC_seg-per-nodule-and-rater_nifti"
-output_directory = "/home/m391k/E132-Projekte/Projects/2024_Bujotzek_Noisy-Seg-Label-Benchi/data/LIDC-IDRI_raw/LIDC-single_seg_nifti/lesion_majority"
-log_file = os.path.join(output_directory, "selected_masks_log.csv")
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Process LIDC dataset for segmentation masks.")
+    parser.add_argument("input_directory", type=str, help="Path to the input directory containing CT and mask files.")
+    parser.add_argument("output_directory", type=str, help="Path to the output directory for fused masks.")
+    parser.add_argument("log_file", type=str, help="Path to the log file.")
+    parser.add_argument("--mode", type=str, default="lesion_majority", choices=["random", "union", "lesion_majority", "annotator_majority"],
+                        help="Mode for selecting segmentation masks (default: lesion_majority).")
 
-# Run the function
-process_lidc_dataset(input_directory, output_directory, log_file, mode="lesion_majority") # mode="random", "union", "lesion_majority", "annotater_majority"
+    args = parser.parse_args()
+
+    process_lidc_dataset(args.input_directory, args.output_directory, args.log_file, args.mode)
+
+# # Define paths
+# input_directory = "/home/m391k/E132-Projekte/Projects/2024_Bujotzek_Noisy-Seg-Label-Benchi/data/LIDC-IDRI_raw/LIDC_seg-per-nodule-and-rater_nifti"
+# output_directory = "/home/m391k/E132-Projekte/Projects/2024_Bujotzek_Noisy-Seg-Label-Benchi/data/LIDC-IDRI_raw/LIDC-single_seg_nifti/lesion_majority"
+# log_file = os.path.join(output_directory, "selected_masks_log.csv")
+# # Run the function
+# process_lidc_dataset(input_directory, output_directory, log_file, mode="lesion_majority") # mode="random", "union", "lesion_majority", "annotater_majority"
