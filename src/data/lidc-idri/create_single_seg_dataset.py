@@ -8,6 +8,7 @@ from scipy.ndimage import zoom
 import argparse
 
 MAX_ANNOTATORS = 4
+MALIGNANCY_THRESHOLD = 3
 
 def resample_mask(mask_data, target_shape):
     """

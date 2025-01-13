@@ -3,14 +3,59 @@ import nibabel as nib
 import numpy as np
 from tqdm import tqdm
 
-def find_and_fix_nifti_files(directory):
+def create_missing_seg_masks(directory):
     """
-    For each NIfTI file matching 'LIDC-IDRI-<4-digit-number>_*_0_SEG.nii.gz',
-    check for corresponding '_1_SEG.nii.gz', '_2_SEG.nii.gz', '_3_SEG.nii.gz' files.
-    If missing, create zero-filled NIfTI files matching the reference file's dimensions.
+    Scans a directory for missing segmentation (SEG) mask files and generates zero-filled 
+    NIfTI files to ensure a complete set of segmentation masks.
 
-    Args:
-        directory (str): Path to the directory containing NIfTI files.
+    This function processes all computed tomography (CT) files in the specified directory 
+    that match the naming convention 'LIDC-IDRI-<ID>_CT.nii.gz'. For each CT file, it looks 
+    for associated segmentation files ('_SEG.nii.gz'). If some or all expected segmentation 
+    files are missing, it creates zero-filled NIfTI segmentation masks.
+
+    Parameters:
+    ----------
+    directory : str
+        The path to the directory containing the CT and SEG files.
+
+    Process:
+    -------
+    1. Collects all CT files in the directory starting with 'LIDC-IDRI-' and ending 
+       with '_CT.nii.gz'.
+    2. Extracts patient IDs from the CT file names and searches for corresponding SEG files.
+    3. For each patient, identifies the expected segmentation files:
+        - '_0_SEG.nii.gz', '_1_SEG.nii.gz', '_2_SEG.nii.gz', and '_3_SEG.nii.gz'.
+    4. If segmentation files are missing:
+        - For existing nodules, creates zero-filled NIfTI files using the reference CT file.
+        - For patients without nodules, creates four zero-filled segmentation masks 
+          for an imaginary nodule with ID '0'.
+    5. Saves the generated segmentation files to an 'empty_masks' folder within the directory.
+
+    Metrics:
+    -------
+    - Reports the number of existing segmentation files detected.
+    - Reports the number of missing segmentation files created.
+    - Reports the number of segmentation files created for non-existent nodules.
+
+    Notes:
+    ------
+    - The function assumes the NIfTI format for CT and segmentation files.
+    - Missing files are created with the same shape and affine transformation as the 
+      reference CT file.
+
+    Example:
+    -------
+    >>> create_missing_seg_masks("/path/to/dataset")
+    Checking CT files: 100%|█████████████████████████████| 50/50 [00:30<00:00,  1.63file/s]
+    Created 120 files and found 80 already existing files.
+    Created 40 files for non-existing nodules.
+
+    Dependencies:
+    ------------
+    - os
+    - nibabel (for NIfTI file handling)
+    - numpy
+    - tqdm (for progress bar visualization)
     """
     # Gather all files starting with 'LIDC-IDRI-' and ending with '_0_SEG.nii.gz'
     ct_files = [
@@ -40,9 +85,8 @@ def find_and_fix_nifti_files(directory):
             patient_nodule_ids = [patient_id + "_" + nodule_id for nodule_id in nodule_ids]
 
             for patient_nodule_id in patient_nodule_ids:
-                # patient_nodule_files = [f for f in seg_nodule_files if f.startswith(patient_nodule_id)]
 
-                # Build paths for '_1_SEG.nii.gz', '_2_SEG.nii.gz', '_3_SEG.nii.gz'
+                # Build paths for '_0_SEG.nii.gz', '_1_SEG.nii.gz', '_2_SEG.nii.gz', '_3_SEG.nii.gz'
                 expected_files = [
                     f"{patient_nodule_id}_0_SEG.nii.gz",
                     f"{patient_nodule_id}_1_SEG.nii.gz",
@@ -94,4 +138,4 @@ def find_and_fix_nifti_files(directory):
 
 # Set the directory containing the NIfTI files
 nifti_directory = "/home/m391k/E132-Projekte/Projects/2024_Bujotzek_Noisy-Seg-Label-Benchi/data/LIDC-IDRI_raw/LIDC_seg-per-nodule-and-rater_nifti"  # Replace with your directory path
-find_and_fix_nifti_files(nifti_directory)
+create_missing_seg_masks(nifti_directory)
