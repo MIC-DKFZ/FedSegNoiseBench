@@ -5,8 +5,8 @@ from tqdm import tqdm
 
 # Paths
 base_ct_dir = "/home/m391k/E132-Projekte/Projects/2024_Bujotzek_Noisy-Seg-Label-Benchi/data/LIDC-IDRI_raw/LIDC_seg-per-nodule-and-rater_nifti"
-base_seg_dir = "/home/m391k/E132-Projekte/Projects/2024_Bujotzek_Noisy-Seg-Label-Benchi/data/LIDC-IDRI_raw/LIDC-single_seg_nifti/annotator_majority"
-output_dir = "/home/m391k/E132-Projekte/Projects/2024_Bujotzek_Noisy-Seg-Label-Benchi/data/LIDC-IDRI_raw/nnUNet_raw/Dataset026_LIDC-AnnotatorMajority"
+base_seg_dir = "/home/m391k/E132-Projekte/Projects/2024_Bujotzek_Noisy-Seg-Label-Benchi/data/LIDC-IDRI_raw/LIDC-single_seg_nifti/malignancy_random-multi_rater"
+output_dir = "/home/m391k/E132-Projekte/Projects/2024_Bujotzek_Noisy-Seg-Label-Benchi/data/LIDC-IDRI_raw/nnUNet_raw/Dataset027_LIDC-Malignancy-RandomMultiRater"
 
 images_tr_dir = os.path.join(output_dir, "imagesTr")
 labels_tr_dir = os.path.join(output_dir, "labelsTr")
@@ -20,10 +20,11 @@ dataset_json = {
     "channel_names": {"0": "CT"},
     "description": "Lung Nodule Segmentation on CT (lidc)",
     "file_ending": ".nii.gz",
-    "labels": {"background": 0, "lesion": 1},
+    # "labels": {"background": 0, "lesion": 1},
+    "labels": {"background": 0, "begnin": 1, "malignant": 2},
     "licence": "CC-BY-SA 4.0",
     "name": "Lung LIDC",
-    "numTraining": 0,  # Will be updated dynamically
+    "numTraining": 0,
     "reference": "TCIA"
 }
 
