@@ -3,7 +3,7 @@ import nibabel as nib
 import numpy as np
 from tqdm import tqdm
 
-def create_missing_seg_masks(directory):
+def create_missing_seg_masks(directory, cropping=False):
     """
     Scans a directory for missing segmentation (SEG) mask files and generates zero-filled 
     NIfTI files to ensure a complete set of segmentation masks.
@@ -67,13 +67,21 @@ def create_missing_seg_masks(directory):
     monitor_created_files = 0
     monitor_nonodule_created_files = 0
     for ct_file in tqdm(ct_files, desc="Checking CT files", unit="file"):
-        # Extract the common identifier: LIDC-IDRI-<4-digit-number>
         patient_id = ct_file.split("_")[0]  # e.g., "LIDC-IDRI-0001"
+        patient_nodule_id = ct_file.split("_")[0] + "_" + ct_file.split("_")[1]  # e.g., "LIDC-IDRI-0001_0"
 
-        seg_nodule_files = [
-            f for f in os.listdir(directory) 
-            if f.startswith(patient_id) and f.endswith("_SEG.nii.gz")
-        ]
+        # for cropping=True, get SEG files nodule-specific
+        if cropping:
+            seg_nodule_files = [
+                f for f in os.listdir(directory) 
+                if f.startswith(patient_nodule_id) and f.endswith("_SEG.nii.gz")
+            ]
+        # for cropping=False, get all SEG files of patient
+        else:
+            seg_nodule_files = [
+                f for f in os.listdir(directory) 
+                if f.startswith(patient_id) and f.endswith("_SEG.nii.gz")
+            ]
 
         if len(seg_nodule_files) > 0:
             nodule_ids = []
@@ -137,5 +145,5 @@ def create_missing_seg_masks(directory):
     print(f"Created {monitor_nonodule_created_files} files for non-existing nodules.")
 
 # Set the directory containing the NIfTI files
-nifti_directory = "/home/m391k/E132-Projekte/Projects/2024_Bujotzek_Noisy-Seg-Label-Benchi/data/LIDC-IDRI_raw/LIDC_seg-per-nodule-and-rater_nifti"  # Replace with your directory path
-create_missing_seg_masks(nifti_directory)
+nifti_directory = "/home/m391k/E132-Projekte/Projects/2024_Bujotzek_Noisy-Seg-Label-Benchi/data/LIDC-IDRI_raw/LIDC_seg-per-nodule-and-rater_nifti-cropped"  # Replace with your directory path
+create_missing_seg_masks(nifti_directory, cropping=True)

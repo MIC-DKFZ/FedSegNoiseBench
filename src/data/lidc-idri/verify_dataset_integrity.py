@@ -30,7 +30,7 @@ def resample_image_to_match(reference_image, target_image, is_label=False):
     return resample.Execute(target_image)
 
 
-def process_files(images_dir, labels_dir):
+def process_files(images_dir, labels_dir, multi_class=False):
     """
     Processes and fixes mismatches between images and labels.
 
@@ -69,14 +69,15 @@ def process_files(images_dir, labels_dir):
             seg_image = resample_image_to_match(ct_image, seg_image, is_label=True)
             write_seg_image = True
 
-        # Fix binary mask values
-        if (unique_seg_values > 1).any():
-            print(f"Fixing binary mask values for {label_file}...")
-            seg_array[seg_array > 0] = 1
-            tmp_seg_image = sitk.GetImageFromArray(seg_array)
-            tmp_seg_image.CopyInformation(seg_image)
-            seg_image = tmp_seg_image
-            write_seg_image = True
+        if not multi_class:
+            # Fix binary mask values
+            if (unique_seg_values > 1).any():
+                print(f"Fixing binary mask values for {label_file}...")
+                seg_array[seg_array > 0] = 1
+                tmp_seg_image = sitk.GetImageFromArray(seg_array)
+                tmp_seg_image.CopyInformation(seg_image)
+                seg_image = tmp_seg_image
+                write_seg_image = True
 
         if write_seg_image:
             # Save the resampled images
@@ -86,17 +87,20 @@ def process_files(images_dir, labels_dir):
 
 
 if __name__ == "__main__":
+
     # CLI argument parsing
     parser = argparse.ArgumentParser(description="Fix mismatches between nnUNet images and labels.")
     parser.add_argument("--images_dir", required=True, help="Path to the CT images directory (imagesTr).")
     parser.add_argument("--labels_dir", required=True, help="Path to the labels directory (labelsTr).")
+    parser.add_argument("--multi_class", action="store_true", help="Differentiate between benign and malignant nodules.")
 
     args = parser.parse_args()
 
-    process_files(args.images_dir, args.labels_dir)
+    process_files(args.images_dir, args.labels_dir, args.multi_class)
 
     # # for debugging
     # process_files(
-    #     images_dir="/home/m391k/E132-Projekte/Projects/2024_Bujotzek_Noisy-Seg-Label-Benchi/data/LIDC-IDRI_raw/nnUNet_raw/Dataset024_LIDC-Union/imagesTr", 
-    #     labels_dir="/home/m391k/E132-Projekte/Projects/2024_Bujotzek_Noisy-Seg-Label-Benchi/data/LIDC-IDRI_raw/nnUNet_raw/Dataset024_LIDC-Union/labelsTr"
+    #     images_dir="/home/m391k/E132-Projekte/Projects/2024_Bujotzek_Noisy-Seg-Label-Benchi/data/LIDC-IDRI_raw/nnUNet_raw/Dataset027_LIDC-Malignancy-RandomMultiRater/imagesTr", 
+    #     labels_dir="/home/m391k/E132-Projekte/Projects/2024_Bujotzek_Noisy-Seg-Label-Benchi/data/LIDC-IDRI_raw/nnUNet_raw/Dataset027_LIDC-Malignancy-RandomMultiRater/labelsTr",
+    #     multi_class=True
     # )

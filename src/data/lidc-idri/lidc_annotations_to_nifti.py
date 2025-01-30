@@ -6,6 +6,7 @@ import nibabel as nib
 from skimage.draw import polygon
 from tqdm import tqdm
 import matplotlib
+from medpy.io import save
 
 matplotlib.use("Qt5Agg")
 import matplotlib.pyplot as plt
@@ -90,7 +91,7 @@ def get_affine(scan):
     return affine
 
 
-def process_lidc_dataset(output_dir):
+def process_lidc_dataset(output_dir: str=None, cropping: bool=False):
     """Processes the LIDC-IDRI dataset to extract multi-rater annotations and save as NIfTI."""
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
@@ -118,13 +119,14 @@ def process_lidc_dataset(output_dir):
         patient_id = scan.patient_id
         volume_path = os.path.join(output_dir, f"{patient_id}_CT.nii.gz")
 
-        if not os.path.exists(volume_path):
-            # Convert the scan's voxel data to a NIfTI file and save
-            volume = scan.to_volume()
-            affine = get_affine(scan)
-            save_nifti(volume, affine, volume_path)
-        else:
-            print("CT already exists, skip saving of CT volume!")
+        if not cropping:
+            if not os.path.exists(volume_path):
+                # Convert the scan's voxel data to a NIfTI file and save
+                volume = scan.to_volume()
+                affine = get_affine(scan)
+                save_nifti(volume, affine, volume_path)
+            else:
+                print("CT already exists, skip saving of CT volume!")
 
         # get nodules of current scan
         nodules = scan.cluster_annotations()
@@ -165,11 +167,30 @@ def process_lidc_dataset(output_dir):
                     )
                     # Optionally add an error row or log it elsewhere
                     metadata_rows.append([patient_id, nod_idx, rater_idx] + ["Error"] * (len(column_names) - 3))
-                    # Optionally log the error or record problematic cases elsewhere
-                    # continue
 
                 if os.path.exists(seg_output_fname):
                     print("Segmentation already exists, skip saving SEG mask!")
+                    continue
+
+                if cropping:
+                    if rater_idx == 0:
+                        # get and save cropped CT and mask only for the first annotation
+                        cropped_img_size = 64
+                        volume, mask, irp_pts = rater_annotation.uniform_cubic_resample(cropped_img_size-1, return_irp_pts=True)
+                        assert volume.shape == (64, 64, 64)
+                        nodule_ct_path = volume_path.replace("CT.nii.gz", f"{nod_idx}_CT.nii.gz")
+                        if os.path.exists(nodule_ct_path):
+                            print("Cropped CT already exists, skip saving of cropped CT volume!")
+                        else:
+                            save(volume, str(nodule_ct_path))
+                    if rater_idx < len(nodule):
+                        # get and save cropped mask for all other nodules
+                        mask = rater_annotation.uniform_cubic_resample(cropped_img_size-1, resample_vol=False, irp_pts=irp_pts)
+                        assert mask.shape == (64, 64, 64)
+                    else:
+                        # If a nodule has less than four raters, the others are filled with zeros
+                        mask = np.zeros([cropped_img_size] * 3)
+                    save(mask, seg_output_fname)
                 else:
                     # create empty mask for each nodule and rater
                     if "volume" not in locals():
@@ -190,5 +211,5 @@ def process_lidc_dataset(output_dir):
 
 
 if __name__ == "__main__":
-    output_dir = "/home/m391k/E132-Projekte/Projects/2024_Bujotzek_Noisy-Seg-Label-Benchi/data/LIDC-IDRI_raw/LIDC-nifti"
-    process_lidc_dataset(output_dir)
+    output_dir = "/home/m391k/E132-Projekte/Projects/2024_Bujotzek_Noisy-Seg-Label-Benchi/data/LIDC-IDRI_raw/LIDC-nifti-cropped"
+    process_lidc_dataset(output_dir, cropping=True)

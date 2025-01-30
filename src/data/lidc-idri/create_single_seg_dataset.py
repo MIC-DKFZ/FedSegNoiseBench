@@ -28,7 +28,7 @@ def resample_mask(mask_data, target_shape):
     return mask_data
 
 
-def process_lidc_dataset(input_dir, output_mask_dir, log_csv, mode, multi_class):
+def process_lidc_dataset(input_dir, output_mask_dir, log_csv, mode, multi_class: bool= False, cropping: bool=False):
     """
     For each CT scan, randomly select one segmentation mask per nodule,
     fuse the selected masks into one, and log the selection details.
@@ -71,22 +71,24 @@ def process_lidc_dataset(input_dir, output_mask_dir, log_csv, mode, multi_class)
             unit="scan",
         ):
             patient_id = ct_file.split("_")[0].split("-")[2]  # Extract patient ID
+            patient_nodule_id = ct_file.split("_")[0].split("-")[2] + "_" + ct_file.split("_")[1]  # Extract patient_nodule ID
             lidc_id = ct_file.split("_")[0]  # Extract LIDC-IDRI ID
+            identifier = patient_id if not cropping else patient_nodule_id
 
             # check if file already exists
             if os.path.exists(
-                os.path.join(output_mask_dir, f"{patient_id}_fused_{mode}_SEG.nii.gz")
+                os.path.join(output_mask_dir, f"{identifier}_fused_{mode}_SEG.nii.gz")
             ):
                 print(
-                    f"Segmentation mask for patient {patient_id} already exists, skipping."
+                    f"Segmentation mask for patient {identifier} already exists, skipping."
                 )
                 continue
 
-            # Find all segmentation masks for this patient
+            # Find all segmentation masks for this patient / patient_nodule
             mask_files = [
                 f
                 for f in all_files
-                if f.startswith(f"LIDC-IDRI-{patient_id}") and f.endswith("_SEG.nii.gz")
+                if f.startswith(f"LIDC-IDRI-{identifier}_") and f.endswith("_SEG.nii.gz")
             ]
 
             # Group masks by nodule ID
@@ -99,7 +101,7 @@ def process_lidc_dataset(input_dir, output_mask_dir, log_csv, mode, multi_class)
                 )
             if len(nodule_masks) == 0:
                 # throw error
-                raise ValueError(f"No masks found for patient {patient_id}")
+                raise ValueError(f"No masks found for patient {identifier}")
 
             final_nodule_masks = []
             final_nodule_malignancies = []
@@ -130,7 +132,7 @@ def process_lidc_dataset(input_dir, output_mask_dir, log_csv, mode, multi_class)
                         selected_malignancy = malignancy_df_entry[
                             "malignancy"
                         ].values[0]
-                        final_nodule_malignancy = 2 if selected_malignancy >= MALIGNANCY_THRESHOLD else 1
+                        final_nodule_malignancy = 2 if int(selected_malignancy) >= MALIGNANCY_THRESHOLD else 1
 
                     print(f"Selected mask for {pat_nod_key}: {selected_mask} --> to logging .csv!")
                     csv_writer.writerow(
@@ -179,9 +181,8 @@ def process_lidc_dataset(input_dir, output_mask_dir, log_csv, mode, multi_class)
                             nodule_raters_malignancies.append(None)
                         else:
                             nodule_raters_malignancies.append(
-                                malignancy_df_entry["malignancy"]
-                                .values[0]
-                                .astype(np.uint8)
+                                int(malignancy_df_entry["malignancy"]
+                                .values[0])
                             )
 
                     # Compose the nodule's mask based on the mode
@@ -263,7 +264,8 @@ def process_lidc_dataset(input_dir, output_mask_dir, log_csv, mode, multi_class)
                 tmp_final_fused_mask = (final_fused_mask > 0).astype(np.uint8)
                 final_fused_mask = tmp_final_fused_mask
             else:
-                assert np.all(final_fused_mask <= 2) 
+                # for multi-class mask, ensure that no mask value is greater than 2
+                assert np.all(final_fused_mask <= 2), f"Values in final_fused_mask are greater than 2; {identifier=}"
 
             # Save fused mask to output directory
             if final_fused_mask is not None:
@@ -271,30 +273,31 @@ def process_lidc_dataset(input_dir, output_mask_dir, log_csv, mode, multi_class)
                     final_fused_mask, affine=affine
                 )
                 output_file = os.path.join(
-                    output_mask_dir, f"{patient_id}_fused_{mode}_SEG.nii.gz"
+                    output_mask_dir, f"{identifier}_fused_{mode}_SEG.nii.gz"
                 )
                 nib.save(final_fused_mask_nifti, output_file)
-                print(f"Saved fused mask for patient {patient_id} to {output_file}")
+                print(f"Saved fused mask for patient {identifier} to {output_file}")
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Process LIDC dataset for segmentation masks.")
-    parser.add_argument("input_directory", type=str, help="Path to the input directory containing CT and mask files.")
-    parser.add_argument("output_directory", type=str, help="Path to the output directory for fused masks.")
-    parser.add_argument("log_file", type=str, help="Path to the log file.")
-    parser.add_argument("--mode", type=str, default="lesion_majority", choices=["random", "union", "lesion_majority", "annotator_majority"],
-                        help="Mode for selecting segmentation masks (default: lesion_majority).")
-    parser.add_argument("--multi_class", action="store_true", help="Differentiate between benign and malignant nodules.")
+# if __name__ == "__main__":
+#     parser = argparse.ArgumentParser(description="Process LIDC dataset for segmentation masks.")
+#     parser.add_argument("input_directory", type=str, help="Path to the input directory containing CT and mask files.")
+#     parser.add_argument("output_directory", type=str, help="Path to the output directory for fused masks.")
+#     parser.add_argument("log_file", type=str, help="Path to the log file.")
+#     parser.add_argument("--mode", type=str, default="lesion_majority", choices=["random", "union", "lesion_majority", "annotator_majority"],
+#                         help="Mode for selecting segmentation masks (default: lesion_majority).")
+#     parser.add_argument("--multi_class", action="store_true", help="Differentiate between benign and malignant nodules.")
+#     parser.add_argument("--cropping", action="store_true", help="Work with CT and masks cropped around the nodule.")
 
-    args = parser.parse_args()
+#     args = parser.parse_args()
 
-    process_lidc_dataset(args.input_directory, args.output_directory, args.log_file, args.mode, args.multi_class)
+#     process_lidc_dataset(args.input_directory, args.output_directory, args.log_file, args.mode, args.multi_class, args.cropping)
 
-# # Define paths
-# input_directory = "/home/m391k/E132-Projekte/Projects/2024_Bujotzek_Noisy-Seg-Label-Benchi/data/LIDC-IDRI_raw/LIDC_seg-per-nodule-and-rater_nifti"
-# output_directory = "/home/m391k/E132-Projekte/Projects/2024_Bujotzek_Noisy-Seg-Label-Benchi/data/LIDC-IDRI_raw/LIDC-single_seg_nifti/malignancy_annotator_majority"
-# log_file = os.path.join(output_directory, "single_seg_per_ct.csv")
-# # Run the function
-# process_lidc_dataset(
-#     input_directory, output_directory, log_file, mode="annotator_majority", multi_class=True
-# )  # mode="random", "union", "lesion_majority", "annotator_majority"
+# Define paths
+input_directory = "/home/m391k/E132-Projekte/Projects/2024_Bujotzek_Noisy-Seg-Label-Benchi/data/LIDC-IDRI_raw/LIDC_seg-per-nodule-and-rater_nifti-cropped"
+output_directory = "/home/m391k/E132-Projekte/Projects/2024_Bujotzek_Noisy-Seg-Label-Benchi/data/LIDC-IDRI_raw/LIDC-single_seg_nifti/cropped_annotator_majority"
+log_file = os.path.join(output_directory, "single_seg_per_ct.csv")
+# Run the function
+process_lidc_dataset(
+    input_directory, output_directory, log_file, mode="annotator_majority", multi_class=False, cropping=True
+)  # mode="random", "union", "lesion_majority", "annotator_majority"
