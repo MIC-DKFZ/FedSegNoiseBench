@@ -1,12 +1,12 @@
 import logging
 
-from fed.client import Client
+from client import Client
 
 
 class Orchestrator:
     def __init__(self, clients: list, fl_args: dict = {}):
         self.clients = clients
-        self.num_rounds = fl_args.num_rounds
+        self.num_rounds = fl_args["num_rounds"]
         self.server_model_weights = None
 
     def fl_run(self):
@@ -18,7 +18,7 @@ class Orchestrator:
             logging.info(f"Start FL round {i}!")
 
             # distribute current orchestrator model to clients
-            self.update_clients(self.server_model_weights)
+            self.update_clients()
 
             # iterate over clients
             for client in self.clients:
@@ -26,7 +26,7 @@ class Orchestrator:
                 client.fed_round()
 
             # aggregation
-            self.aggregate()
+            self.aggregate(checkpoint_name="checkpoint_final.pth")
 
         return self.server_model_weights
 
@@ -49,7 +49,17 @@ class Orchestrator:
         self.server_model_weights = self.fed_avg(client_checkpoints)
 
     def update_clients(self):
-        pass
+        """
+        Update clients with current server model weights.
+        """
+        # # compose complete checkpoint from source checkpoint with aggregated server model weights
+        # if fl_round == 0:
+        #     checkpoint_name = "checkpoint_initial.pth"
+        # else:
+        #     checkpoint_name = "checkpoint_final.pth"
+
+        for client in self.clients:
+            client.update_model(self.server_model_weights)
 
     def fed_avg(self, client_checkpoints: dict = {}):
         """
@@ -68,7 +78,7 @@ class Orchestrator:
         )
 
         # initialize _server_model_weights with model weights of first client
-        _server_model_weights = client_checkpoints["0"]["network_weights"]
+        _server_model_weights = client_checkpoints[0]["network_weights"]
         # get addresses of keys
         keys = list(_server_model_weights.keys())
         address_key_dict = {}
@@ -81,16 +91,18 @@ class Orchestrator:
 
         # perform the fedavg
         for a in address_key_dict.keys():
-            for client_id, _server_model_weights in client_checkpoints.items():
+            for client_id, client_model_weights in client_checkpoints.items():
                 if client_id == "0":
                     # network weights of client_id="0" are already in _server_model_weights
-                    pass
+                    # we still need to weight client 0's model params with it's dataset size
+                    _server_model_weights[address_key_dict[a][0]] = (
+                        _server_model_weights[address_key_dict[a][0]]
+                        * self.clients[client_id].dataset_json["numTraining"]
+                    )
                 else:
                     # weighted sum
                     _server_model_weights[address_key_dict[a][0]] += (
-                        _server_model_weights[client_id]["network_weights"][
-                            address_key_dict[a][0]
-                        ]
+                        client_model_weights["network_weights"][address_key_dict[a][0]]
                         * self.clients[client_id].dataset_json["numTraining"]
                     )
             # divided by num_all_samples

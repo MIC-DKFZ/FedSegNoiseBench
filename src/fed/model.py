@@ -1,11 +1,17 @@
 import torch
 
-from nnUNet.nnunetv2.run.run_training import run_training
+from nnunetv2.run.run_training import run_training
 
 
 class nnUNetv2_fed:
-    def __init___(
-        self, dataset_id, configuration, fold, plan, trainer, clean_validation_folder
+    def __init__(
+        self,
+        dataset_id: int = None,
+        configuration: str = None,
+        fold: int = None,
+        plan: str = None,
+        trainer: str = None,
+        clean_validation_folder: str = None,
     ):
         # set input args
         self.dataset_id = dataset_id
@@ -18,7 +24,15 @@ class nnUNetv2_fed:
         # initate model
         self.model_checkpoint = self.run(initialize_fed_training=True)
 
-    def run(self, initialize_fed_training=False):
+    def run(
+        self,
+        initialize_fed_training: bool = False,
+        continue_training: bool = False,
+        num_epochs: int = 1000,
+        current_epoch: int = 0,
+        epochs_per_round: int = 1,
+        last_fl_round: bool = False,
+    ):
         run_training(
             dataset_name_or_id=self.dataset_id,
             configuration=self.configuration,
@@ -28,11 +42,15 @@ class nnUNetv2_fed:
             pretrained_weights=None,
             num_gpus=1,
             export_validation_probabilities=False,
-            continue_training=False,
+            continue_training=continue_training,
             only_run_validation=False,
             disable_checkpointing=False,
             val_with_best=False,
             device=torch.device("cuda"),
             clean_validation_folder=self.clean_validation_folder,
             initialize_fed_training=initialize_fed_training,
+            num_epochs=num_epochs,
+            current_epoch=current_epoch,
+            epochs_per_round=epochs_per_round,
+            last_fl_round=last_fl_round,
         )
