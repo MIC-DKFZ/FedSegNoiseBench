@@ -20,7 +20,7 @@ class Orchestrator:
             logging.info(f"Start FL round {i}!")
 
             # distribute current orchestrator model to clients
-            self.update_clients()
+            self.update_clients(fl_round)
 
             orchestrator_end_time = time.time()
             logging.info(
@@ -35,7 +35,8 @@ class Orchestrator:
             orchestrator_start_time = time.time()
 
             # aggregation
-            self.aggregate(checkpoint_name="checkpoint_final.pth")
+            # self.aggregate(checkpoint_name="checkpoint_final.pth")
+            self.aggregate()
 
         return self.server_model_weights
 
@@ -48,16 +49,22 @@ class Orchestrator:
         Output:
             server_model_weights (dict): Aggregated model weights.
         """
-        # load model weights from clients
-        client_checkpoints = {
-            client.client_id: client.load_checkpoint(checkpoint_name)
-            for client in self.clients
-        }
+        if checkpoint_name:
+            # load model weights from clients
+            client_checkpoints = {
+                client.client_id: client.load_checkpoint(checkpoint_name)
+                for client in self.clients
+            }
+        else:
+            client_checkpoints = {
+                client.client_id: client.model.current_model_weights
+                for client in self.clients
+            }
 
         # aggregate model weights with aggreation strategy
         self.server_model_weights = self.fed_avg(client_checkpoints)
 
-    def update_clients(self):
+    def update_clients(self, fl_round: int = 0):
         """
         Update clients with current server model weights.
         """
@@ -68,7 +75,14 @@ class Orchestrator:
         #     checkpoint_name = "checkpoint_final.pth"
 
         for client in self.clients:
-            client.update_model(self.server_model_weights)
+            if fl_round == 0 or fl_round == self.num_rounds - 1:
+                # update client model with checkpoint in first and last fl_round
+                client.update_model(
+                    self.server_model_weights,
+                    checkpoint_name="checkpoint_fl_current.pth",
+                )
+            else:
+                client.model.current_model_weights = self.server_model_weights
 
     def fed_avg(self, client_checkpoints: dict = {}):
         """
@@ -87,7 +101,7 @@ class Orchestrator:
         )
 
         # initialize _server_model_weights with model weights of first client
-        _server_model_weights = client_checkpoints[0]["network_weights"]
+        _server_model_weights = client_checkpoints[0]
         # get addresses of keys
         keys = list(_server_model_weights.keys())
         address_key_dict = {}
@@ -111,7 +125,7 @@ class Orchestrator:
                 else:
                     # weighted sum
                     _server_model_weights[address_key_dict[a][0]] += (
-                        client_model_weights["network_weights"][address_key_dict[a][0]]
+                        client_model_weights[address_key_dict[a][0]]
                         * self.clients[client_id].dataset_json["numTraining"]
                     )
             # divided by num_all_samples

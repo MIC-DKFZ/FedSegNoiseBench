@@ -79,15 +79,19 @@ class Client:
             f"Local federated round on client {self.client_id}: {end_time - start_time:.2f} seconds!"
         )
 
-    def update_model(self, server_model_weights: dict = {}):
+    def update_model(
+        self, server_model_weights: dict = {}, checkpoint_name: str = None
+    ):
         """
         Takes the server model weights and updates the client model with them by writing it as the current hceckpoint.
         """
         # update "network_weights" of self.current_checkpoint with server model weights, and write to new checkpoint
         self.current_checkpoint["network_weights"] = server_model_weights
-        # write server model weights to checkpoint
-        checkpoint_path = os.path.join(self.results_dir, "checkpoint_fl_current.pth")
-        torch.save(self.current_checkpoint, checkpoint_path)
+
+        if checkpoint_name:
+            # write server model weights to checkpoint
+            checkpoint_path = os.path.join(self.results_dir, checkpoint_name)
+            torch.save(self.current_checkpoint, checkpoint_path)
 
     def load_checkpoint(self, checkpoint_name: str = None):
         """
@@ -111,6 +115,6 @@ class Client:
             self.current_checkpoint = torch.load(
                 checkpoint_path, map_location=torch.device("cpu")
             )
-            return self.current_checkpoint
+            return self.current_checkpoint["network_weights"]
         except RuntimeError as e:
             raise RuntimeError(f"Error loading checkpoint: {e}")

@@ -22,6 +22,7 @@ class nnUNetv2_fed:
         self.clean_validation_folder = clean_validation_folder
 
         # initate model
+        self.current_model_weights = None
         self.model_checkpoint = self.run(initialize_fed_training=True)
 
     def run(
@@ -33,7 +34,7 @@ class nnUNetv2_fed:
         epochs_per_round: int = 1,
         last_fl_round: bool = False,
     ):
-        run_training(
+        self.current_model_weights = run_training(
             dataset_name_or_id=self.dataset_id,
             configuration=self.configuration,
             fold=self.fold,
@@ -53,4 +54,5 @@ class nnUNetv2_fed:
             current_epoch=current_epoch,
             epochs_per_round=epochs_per_round,
             last_fl_round=last_fl_round,
+            current_model_weights=self.current_model_weights,
         )
