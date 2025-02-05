@@ -39,16 +39,9 @@ class Client:
                 )
             ).read()
         )
-        self.results_dir = os.path.join(
-            os.getenv("nnUNet_results"),
-            os.path.basename(self.dataset_name),
-            f"{self.model_args['trainer']}__{self.model_args['plan']}__{self.model_args['configuration']}",
-            f"fold_{self.model_args['fold']}",
-        )
 
         # other
         self.current_epoch = 0
-        self.current_checkpoint = None
 
     def fed_round(self):
         """
@@ -63,7 +56,7 @@ class Client:
         # run local training
         self.model.run(
             initialize_fed_training=False,
-            continue_training=True,
+            # continue_training=True,
             num_epochs=target_num_epochs,
             current_epoch=self.current_epoch,
             epochs_per_round=self.fl_args["num_local_epochs"],
@@ -80,41 +73,9 @@ class Client:
         )
 
     def update_model(
-        self, server_model_weights: dict = {}, checkpoint_name: str = None
+        self, server_model_weights: dict = {}
     ):
         """
         Takes the server model weights and updates the client model with them by writing it as the current hceckpoint.
         """
-        # update "network_weights" of self.current_checkpoint with server model weights, and write to new checkpoint
-        self.current_checkpoint["network_weights"] = server_model_weights
-
-        if checkpoint_name:
-            # write server model weights to checkpoint
-            checkpoint_path = os.path.join(self.results_dir, checkpoint_name)
-            torch.save(self.current_checkpoint, checkpoint_path)
-
-    def load_checkpoint(self, checkpoint_name: str = None):
-        """
-        Load a checkpoint of the client from the file system using PyTorch and return the state_dict.
-
-        Args:
-            checkpoint_name (str, optional): Name of the checkpoint file to load. Defaults to None.
-
-        Returns:
-            dict: The loaded checkpoint containing the model's state_dict.
-        """
-        # check if checkpoint_name is provided and exists
-        assert checkpoint_name is not None, "Checkpoint name must be provided."
-        checkpoint_path = os.path.join(self.results_dir, checkpoint_name)
-        assert os.path.exists(
-            checkpoint_path
-        ), f"Checkpoint file not found: {checkpoint_path}"
-
-        # load and return checkpoint
-        try:
-            self.current_checkpoint = torch.load(
-                checkpoint_path, map_location=torch.device("cpu")
-            )
-            return self.current_checkpoint["network_weights"]
-        except RuntimeError as e:
-            raise RuntimeError(f"Error loading checkpoint: {e}")
+        self.model.current_model_weights = server_model_weights

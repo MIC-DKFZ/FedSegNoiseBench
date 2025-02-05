@@ -23,7 +23,8 @@ class nnUNetv2_fed:
 
         # initate model
         self.current_model_weights = None
-        self.model_checkpoint = self.run(initialize_fed_training=True)
+        self.nnunet_trainer = None
+        self.run(initialize_fed_training=True)
 
     def run(
         self,
@@ -34,7 +35,8 @@ class nnUNetv2_fed:
         epochs_per_round: int = 1,
         last_fl_round: bool = False,
     ):
-        self.current_model_weights = run_training(
+        self.current_model_weights, self.nnunet_trainer = run_training(
+            nnunet_trainer=self.nnunet_trainer,
             dataset_name_or_id=self.dataset_id,
             configuration=self.configuration,
             fold=self.fold,
