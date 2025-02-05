@@ -1,4 +1,5 @@
 import logging
+import time
 
 from client import Client
 
@@ -10,6 +11,7 @@ class Orchestrator:
         self.server_model_weights = None
 
     def fl_run(self):
+        orchestrator_start_time = time.time()
         # aggregate initial model weights of clients
         self.aggregate(checkpoint_name="checkpoint_initial.pth")
 
@@ -20,10 +22,17 @@ class Orchestrator:
             # distribute current orchestrator model to clients
             self.update_clients()
 
+            orchestrator_end_time = time.time()
+            logging.info(
+                f"Orchestrator processing time in FL round {fl_round}: {orchestrator_end_time - orchestrator_start_time:.2f} seconds!"
+            )
+
             # iterate over clients
             for client in self.clients:
                 # local training
                 client.fed_round()
+
+            orchestrator_start_time = time.time()
 
             # aggregation
             self.aggregate(checkpoint_name="checkpoint_final.pth")

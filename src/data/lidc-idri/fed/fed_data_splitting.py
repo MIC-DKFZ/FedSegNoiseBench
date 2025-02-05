@@ -83,10 +83,10 @@ def main(
 
 if __name__ == "__main__":
     # define in and out dirs
-    data_folder = "/home/m391k/E132-Projekte/Projects/2024_Bujotzek_Noisy-Seg-Label-Benchi/data/LIDC-IDRI_raw/nnUNet_raw/Dataset029_LIDC-Malignancy-Cropped-RandomMultiRater"
+    data_folder = "/home/m391k/E132-Projekte/Projects/2024_Bujotzek_Noisy-Seg-Label-Benchi/data/LIDC-IDRI_raw/nnUNet_raw/Dataset031_LIDC-Cropped-RandomMultiRater"
     fed_split_metadata_fname = "/home/m391k/E132-Projekte/Projects/2024_Bujotzek_Noisy-Seg-Label-Benchi/data/LIDC-IDRI_raw/flamby_fed_lidc_metadata.csv"
     lidc_metadata_fname = "/home/m391k/E132-Projekte/Projects/2024_Bujotzek_Noisy-Seg-Label-Benchi/data/LIDC-IDRI_raw/manifest-1600709154662/metadata.csv"
 
-    client_ds_ids = ["037", "038", "039", "040"]
+    client_ds_ids = ["045", "046", "047", "048"]
 
     main(data_folder, fed_split_metadata_fname, lidc_metadata_fname, client_ds_ids)

@@ -76,7 +76,7 @@ class Client:
         # log time
         end_time = time.time()
         logging.info(
-            f"Local federated round on client {self.client_id} in {end_time - start_time:.2f} seconds!"
+            f"Local federated round on client {self.client_id}: {end_time - start_time:.2f} seconds!"
         )
 
     def update_model(self, server_model_weights: dict = {}):
