@@ -1,5 +1,6 @@
 import logging
 import time
+import copy
 
 from client import Client
 
@@ -13,14 +14,14 @@ class Orchestrator:
     def fl_run(self):
         orchestrator_start_time = time.time()
         # aggregate initial model weights of clients
-        self.aggregate(checkpoint_name="checkpoint_initial.pth")
+        self.aggregate()
 
         # iterate over fl rounds
         for i, fl_round in enumerate(range(0, self.num_rounds)):
             logging.info(f"Start FL round {i}!")
 
             # distribute current orchestrator model to clients
-            self.update_clients(fl_round)
+            self.update_clients()
 
             orchestrator_end_time = time.time()
             logging.info(
@@ -30,59 +31,53 @@ class Orchestrator:
             # iterate over clients
             for client in self.clients:
                 # local training
-                client.fed_round()
+                client.fed_round(fl_round)
 
             orchestrator_start_time = time.time()
 
             # aggregation
-            # self.aggregate(checkpoint_name="checkpoint_final.pth")
             self.aggregate()
+
+        # distiribute flinal fl models to clients
+        self.update_clients(checkpoint_name="server_checkpoint_final.pth")
+
+        # very last fl round to just predict
+        for client in self.clients:
+            # empty client.model.current_model_weights to None such that run_training loads model weights from checkpoint
+            client.update_model(server_model_weights=None)
+            client.fed_round(
+                very_last_fl_predict_round=True,
+                only_run_validation=True,
+                fl_round=self.num_rounds,
+            )
 
         return self.server_model_weights
 
-    def aggregate(self, checkpoint_name: str = None):
+    def aggregate(self):
         """
         Aggregate model weights from clients.
-        Loads checkpoint files of clients names according to checkpoint_name.
-        Input:
-            checkpoint_name (str): Name of checkpoint file to load from clients.
         Output:
             server_model_weights (dict): Aggregated model weights.
         """
-        if checkpoint_name:
-            # load model weights from clients
-            client_checkpoints = {
-                client.client_id: client.load_checkpoint(checkpoint_name)
-                for client in self.clients
-            }
-        else:
-            client_checkpoints = {
-                client.client_id: client.model.current_model_weights
-                for client in self.clients
-            }
+
+        client_checkpoints = {
+            client.client_id: client.model.current_model_weights
+            for client in self.clients
+        }
 
         # aggregate model weights with aggreation strategy
         self.server_model_weights = self.fed_avg(client_checkpoints)
 
-    def update_clients(self, fl_round: int = 0):
+    def update_clients(self, checkpoint_name: str = None):
         """
         Update clients with current server model weights.
         """
-        # # compose complete checkpoint from source checkpoint with aggregated server model weights
-        # if fl_round == 0:
-        #     checkpoint_name = "checkpoint_initial.pth"
-        # else:
-        #     checkpoint_name = "checkpoint_final.pth"
-
-        for client in self.clients:
-            if fl_round == 0 or fl_round == self.num_rounds - 1:
-                # update client model with checkpoint in first and last fl_round
-                client.update_model(
-                    self.server_model_weights,
-                    checkpoint_name="checkpoint_fl_current.pth",
-                )
-            else:
-                client.model.current_model_weights = self.server_model_weights
+        if not checkpoint_name:
+            for client in self.clients:
+                client.update_model(self.server_model_weights)
+        elif checkpoint_name == "server_checkpoint_final.pth":
+            for client in self.clients:
+                client.update_model(self.server_model_weights, checkpoint_name)
 
     def fed_avg(self, client_checkpoints: dict = {}):
         """
@@ -95,13 +90,16 @@ class Orchestrator:
         * perform averaging based on pointers on the dict keys obtained with .data_ptr()
         * solution from https://github.com/MIC-DKFZ/nnUNet/issues/2553
         """
+        # create deepcopy of client model weights to not directly modify them
+        _client_checkpoints = copy.deepcopy(client_checkpoints)
+
         # for sample-weighted averaging, get number of all samples of all clients
         num_samples_all_clients = sum(
             [client.dataset_json["numTraining"] for client in self.clients]
         )
 
         # initialize _server_model_weights with model weights of first client
-        _server_model_weights = client_checkpoints[0]
+        _server_model_weights = _client_checkpoints[0]
         # get addresses of keys
         keys = list(_server_model_weights.keys())
         address_key_dict = {}
@@ -114,7 +112,7 @@ class Orchestrator:
 
         # perform the fedavg
         for a in address_key_dict.keys():
-            for client_id, client_model_weights in client_checkpoints.items():
+            for client_id, client_model_weights in _client_checkpoints.items():
                 if client_id == "0":
                     # network weights of client_id="0" are already in _server_model_weights
                     # we still need to weight client 0's model params with it's dataset size

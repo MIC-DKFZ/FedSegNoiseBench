@@ -23,7 +23,8 @@ class nnUNetv2_fed:
 
         # initate model
         self.current_model_weights = None
-        self.model_checkpoint = self.run(initialize_fed_training=True)
+        self.nnunet_trainer = None
+        self.run(initialize_fed_training=True)
 
     def run(
         self,
@@ -33,8 +34,11 @@ class nnUNetv2_fed:
         current_epoch: int = 0,
         epochs_per_round: int = 1,
         last_fl_round: bool = False,
+        very_last_fl_predict_round: bool = False,
+        only_run_validation: bool = False,
     ):
-        self.current_model_weights = run_training(
+        self.current_model_weights, self.nnunet_trainer = run_training(
+            nnunet_trainer=self.nnunet_trainer,
             dataset_name_or_id=self.dataset_id,
             configuration=self.configuration,
             fold=self.fold,
@@ -44,7 +48,7 @@ class nnUNetv2_fed:
             num_gpus=1,
             export_validation_probabilities=False,
             continue_training=continue_training,
-            only_run_validation=False,
+            only_run_validation=only_run_validation,
             disable_checkpointing=False,
             val_with_best=False,
             device=torch.device("cuda"),
@@ -55,4 +59,5 @@ class nnUNetv2_fed:
             epochs_per_round=epochs_per_round,
             last_fl_round=last_fl_round,
             current_model_weights=self.current_model_weights,
+            very_last_fl_predict_round=very_last_fl_predict_round,
         )
