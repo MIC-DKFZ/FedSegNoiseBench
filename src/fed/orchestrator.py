@@ -21,7 +21,7 @@ class Orchestrator:
             logging.info(f"Start FL round {i}!")
 
             # distribute current orchestrator model to clients
-            self.update_clients(fl_round)
+            self.update_clients()
 
             orchestrator_end_time = time.time()
             logging.info(
@@ -31,12 +31,25 @@ class Orchestrator:
             # iterate over clients
             for client in self.clients:
                 # local training
-                client.fed_round()
+                client.fed_round(fl_round)
 
             orchestrator_start_time = time.time()
 
             # aggregation
             self.aggregate()
+
+        # distiribute flinal fl models to clients
+        self.update_clients(checkpoint_name="server_checkpoint_final.pth")
+
+        # very last fl round to just predict
+        for client in self.clients:
+            # empty client.model.current_model_weights to None such that run_training loads model weights from checkpoint
+            client.update_model(server_model_weights=None)
+            client.fed_round(
+                very_last_fl_predict_round=True,
+                only_run_validation=True,
+                fl_round=self.num_rounds,
+            )
 
         return self.server_model_weights
 
@@ -55,12 +68,16 @@ class Orchestrator:
         # aggregate model weights with aggreation strategy
         self.server_model_weights = self.fed_avg(client_checkpoints)
 
-    def update_clients(self):
+    def update_clients(self, checkpoint_name: str = None):
         """
         Update clients with current server model weights.
         """
-        for client in self.clients:
-            client.update_model(self.server_model_weights)
+        if not checkpoint_name:
+            for client in self.clients:
+                client.update_model(self.server_model_weights)
+        elif checkpoint_name == "server_checkpoint_final.pth":
+            for client in self.clients:
+                client.update_model(self.server_model_weights, checkpoint_name)
 
     def fed_avg(self, client_checkpoints: dict = {}):
         """

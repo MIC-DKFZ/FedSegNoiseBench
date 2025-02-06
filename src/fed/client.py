@@ -39,15 +39,26 @@ class Client:
                 )
             ).read()
         )
+        self.results_dir = os.path.join(
+            os.getenv("nnUNet_results"),
+            os.path.basename(self.dataset_name),
+            f"{self.model_args['trainer']}__{self.model_args['plan']}__{self.model_args['configuration']}",
+            f"fold_{self.model_args['fold']}",
+        )
 
         # other
         self.current_epoch = 0
 
-    def fed_round(self):
+    def fed_round(
+        self,
+        fl_round,
+        very_last_fl_predict_round: bool = False,
+        only_run_validation: bool = False,
+    ):
         """
         Perform a federated learning round on the client.
         """
-        logging.info(f"Start local training on client {self.client_id}!")
+        logging.info(f"Start federated round {fl_round} on client {self.client_id}!")
         start_time = time.time()
 
         # set target number of epochs of current fl round
@@ -63,6 +74,8 @@ class Client:
             last_fl_round=(
                 True if target_num_epochs == self.fl_args["num_rounds"] else False
             ),
+            very_last_fl_predict_round=very_last_fl_predict_round,
+            only_run_validation=only_run_validation,
         )
         self.current_epoch = target_num_epochs
 
@@ -73,9 +86,23 @@ class Client:
         )
 
     def update_model(
-        self, server_model_weights: dict = {}
+        self, server_model_weights: dict = {}, checkpoint_name: str = None
     ):
         """
         Takes the server model weights and updates the client model with them by writing it as the current hceckpoint.
         """
-        self.model.current_model_weights = server_model_weights
+        if not checkpoint_name:
+            self.model.current_model_weights = server_model_weights
+        elif checkpoint_name:
+            # load "checkpoint_final.pth" from client results directory
+            client_checkpoint = torch.load(
+                os.path.join(self.results_dir, "checkpoint_final.pth")
+            )
+            # update this checkpoint's model weights with provided server model weights
+            client_checkpoint["model_state_dict"] = server_model_weights
+            # write torch checkpoint to clients directory
+            torch.save(
+                client_checkpoint, os.path.join(self.results_dir, checkpoint_name)
+            )
+        else:
+            raise ValueError("No server model weights or checkpoint name provided!")

@@ -34,6 +34,8 @@ class nnUNetv2_fed:
         current_epoch: int = 0,
         epochs_per_round: int = 1,
         last_fl_round: bool = False,
+        very_last_fl_predict_round: bool = False,
+        only_run_validation: bool = False,
     ):
         self.current_model_weights, self.nnunet_trainer = run_training(
             nnunet_trainer=self.nnunet_trainer,
@@ -46,7 +48,7 @@ class nnUNetv2_fed:
             num_gpus=1,
             export_validation_probabilities=False,
             continue_training=continue_training,
-            only_run_validation=False,
+            only_run_validation=only_run_validation,
             disable_checkpointing=False,
             val_with_best=False,
             device=torch.device("cuda"),
@@ -57,4 +59,5 @@ class nnUNetv2_fed:
             epochs_per_round=epochs_per_round,
             last_fl_round=last_fl_round,
             current_model_weights=self.current_model_weights,
+            very_last_fl_predict_round=very_last_fl_predict_round,
         )
