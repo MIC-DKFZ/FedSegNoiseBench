@@ -43,7 +43,11 @@ def main(args):
                 "fold": args.fold,
                 "plan": args.plan,
                 "trainer": args.trainer,
-                "clean_validation_dataset": args.clean_validation_dataset.split()[i],
+                "clean_validation_dataset": (
+                    args.clean_validation_dataset.split()[i]
+                    if args.clean_validation_dataset
+                    else None
+                ),
                 "experiment_id": f"D{args.dataset_ids.split()[i]}_{experiment_id}",
             },
             fl_args={

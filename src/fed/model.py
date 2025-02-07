@@ -21,10 +21,14 @@ class nnUNetv2_fed:
         self.fold = fold
         self.plan = plan
         self.trainer = trainer
-        self.clean_validation_folder = os.path.join(
-            os.getenv("nnUNet_preprocessed"),
-            clean_validation_dataset,
-            "nnUNetPlans_3d_fullres",
+        self.clean_validation_folder = (
+            os.path.join(
+                os.getenv("nnUNet_preprocessed"),
+                clean_validation_dataset,
+                "nnUNetPlans_3d_fullres",
+            )
+            if clean_validation_dataset
+            else None
         )
         self.experiment_id = experiment_id
 
