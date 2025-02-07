@@ -13,6 +13,9 @@ class Client:
         self, client_id: int = None, model_args: dict = {}, fl_args: dict = {}
     ):
         logging.info(f"Initialize client {client_id}!")
+        logging.info(
+            f"Client {client_id} with Experiment ID: {model_args['experiment_id']}"
+        )
 
         # input args
         self.client_id = client_id
@@ -44,6 +47,7 @@ class Client:
             os.path.basename(self.dataset_name),
             f"{self.model_args['trainer']}__{self.model_args['plan']}__{self.model_args['configuration']}",
             f"fold_{self.model_args['fold']}",
+            self.model_args["experiment_id"],
         )
 
         # other

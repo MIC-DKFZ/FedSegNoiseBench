@@ -1,3 +1,4 @@
+import os
 import torch
 
 from nnunetv2.run.run_training import run_training
@@ -11,7 +12,8 @@ class nnUNetv2_fed:
         fold: int = None,
         plan: str = None,
         trainer: str = None,
-        clean_validation_folder: str = None,
+        clean_validation_dataset: str = None,
+        experiment_id: str = None,
     ):
         # set input args
         self.dataset_id = dataset_id
@@ -19,7 +21,12 @@ class nnUNetv2_fed:
         self.fold = fold
         self.plan = plan
         self.trainer = trainer
-        self.clean_validation_folder = clean_validation_folder
+        self.clean_validation_folder = os.path.join(
+            os.getenv("nnUNet_preprocessed"),
+            clean_validation_dataset,
+            "nnUNetPlans_3d_fullres",
+        )
+        self.experiment_id = experiment_id
 
         # initate model
         self.current_model_weights = None
@@ -60,4 +67,5 @@ class nnUNetv2_fed:
             last_fl_round=last_fl_round,
             current_model_weights=self.current_model_weights,
             very_last_fl_predict_round=very_last_fl_predict_round,
+            experiment_id=self.experiment_id,
         )

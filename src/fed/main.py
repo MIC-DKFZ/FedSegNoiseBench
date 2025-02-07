@@ -1,11 +1,38 @@
+import os
 import argparse
 import logging
+from datetime import datetime
 
 from orchestrator import Orchestrator
 from client import Client
 
+# def setup_logging(args, experiment_id):
+#     # Create logger
+#     logger = logging.getLogger("my_logger")
+#     logger.setLevel(args.log_level.upper())
+
+#     # Create file handler
+#     log_file_name = os.path.join(os.getenv("nnUNet_results"), "logs", f"exp{args.dataset_ids.replace(' ','_')}-{experiment_id}.log")
+#     os.makedirs(os.path.dirname(log_file_name), exist_ok=True)
+#     file_handler = logging.FileHandler(log_file_name, mode="w")
+#     file_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
+
+#     # Create console handler
+#     console_handler = logging.StreamHandler()
+#     console_handler.setFormatter(logging.Formatter("%(levelname)s - %(message)s"))
+
+#     # Add handlers to logger
+#     logger.addHandler(file_handler)
+#     logger.addHandler(console_handler)
+
 
 def main(args):
+    # setup experiment id
+    experiment_id = f"fold{args.fold}_clients{args.num_clients}_flrounds{args.num_rounds}_localepochs{args.num_local_epochs}_{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+
+    # # set up logging
+    # setup_logging(args, experiment_id)
+
     # setup clients
     clients = [
         Client(
@@ -16,7 +43,8 @@ def main(args):
                 "fold": args.fold,
                 "plan": args.plan,
                 "trainer": args.trainer,
-                "clean_validation_folder": args.clean_validation_folder,
+                "clean_validation_dataset": args.clean_validation_dataset.split()[i],
+                "experiment_id": f"D{args.dataset_ids.split()[i]}_{experiment_id}",
             },
             fl_args={
                 "num_local_epochs": args.num_local_epochs,
@@ -100,7 +128,7 @@ if __name__ == "__main__":
 
     # noise arguments
     parser.add_argument(
-        "--clean_validation_folder",
+        "--clean_validation_dataset",
         type=str,
         default=None,
         help="Path to clean validation data, to not evaluate on noisy data if training on noisy data.",
