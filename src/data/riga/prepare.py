@@ -83,10 +83,6 @@ class RIGA_dataset_processor():
                 logging.error(f"Too many closing iterations necessary for {mask_fname}.")
                 with open("log.txt", "a") as file:
                     file.write(f"{mask_fname}\n")
-                cv2.imshow("diff_", diff_)
-                cv2.imshow("diff", diff)
-                cv2.waitKey(0)
-                cv2.destroyAllWindows()
                 return np.array([])
             kernel = np.ones((int(3+(i/5)),int(3+(i/5))), np.uint8)
             # Apply Closing (Dilation + Erosion) with adapted kernel size
