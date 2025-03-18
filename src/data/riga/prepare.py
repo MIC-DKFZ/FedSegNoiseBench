@@ -23,7 +23,11 @@ class RIGA_dataset_processor:
     """
 
     def __init__(
-        self, raw_data_path: str = None, img_segmask_tif_data_path: str = None
+        self,
+        raw_data_path: str = None,
+        img_segmask_tif_data_path: str = None,
+        single_seg_mode: str = None,
+        single_seg_data_path: str = None,
     ):
         # set input args
         self.raw_data_path = raw_data_path
@@ -31,6 +35,12 @@ class RIGA_dataset_processor:
         if self.img_segmask_tif_data_path:
             if not os.path.exists(self.img_segmask_tif_data_path):
                 os.makedirs(self.img_segmask_tif_data_path)
+        self.single_seg_mode = single_seg_mode
+        self.single_seg_data_path = single_seg_data_path
+        if self.single_seg_data_path:
+            if not os.path.exists(self.single_seg_data_path):
+                os.makedirs(self.single_seg_data_path)
+
         self.raw_img_fnames, self.raw_mask_fnames = [], []
 
     def get_img_mask_fnames(self):
@@ -65,13 +75,17 @@ class RIGA_dataset_processor:
             else:
                 self.raw_mask_fnames.append(fname)
 
-    def load_img_mask(self, fname: str = None):
+    def load_img_mask(self, fname: str = None, mode: str = None):
         """
         Load image or mask.
         """
         img = cv2.imread(fname, cv2.IMREAD_UNCHANGED)
         assert img is not None, f"Image or mask {fname} could not be loaded."
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        if mode == "RGB":
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        elif mode == "GRAY":
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        img = (img / img.max() * 255).astype(np.uint8)  # Normalize to 0-255
         return img
 
     def retrieve_dense_masks(
@@ -124,18 +138,18 @@ class RIGA_dataset_processor:
         contours = sorted(contours, key=cv2.contourArea)
 
         # Create an empty mask
-        one_hot_masks = [np.zeros_like(mask, dtype=np.uint8) for _ in contours]
+        dense_masks = [np.zeros_like(mask, dtype=np.uint8) for _ in contours]
         fg_val_count = []
         # Ensure 2 contours or 4 contours exist
         for i, contour in enumerate(contours):
-            cv2.drawContours(one_hot_masks[i], [contour], -1, 255, thickness=cv2.FILLED)
-            fg_val_count.append(np.count_nonzero(one_hot_masks[i]))
+            cv2.drawContours(dense_masks[i], [contour], -1, 255, thickness=cv2.FILLED)
+            fg_val_count.append(np.count_nonzero(dense_masks[i]))
 
         # get biggest and second biggest mask
         # Note: cv2.RETR_CCOMP in cv2.findContours() retrieves inner and outer edge of each contour
         #       so the biggest and second biggest mask are at index 0 and 2
-        biggest_mask = one_hot_masks[fg_val_count.index(max(fg_val_count))]
-        sec_biggest_mask = one_hot_masks[fg_val_count.index(max(fg_val_count)) - 2]
+        biggest_mask = dense_masks[fg_val_count.index(max(fg_val_count))]
+        sec_biggest_mask = dense_masks[fg_val_count.index(max(fg_val_count)) - 2]
 
         # set biggest and smallest mask to 1 (optical disc) and 2 (optical cup)
         biggest_mask[biggest_mask == 255] = 120
@@ -145,17 +159,20 @@ class RIGA_dataset_processor:
         return final_seg_mask
 
     def save_img_mask_tif(
-        self, img: np.ndarray, old_fname: str = None, save_copy: str = None
+        self,
+        img: np.ndarray = None,
+        new_fname: str = None,
+        save_copy: str = None,
+        old_fname: str = None,
     ):
         """
         Save image or mask as tif.
         """
-        relative_path = os.path.relpath(old_fname, start=self.raw_data_path)
-        new_fname = os.path.join(
-            self.img_segmask_tif_data_path, os.path.splitext(relative_path)[0] + ".tif"
-        )
+        # ensure some stuff
         os.makedirs(os.path.dirname(new_fname), exist_ok=True)
+        img = img.astype(np.uint8)
 
+        # save or copy image
         if save_copy == "save":
             tiff.imwrite(new_fname, img)
         elif save_copy == "copy":
@@ -165,7 +182,7 @@ class RIGA_dataset_processor:
 
     def mask_contours_to_seg_masks(self):
         """
-        Convert masks to one-hot encoding.
+        Convert masks to dense segmentation masks.
         """
         # get image and mask filenames to self.raw_img_fnames and self.raw_mask_fnames
         self.get_img_mask_fnames()
@@ -184,25 +201,120 @@ class RIGA_dataset_processor:
             ), f"Image {img_fname} has {len(masks_fnames)} masks."
 
             # load the image
-            img = self.load_img_mask(img_fname)
+            img = self.load_img_mask(img_fname, "RGB")
+            # compose new filename
+            relative_path = os.path.relpath(img_fname, start=self.raw_data_path)
+            new_fname = os.path.join(
+                self.img_segmask_tif_data_path,
+                os.path.splitext(relative_path)[0] + ".tif",
+            )
             if ".tif" not in img_fname:
                 # save image to tif
-                self.save_img_mask_tif(img, img_fname, save_copy="save")
+                self.save_img_mask_tif(img, new_fname, save_copy="save")
             else:
                 # copy image to output path, if image is already in tif format
-                self.save_img_mask_tif(img, img_fname, save_copy="copy")
+                self.save_img_mask_tif(
+                    img, new_fname, save_copy="copy", old_fname=img_fname
+                )
 
             # load each masks (img + contour) and convert to proper segmentation mask
             for mask_fname in masks_fnames:
-                mask = self.load_img_mask(mask_fname)
+                mask = self.load_img_mask(mask_fname, "RGB")
 
                 seg_mask = self.retrieve_dense_masks(img, mask, mask_fname)
 
+                # compose new filename
+                relative_path = os.path.relpath(mask_fname, start=self.raw_data_path)
+                new_fname = os.path.join(
+                    self.img_segmask_tif_data_path,
+                    os.path.splitext(relative_path)[0] + ".tif",
+                )
                 if seg_mask.any():
                     # save dense masks
-                    self.save_img_mask_tif(seg_mask, mask_fname, save_copy="save")
+                    self.save_img_mask_tif(seg_mask, new_fname, save_copy="save")
                 else:
                     continue
+
+    def generate_consensus_random_rater_masks(
+        self, annotator_majority_threshold: float = 0.5
+    ):
+        """
+        Generate consensus and random rater masks.
+        """
+        # load segmentation mask fnames from self.img_segmask_tif_data_path
+        fnames = glob.glob(
+            os.path.join(self.img_segmask_tif_data_path, "**/*.tif"), recursive=True
+        )
+        seg_mask_fnames, img_fnames = [], []
+        for fname in fnames:
+            (
+                img_fnames.append(fname)
+                if "prime" in fname
+                else seg_mask_fnames.append(fname)
+            )
+
+        # iterate over imgs and generate mask according to self.single_seg_mode
+        for img_fname in tqdm(
+            img_fnames, desc="Generate seg mask for image", unit="image"
+        ):
+            # get seg_masks for current img
+            imgs_seg_mask_fnames = [
+                seg_mask
+                for seg_mask in seg_mask_fnames
+                if img_fname.replace("prime.tif", "-") in seg_mask
+            ]
+            assert (
+                len(imgs_seg_mask_fnames) > 0
+            ), f"Image {img_fname} has {len(imgs_seg_mask_fnames)} masks."
+
+            # load seg masks to np array (#annotator_masks, H, W)
+            seg_masks = np.array(
+                [self.load_img_mask(x, "GRAY") for x in imgs_seg_mask_fnames]
+            )
+
+            # Create binary masks for each structure
+            structure1 = (seg_masks == 120).astype(np.uint8)
+            structure2 = (seg_masks == 255).astype(np.uint8)
+
+            final_mask = np.zeros_like(seg_masks[0], dtype=np.uint8)
+            # load each masks (img + contour) and convert to proper segmentation mask
+            if self.single_seg_mode == "union":
+                # load all masks and take union
+                union_mask = final_mask
+                for seg_mask in seg_masks:
+                    union_mask = np.maximum(union_mask, seg_mask)
+                final_mask = union_mask
+            elif self.single_seg_mode == "annotator_majority":
+                # Compute majority vote
+                majority_threshold = int(len(seg_masks) * annotator_majority_threshold)
+                consensus_structure1 = (
+                    np.sum(structure1, axis=0) >= majority_threshold
+                ) * 120
+                consensus_structure2 = (
+                    np.sum(structure2, axis=0) >= majority_threshold
+                ) * 255
+                # Merge structures into one mask
+                final_mask = np.maximum(consensus_structure1, consensus_structure2)
+
+            elif self.single_seg_mode == "random":
+                # load all masks and take random mask
+                random_mask = seg_masks[np.random.randint(0, len(seg_masks))]
+                final_mask = random_mask
+            else:
+                raise ValueError(
+                    f"self.single_seg_mode must be 'union', 'annotator_majority', 'random' but is {self.single_seg_mode}"
+                )
+
+            # save to self.single_seg_data_path
+            # compose new filename
+            relative_path = os.path.relpath(
+                imgs_seg_mask_fnames[0], start=self.img_segmask_tif_data_path
+            )
+            new_fname = os.path.join(
+                self.single_seg_data_path,
+                os.path.splitext(relative_path)[0].rsplit("-", 1)[0] + "mask.tif",
+            )
+            self.save_img_mask_tif(final_mask, new_fname, save_copy="save")
 
 
 if __name__ == "__main__":
@@ -218,7 +330,20 @@ if __name__ == "__main__":
         "--img_segmask_tif_data_path",
         type=str,
         default="",
-        help="Path to one-hot encoded masks of RIGA dataset.",
+        help="Path to dense segmentation masks of RIGA dataset.",
+    )
+    parser.add_argument(
+        "--single_seg_mode",
+        type=str,
+        default="",
+        help="Mode to generate single segmentation mask per retina image."
+        "Options: 'union', 'annotator_majority', 'random'.",
+    )
+    parser.add_argument(
+        "--single_seg_data_path",
+        type=str,
+        default="",
+        help="Path to single, dense segmentation mask per retina image.",
     )
     parser.add_argument(
         "--log_level",
@@ -236,8 +361,17 @@ if __name__ == "__main__":
     )
 
     riga_ds_processor = RIGA_dataset_processor(
-        args.raw_data_path, args.img_segmask_tif_data_path
+        args.raw_data_path,
+        args.img_segmask_tif_data_path,
+        args.single_seg_mode,
+        args.single_seg_data_path,
     )
 
     # Step 1: Convert masks to dense segmentation masks
     # riga_ds_processor.mask_contours_to_seg_masks()
+
+    # Step 2: Generate consensus and random-rater masks
+    riga_ds_processor.generate_consensus_random_rater_masks()
+
+    # Step 3: To nnUNet_raw dataset format
+    # riga_ds_processor.to_nnUNet_raw_dataset()
