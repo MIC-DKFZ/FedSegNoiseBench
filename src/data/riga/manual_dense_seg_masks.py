@@ -24,7 +24,7 @@ def manual_riga_prep(
     gray_img = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
     gray_mask = cv2.cvtColor(mask, cv2.COLOR_RGB2GRAY)
     diff_ = cv2.absdiff(gray_mask, gray_img)
-    _, diff = cv2.threshold(diff_, 20, 255, cv2.THRESH_BINARY)
+    _, diff = cv2.threshold(diff_, 1, 255, cv2.THRESH_BINARY)
 
     # CCA to filter out small components
     num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(
@@ -80,26 +80,26 @@ def manual_riga_prep(
     final_seg_mask = np.maximum(biggest_mask, sec_biggest_mask)
 
     # # visualize
-    images = [img, mask, diff_, diff, filtered_diff, closed, final_seg_mask]
-    titles = ["img", "mask", "diff_", "diff", "filtered_diff", "closed", "final_seg_mask"]
-    # Create a figure with subplots
-    fig, axes = plt.subplots(1, len(images), figsize=(25, 5))  # Adjust figsize as needed
-    # Loop over images and display them
-    for ax, image, title in zip(axes, images, titles):
-        ax.imshow(image, cmap="gray")  # Use cmap="gray" for single-channel images
-        ax.set_title(title)
-        ax.axis("off")  # Hide axis labels
-        print(title)
-    # Show all images
-    plt.show()
+    # images = [img, mask, diff_, diff, filtered_diff, closed, final_seg_mask]
+    # titles = ["img", "mask", "diff_", "diff", "filtered_diff", "closed", "final_seg_mask"]
+    # # Create a figure with subplots
+    # fig, axes = plt.subplots(1, len(images), figsize=(25, 5))  # Adjust figsize as needed
+    # # Loop over images and display them
+    # for ax, image, title in zip(axes, images, titles):
+    #     ax.imshow(image, cmap="gray")  # Use cmap="gray" for single-channel images
+    #     ax.set_title(title)
+    #     ax.axis("off")  # Hide axis labels
+    #     print(title)
+    # # Show all images
+    # plt.show()
 
     # save dense mask
     tiff.imwrite(out_fname, final_seg_mask)
 
 if __name__ == "__main__":
     # user input
-    mask_fname = "/home/m391k/E132-Projekte/Projects/2024_Bujotzek_Noisy-Seg-Label-Benchi/data/RIGA/raw/BinRushedcorrected/BinRushed/BinRushed2/image20-3.jpg"
-    img_fname = "/home/m391k/E132-Projekte/Projects/2024_Bujotzek_Noisy-Seg-Label-Benchi/data/RIGA/raw/BinRushedcorrected/BinRushed/BinRushed2/image20prime.jpg"
+    mask_fname = "/home/m391k/E132-Projekte/Projects/2024_Bujotzek_Noisy-Seg-Label-Benchi/data/RIGA/raw/Magrabia/MagrabiaMale/image23-2.tif"
+    img_fname = "/home/m391k/E132-Projekte/Projects/2024_Bujotzek_Noisy-Seg-Label-Benchi/data/RIGA/raw/Magrabia/MagrabiaMale/image23prime.tif"
 
     riga_data_preper = RIGA_dataset_processor()
     out_fname = mask_fname.replace("raw", "img_segmask_tif").replace(".jpg", ".tif")
