@@ -69,15 +69,27 @@ class Client:
         target_num_epochs = self.current_epoch + self.fl_args["num_local_epochs"]
 
         # run local training
+        # TODO: FIx last_fl_round condition to sth like target_num_epochs == (self.fl_args["num_rounds"] * self.fl_args["num_local_epochs"])
+        # last_fl_round=(
+        #     True if target_num_epochs == self.fl_args["num_rounds"] else False
+        # )
+        last_fl_round = (
+            abs(
+                target_num_epochs
+                - (self.fl_args["num_rounds"] * self.fl_args["num_local_epochs"])
+            )
+            == 0
+        )
+        logging.info(
+            f"{target_num_epochs=} ; {self.fl_args['num_rounds']=} ; {self.fl_args['num_local_epochs']=} ==> Setting {last_fl_round}"
+        )
         self.model.run(
             initialize_fed_training=False,
             # continue_training=True,
             num_epochs=target_num_epochs,
             current_epoch=self.current_epoch,
             epochs_per_round=self.fl_args["num_local_epochs"],
-            last_fl_round=(
-                True if target_num_epochs == self.fl_args["num_rounds"] else False
-            ),
+            last_fl_round=last_fl_round,
             very_last_fl_predict_round=very_last_fl_predict_round,
             only_run_validation=only_run_validation,
         )
