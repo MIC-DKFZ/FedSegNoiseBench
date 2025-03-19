@@ -7,8 +7,10 @@ import numpy as np
 import tifffile as tiff
 from tqdm import tqdm
 import shutil
-import hashlib
-from PIL import Image, ImageChops
+
+# import hashlib
+# from PIL import Image, ImageChops
+import json
 
 
 class RIGA_dataset_processor:
@@ -28,6 +30,8 @@ class RIGA_dataset_processor:
         img_segmask_tif_data_path: str = None,
         single_seg_mode: str = None,
         single_seg_data_path: str = None,
+        dataset_ids: str = None,
+        nnUNet_raw_data_path: str = None,
     ):
         # set input args
         self.raw_data_path = raw_data_path
@@ -40,6 +44,11 @@ class RIGA_dataset_processor:
         if self.single_seg_data_path:
             if not os.path.exists(self.single_seg_data_path):
                 os.makedirs(self.single_seg_data_path)
+        self.dataset_ids = dataset_ids
+        self.nnUNet_raw_data_path = nnUNet_raw_data_path
+        if self.nnUNet_raw_data_path:
+            if not os.path.exists(self.nnUNet_raw_data_path):
+                os.makedirs(self.nnUNet_raw_data_path)
 
         self.raw_img_fnames, self.raw_mask_fnames = [], []
 
@@ -83,7 +92,7 @@ class RIGA_dataset_processor:
         assert img is not None, f"Image or mask {fname} could not be loaded."
         if mode == "RGB":
             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        elif mode == "GRAY":
+        elif mode == "GRAY" and len(img.shape) == 3:
             img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         img = (img / img.max() * 255).astype(np.uint8)  # Normalize to 0-255
         return img
@@ -170,10 +179,10 @@ class RIGA_dataset_processor:
         """
         # ensure some stuff
         os.makedirs(os.path.dirname(new_fname), exist_ok=True)
-        img = img.astype(np.uint8)
 
         # save or copy image
         if save_copy == "save":
+            img = img.astype(np.uint8)
             tiff.imwrite(new_fname, img)
         elif save_copy == "copy":
             shutil.copy(old_fname, new_fname)
@@ -316,6 +325,112 @@ class RIGA_dataset_processor:
             )
             self.save_img_mask_tif(final_mask, new_fname, save_copy="save")
 
+    def get_dataset_id_name(self, dataset_to_id, img_fname):
+        """
+        Retrieve dataset_id based on available folder depth in dataset_to_id
+        """
+        base1 = os.path.basename(os.path.dirname(img_fname))  # One level up
+        base2 = os.path.basename(
+            os.path.dirname(os.path.dirname(img_fname))
+        )  # Two levels up
+
+        if base2 in dataset_to_id:  # Prefer deeper structure if available
+            return dataset_to_id[base2], base2
+        elif base1 in dataset_to_id:
+            return dataset_to_id[base1], base1
+        else:
+            raise KeyError(f"No matching dataset_id found for {img_fname}")
+
+    def to_nnUNet_raw_dataset(self, consecutive_label_order: bool = False):
+        """
+        Convert RIGA dataset to nnUNet raw dataset format.
+        """
+        # get images and masks fnames
+        img_fnames = glob.glob(
+            os.path.join(self.img_segmask_tif_data_path, "**/*prime.tif"),
+            recursive=True,
+        )
+        seg_mask_fnames = glob.glob(
+            os.path.join(self.single_seg_data_path, "**/*mask.tif"), recursive=True
+        )
+
+        # define dataset to dataset_id mapping
+        dataset_to_id = {
+            "BinRushed": self.dataset_ids.split()[0],
+            "Magrabia": self.dataset_ids.split()[1],
+            "MESSIDOR": self.dataset_ids.split()[2],
+        }
+
+        dataset_num_samples = {
+            "BinRushed": 0,
+            "Magrabia": 0,
+            "MESSIDOR": 0,
+        }
+        # split img into separate R, G, B channels and save to nnUNet raw dataset format
+        for idx, img_fname in tqdm(
+            enumerate(img_fnames),
+            total=len(img_fnames),
+            desc="Save images to nnUNet raw dataset",
+            unit="image",
+        ):
+            # load image
+            img = self.load_img_mask(img_fname, "RGB")
+            # split image into R, G, B channels
+            r, g, b = cv2.split(img)
+            # save channel-separated image
+            for channel_img, channel_name in zip([r, g, b], ["0000", "0001", "0002"]):
+                # compose new filename
+                dataset_id, dataset_name = self.get_dataset_id_name(
+                    dataset_to_id, img_fname
+                )
+                new_fname = os.path.join(
+                    self.nnUNet_raw_data_path,
+                    f"Dataset{dataset_id}_RIGA-{dataset_name}_{self.single_seg_mode}",
+                    "imagesTr",
+                    f"RIGA{dataset_name}_{idx:04d}_{channel_name}.tif",
+                )
+                self.save_img_mask_tif(channel_img, new_fname, save_copy="save")
+                dataset_num_samples[dataset_name] += 1
+
+            # corresponding seg mask
+            seg_mask_fname = img_fname.replace(
+                    "img_segmask_tif", f"single_seg_{self.single_seg_mode.replace('_','')}"
+                ).replace("prime.tif", "mask.tif")
+            new_seg_mask_fname = new_fname.replace("imagesTr", "labelsTr").replace(
+                    f"_{channel_name}.tif", ".tif"
+                )
+            if consecutive_label_order:
+                # copy img's corresponding seg mask to nnUNet raw dataset format
+                self.save_img_mask_tif(
+                    old_fname=seg_mask_fname, new_fname=new_seg_mask_fname, save_copy="copy"
+                )
+            else:
+                mask = self.load_img_mask(seg_mask_fname, "GRAY")
+                mask[(mask > 0) & (mask < 255)] = 1
+                mask[mask == 255] = 2
+                self.save_img_mask_tif(mask, new_seg_mask_fname, save_copy="save")
+
+        # generate dataset.json file per dataset
+        for dataset_name, dataset_id in dataset_to_id.items():
+            # compose dataset.json
+            dataset_json = {
+                "channel_names": {"0": "R", "1": "G", "2": "B"},
+                "description": "RIGA dataset",
+                "file_ending": ".tif",
+                "labels": ({"background": 0, "disc": 1, "cup": 2}),
+                "name": f"RIGA-{dataset_name}",
+                "numTraining": int(dataset_num_samples[dataset_name] / 3),
+                "reference": "RIGA",
+            }
+            # save dataset.json
+            dataset_json_fname = os.path.join(
+                self.nnUNet_raw_data_path,
+                f"Dataset{dataset_id}_RIGA-{dataset_name}_{self.single_seg_mode}",
+                "dataset.json",
+            )
+            with open(dataset_json_fname, "w") as json_file:
+                json.dump(dataset_json, json_file, indent=4)
+
 
 if __name__ == "__main__":
     # set cli args
@@ -351,6 +466,18 @@ if __name__ == "__main__":
         default="INFO",
         help="Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)",
     )
+    parser.add_argument(
+        "--dataset_ids",
+        type=str,
+        default="",
+        help="Raw nnUNet Dataset ID to generate from raw data.",
+    )
+    parser.add_argument(
+        "--nnUNet_raw_data_path",
+        type=str,
+        default="",
+        help="Path to nnUNet raw dataset.",
+    )
 
     args = parser.parse_args()
 
@@ -365,13 +492,15 @@ if __name__ == "__main__":
         args.img_segmask_tif_data_path,
         args.single_seg_mode,
         args.single_seg_data_path,
+        args.dataset_ids,
+        args.nnUNet_raw_data_path,
     )
 
     # Step 1: Convert masks to dense segmentation masks
     # riga_ds_processor.mask_contours_to_seg_masks()
 
     # Step 2: Generate consensus and random-rater masks
-    riga_ds_processor.generate_consensus_random_rater_masks()
+    # riga_ds_processor.generate_consensus_random_rater_masks()
 
     # Step 3: To nnUNet_raw dataset format
-    # riga_ds_processor.to_nnUNet_raw_dataset()
+    riga_ds_processor.to_nnUNet_raw_dataset(consecutive_label_order=False)

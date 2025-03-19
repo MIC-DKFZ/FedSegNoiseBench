@@ -13,7 +13,7 @@ def manual_riga_prep_single_seg_masks(
 ):
     # load masks of img
     fnames = glob.glob(
-            os.path.join(os.path.dirname(img_fname), os.path.basename(img_fname).replace("prime", "*")), recursive=True
+            os.path.join(os.path.dirname(img_fname), os.path.basename(img_fname).replace("prime.tif", "-*")), recursive=True
         )
     imgs_seg_mask_fnames = [x for x in fnames if "prime" not in x]
 
@@ -60,8 +60,8 @@ def manual_riga_prep_single_seg_masks(
 
 if __name__ == "__main__":
     # user input
-    img_fname = "/home/m391k/E132-Projekte/Projects/2024_Bujotzek_Noisy-Seg-Label-Benchi/data/RIGA/img_segmask_tif/Magrabia/MagrabiaMale/image23prime.tif"
-    mode = "annotator_majority"
+    img_fname = "/home/m391k/E132-Projekte/Projects/2024_Bujotzek_Noisy-Seg-Label-Benchi/data/RIGA/img_segmask_tif/Magrabia/MagrabiaMale/image3prime.tif"
+    mode = "random"
 
     out_mask_fname = img_fname.replace("img_segmask_tif", f"single_seg_{mode.replace('_','')}").replace("prime", f"mask")
     riga_data_preper = RIGA_dataset_processor()
