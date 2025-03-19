@@ -25,7 +25,7 @@ class nnUNetv2_fed:
             os.path.join(
                 os.getenv("nnUNet_preprocessed"),
                 clean_validation_dataset,
-                "nnUNetPlans_3d_fullres",
+                f"nnUNetPlans_{self.configuration}",
             )
             if clean_validation_dataset
             else None
