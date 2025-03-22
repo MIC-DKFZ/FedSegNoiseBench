@@ -24,6 +24,9 @@ class Gleason_dataset_processor:
         raw_data_path: str = None,
         single_seg_data_path: str = None,
         single_seg_mode: str = None,
+        staple_raw_data_path: str = None,
+        dataset_ids: str = None,
+        nnUNet_raw_data_path: str = None,
     ):
         # set input args
         self.raw_data_path = raw_data_path
@@ -32,6 +35,7 @@ class Gleason_dataset_processor:
             if not os.path.exists(self.single_seg_data_path):
                 os.makedirs(self.single_seg_data_path)
         self.single_seg_mode = single_seg_mode
+        self.staple_raw_data_path = staple_raw_data_path
 
     def load_img(self, fname, mode: str = None):
         """
@@ -128,6 +132,20 @@ class Gleason_dataset_processor:
             )
             self.save_img(img, new_img_fname)
 
+    def staple_to_consensus_masks(self):
+        # get fnames
+        _, mask_fnames = self.get_fnames(self.staple_raw_data_path)
+
+        for mask_fname in tqdm(mask_fnames, desc="Loading STAPLE masks"):
+            # load mask
+            mask = self.load_img(mask_fname)
+            # save mask as .tif
+            new_mask_fname = os.path.join(
+                self.single_seg_data_path,
+                os.path.basename(mask_fname).replace(".png", ".tif"),
+            )
+            self.save_img(mask, new_mask_fname)
+
 
 if __name__ == "__main__":
     # set cli args
@@ -152,23 +170,29 @@ if __name__ == "__main__":
         "Options: 'union', 'annotator_majority', 'random'.",
     )
     parser.add_argument(
+        "--staple_raw_data_path",
+        type=str,
+        default="",
+        help="Path to STAPLE consensus masks.",
+    )
+    parser.add_argument(
         "--log_level",
         type=str,
         default="INFO",
         help="Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)",
     )
-    # parser.add_argument(
-    #     "--dataset_ids",
-    #     type=str,
-    #     default="",
-    #     help="Raw nnUNet Dataset ID to generate from raw data.",
-    # )
-    # parser.add_argument(
-    #     "--nnUNet_raw_data_path",
-    #     type=str,
-    #     default="",
-    #     help="Path to nnUNet raw dataset.",
-    # )
+    parser.add_argument(
+        "--dataset_ids",
+        type=str,
+        default="",
+        help="Raw nnUNet Dataset ID to generate from raw data.",
+    )
+    parser.add_argument(
+        "--nnUNet_raw_data_path",
+        type=str,
+        default="",
+        help="Path to nnUNet raw dataset.",
+    )
 
     args = parser.parse_args()
 
@@ -179,8 +203,22 @@ if __name__ == "__main__":
     )
 
     gleason_ds_processor = Gleason_dataset_processor(
-        args.raw_data_path, args.single_seg_data_path, args.single_seg_mode
+        args.raw_data_path,
+        args.single_seg_data_path,
+        args.single_seg_mode,
+        args.staple_raw_data_path,
+        args.dataset_ids,
+        args.nnUNet_raw_data_path,
     )
 
     # Step1: Multi-rater masks -> consensus masks
-    gleason_ds_processor.generate_consensus_masks()
+    # gleason_ds_processor.generate_consensus_masks()
+
+    # Step1.1: Given STAPLE consensus masks to consensus masks
+    # gleason_ds_processor.staple_to_consensus_masks()
+
+    # Step2: Federated data splitting
+    gleason_ds_processor.split_data_fl()
+
+    # # Step3: Generate nnUNet dataset from raw data
+    # gleason_ds_processor.to_nnUNet_raw_dataset(consecutive_label_order=False)
