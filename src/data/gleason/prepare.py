@@ -8,6 +8,8 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 from scipy.stats import mode
 import tifffile as tiff
+import shutil
+import json
 
 
 class Gleason_dataset_processor:
@@ -26,6 +28,7 @@ class Gleason_dataset_processor:
         single_seg_mode: str = None,
         staple_raw_data_path: str = None,
         dataset_ids: str = None,
+        pathoimgslides_per_flclient: str = None,
         nnUNet_raw_data_path: str = None,
     ):
         # set input args
@@ -36,6 +39,12 @@ class Gleason_dataset_processor:
                 os.makedirs(self.single_seg_data_path)
         self.single_seg_mode = single_seg_mode
         self.staple_raw_data_path = staple_raw_data_path
+        self.dataset_ids = dataset_ids
+        self.pathoimgslides_per_flclient = pathoimgslides_per_flclient
+        self.nnUNet_raw_data_path = nnUNet_raw_data_path
+        if self.nnUNet_raw_data_path:
+            if not os.path.exists(self.nnUNet_raw_data_path):
+                os.makedirs(self.nnUNet_raw_data_path)
 
     def load_img(self, fname, mode: str = None):
         """
@@ -58,26 +67,35 @@ class Gleason_dataset_processor:
         img = img.astype(np.uint8)
         tiff.imwrite(new_fname, img)
 
-    def get_fnames(self, parent_dir: str = None):
+    def get_fnames(
+        self,
+        parent_dir: str = None,
+        filter_img_masks: bool = True,
+        sub_dirs: str = "**/",
+    ):
         """
         Get image and mask filenames.
         """
         fnames = []
-        for file_ending in ["*.png", "*.jpg"]:
+        for file_ending in ["*.png", "*.jpg", "*.tif"]:
             fnames.extend(
                 glob.glob(
                     os.path.join(parent_dir, f"**/{file_ending}"),
                     recursive=True,
                 )
             )
-        # split into img and masks
-        img_fnames = [fname for fname in fnames if ("Train_imgs" in fname)]
-        mask_fnames = [fname for fname in fnames if "Maps" in fname]
-        return img_fnames, mask_fnames
+        if filter_img_masks:
+            # split into img and masks
+            img_fnames = [fname for fname in fnames if ("Train_imgs" in fname)]
+            mask_fnames = [fname for fname in fnames if "Maps" in fname]
+            return img_fnames, mask_fnames
+        return fnames
 
     def generate_consensus_masks(self):
         # get fnames
-        img_fnames, mask_fnames = self.get_fnames(self.raw_data_path)
+        img_fnames, mask_fnames = self.get_fnames(
+            self.raw_data_path, filter_img_masks=True
+        )
 
         # load img and masks
         for img_fname in tqdm(img_fnames, desc="Loading images and masks"):
@@ -133,8 +151,13 @@ class Gleason_dataset_processor:
             self.save_img(img, new_img_fname)
 
     def staple_to_consensus_masks(self):
+        """
+        Convert STAPLE masks to consensus masks.
+        """
         # get fnames
-        _, mask_fnames = self.get_fnames(self.staple_raw_data_path)
+        _, mask_fnames = self.get_fnames(
+            self.staple_raw_data_path, filter_img_masks=True
+        )
 
         for mask_fname in tqdm(mask_fnames, desc="Loading STAPLE masks"):
             # load mask
@@ -145,6 +168,162 @@ class Gleason_dataset_processor:
                 os.path.basename(mask_fname).replace(".png", ".tif"),
             )
             self.save_img(mask, new_mask_fname)
+
+    def to_nnUNet_raw_dataset(self):
+        """
+        Generate nnUNet raw dataset with FL splits.
+        """
+        # define FL client's dataset_id to histopatho image slide mapping
+        dataset_ids = self.dataset_ids.split(" ")
+        _pathoimgslides_per_flclient = [
+            int(x) for x in self.pathoimgslides_per_flclient.split(",")
+        ]
+        num_slides_per_flclient = len(_pathoimgslides_per_flclient) // len(dataset_ids)
+        pathoimgslides_per_flclient = [
+            _pathoimgslides_per_flclient[
+                i * num_slides_per_flclient : (i + 1) * num_slides_per_flclient
+            ]
+            for i in range(len(dataset_ids))
+        ]
+        fl_client_data = {
+            ds_id: slides_flc
+            for ds_id, slides_flc in zip(dataset_ids, pathoimgslides_per_flclient)
+        }
+
+        # get fnames
+        if self.single_seg_mode == "staple":
+            mask_fnames = self.get_fnames(
+                self.single_seg_data_path, filter_img_masks=False
+            )
+            fnames = self.get_fnames(
+                self.single_seg_data_path.replace("staple", "random"),
+                filter_img_masks=False,
+            )
+            img_fnames = [
+                fname for fname in fnames if "classimg_nonconvex" not in fname
+            ]
+        else:
+            fnames = self.get_fnames(
+                self.single_seg_data_path, sub_dirs="", filter_img_masks=False
+            )
+            img_fnames = [
+                fname for fname in fnames if "classimg_nonconvex" not in fname
+            ]
+            mask_fnames = [fname for fname in fnames if fname not in img_fnames]
+
+        dataset_num_samples = {x: 0 for x in fl_client_data.keys()}
+        # split data
+        for idx, (ds_id, slides_flc) in enumerate(fl_client_data.items()):
+            # create output_folder for ds_id
+            output_folder = os.path.join(
+                self.nnUNet_raw_data_path,
+                f"Dataset{ds_id}_Gleason2019_{self.single_seg_mode}_flclient{idx}",
+            )
+            os.makedirs(os.path.join(output_folder, "imagesTr"), exist_ok=True)
+            os.makedirs(os.path.join(output_folder, "labelsTr"), exist_ok=True)
+
+            # get img_slides of current FL client
+            img_slide_fnames, mask_slides_fnames = [], []
+            for slide_idx_flc in slides_flc:
+                img_slide_fnames.extend(
+                    [
+                        x
+                        for x in img_fnames
+                        if (
+                            (f"slide{slide_idx_flc:03d}" in x) and ("classimg" not in x)
+                        )
+                    ]
+                )
+                mask_slides_fnames.extend(
+                    [
+                        x
+                        for x in mask_fnames
+                        if ((f"slide{slide_idx_flc:03d}" in x) and ("classimg" in x))
+                    ]
+                )
+                if self.single_seg_mode == "staple":  # and len(mask_slides_fnames) ==
+                    mask_slides_fnames.extend(
+                        [x for x in mask_fnames if f"s{slide_idx_flc:03d}" in x]
+                    )
+
+            for img_idx, img_slide_fname in tqdm(
+                enumerate(img_slide_fnames), desc=f"Processing images of FL cient {idx}"
+            ):
+                print(f"Processing img {img_slide_fname}")
+                # image
+                img = self.load_img(img_slide_fname, "RGB")
+                # split image into R, G, B channels
+                r, g, b = cv2.split(img)
+                # save channel-separated image
+                for channel_img, channel_name in zip(
+                    [r, g, b], ["0000", "0001", "0002"]
+                ):
+                    # compose new filename
+                    new_fname = os.path.join(
+                        output_folder,
+                        "imagesTr",
+                        f"Gleason-{os.path.basename(img_slide_fname).replace('_','').replace('.tif','')}_{img_idx:04d}_{channel_name}.tif",
+                    )
+                    self.save_img(channel_img, new_fname)
+                dataset_num_samples[ds_id] += 1
+
+                # corresponding seg mask
+                try:
+                    current_segmask_fname = [
+                        x
+                        for x in mask_slides_fnames
+                        if (
+                            (
+                                os.path.basename(img_slide_fname)
+                                .replace("slide", "s")
+                                .replace("core", "c")
+                                .replace(".tif", "")
+                                in x
+                            )
+                            or (
+                                os.path.basename(img_slide_fname).replace(".tif", "")
+                                in x
+                            )
+                        )
+                    ][0]
+                except IndexError:
+                    raise ValueError(f"No seg mask found for {img_slide_fname}")
+                new_seg_mask_fname = new_fname.replace("imagesTr", "labelsTr").replace(
+                    f"_{channel_name}.tif", ".tif"
+                )
+                # copy seg mask
+                shutil.copy(current_segmask_fname, new_seg_mask_fname)
+
+        # generate dataset.json file per dataset
+        for idx, dataset_id in enumerate(fl_client_data.keys()):
+            # compose dataset.json
+            dataset_json = {
+                "channel_names": {"0": "R", "1": "G", "2": "B"},
+                "description": "Gleason2019 dataset",
+                "file_ending": ".tif",
+                "labels": (
+                    {
+                        "background": 0,
+                        "gleason_label1": 1,
+                        "gleason_label2": 2,
+                        "gleason_label3": 3,
+                        "gleason_label4": 4,
+                        "gleason_label5": 5,
+                        "gleason_label6": 6,
+                    }
+                ),
+                "name": f"Gleason2019_flcient{idx}",
+                "numTraining": dataset_num_samples[dataset_id],
+                "reference": "Gleason2019",
+            }
+            # save dataset.json
+            dataset_json_fname = os.path.join(
+                self.nnUNet_raw_data_path,
+                f"Dataset{dataset_id}_Gleason2019_{self.single_seg_mode}_flclient{idx}",
+                "dataset.json",
+            )
+            with open(dataset_json_fname, "w") as json_file:
+                json.dump(dataset_json, json_file, indent=4)
 
 
 if __name__ == "__main__":
@@ -188,6 +367,12 @@ if __name__ == "__main__":
         help="Raw nnUNet Dataset ID to generate from raw data.",
     )
     parser.add_argument(
+        "--pathoimgslides_per_flclient",
+        type=str,
+        default="",
+        help="Number of histopathology image slides per federated learning client.",
+    )
+    parser.add_argument(
         "--nnUNet_raw_data_path",
         type=str,
         default="",
@@ -208,6 +393,7 @@ if __name__ == "__main__":
         args.single_seg_mode,
         args.staple_raw_data_path,
         args.dataset_ids,
+        args.pathoimgslides_per_flclient,
         args.nnUNet_raw_data_path,
     )
 
@@ -217,8 +403,5 @@ if __name__ == "__main__":
     # Step1.1: Given STAPLE consensus masks to consensus masks
     # gleason_ds_processor.staple_to_consensus_masks()
 
-    # Step2: Federated data splitting
-    gleason_ds_processor.split_data_fl()
-
-    # # Step3: Generate nnUNet dataset from raw data
-    # gleason_ds_processor.to_nnUNet_raw_dataset(consecutive_label_order=False)
+    # Step2: Generate nnUNet datasets with FL splits
+    gleason_ds_processor.to_nnUNet_raw_dataset()
