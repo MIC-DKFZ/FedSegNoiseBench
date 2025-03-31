@@ -10,6 +10,7 @@ from scipy.stats import mode
 import tifffile as tiff
 import shutil
 import json
+import SimpleITK as sitk
 
 
 class Gleason_dataset_processor:
@@ -46,17 +47,20 @@ class Gleason_dataset_processor:
             if not os.path.exists(self.nnUNet_raw_data_path):
                 os.makedirs(self.nnUNet_raw_data_path)
 
-    def load_img(self, fname, mode: str = None):
+    def load_img(self, fname, mode: str = None, lib: str = "cv2"):
         """
         Load image or mask from file.
         """
-        img = cv2.imread(fname, cv2.IMREAD_UNCHANGED)
-        assert img is not None, f"Image or mask {fname} could not be loaded."
-        if mode == "RGB":
-            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        elif mode == "GRAY" and len(img.shape) == 3:
-            img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        # img = (img / img.max() * 255).astype(np.uint8)
+        if lib == "cv2":
+            img = cv2.imread(fname, cv2.IMREAD_UNCHANGED)
+            assert img is not None, f"Image or mask {fname} could not be loaded."
+            if mode == "RGB":
+                img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            elif mode == "GRAY" and len(img.shape) == 3:
+                img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            # img = (img / img.max() * 255).astype(np.uint8)
+        elif lib == "sitk":
+            img = sitk.ReadImage(fname)
         return img
 
     def save_img(self, img: np.ndarray, new_fname: str = None):
@@ -108,10 +112,11 @@ class Gleason_dataset_processor:
             ]
             assert len(imgs_mask_fnames) > 0, f"No masks found for image {img_fname}."
             # load img
-            img = self.load_img(img_fname)
+            img = self.load_img(img_fname, mode="RGB")
             # load masks
             masks = [
-                self.load_img(imgs_mask_fname) for imgs_mask_fname in imgs_mask_fnames
+                self.load_img(imgs_mask_fname, lib="sitk")
+                for imgs_mask_fname in imgs_mask_fnames
             ]
 
             # generate consensus mask
@@ -127,7 +132,20 @@ class Gleason_dataset_processor:
                     arr=reshaped_masks,
                 )
                 consensus_mask = majority_labels.reshape(masks.shape[1:])
-
+            elif self.single_seg_mode == "staple":
+                # apply staple algorithm, set undecided labels to bg (=0)
+                staple_mask = sitk.MultiLabelSTAPLE(masks)
+                consensus_mask = sitk.GetArrayFromImage(staple_mask)
+                # # visualize staple mask and individual initial masks
+                # plt.figure(figsize=(10, 10))
+                # plt.subplot(2, len(masks)+1, 1)
+                # plt.imshow(consensus_mask, cmap="jet")
+                # plt.title("STAPLE consensus mask")
+                # for i in range(len(masks)):
+                #     plt.subplot(2, len(masks)+1, i + 2)
+                #     plt.imshow(sitk.GetArrayFromImage(masks[i]), cmap="jet")
+                #     plt.title(f"Initial mask {i}")
+                # plt.show()
             elif self.single_seg_mode == "random":
                 consensus_mask = masks[np.random.randint(0, len(masks))]
             else:
@@ -169,6 +187,26 @@ class Gleason_dataset_processor:
             )
             self.save_img(mask, new_mask_fname)
 
+    def ensure_consecutive_labels(self, mask):
+        """
+        Ensure consecutive labels in mask.
+        """
+        # new label mapping with cuurent value: new value
+        label_value_mapping = {
+            0: 0,
+            1: 1,
+            3: 2,
+            4: 3,
+            5: 4,
+            6: 5,
+            7: 5,
+        }  # TODO: rm 7:5 again
+        unique_labels = np.unique(mask)
+        mask_ = mask.copy()
+        for curr_val, new_val in label_value_mapping.items():
+            mask_[mask == curr_val] = new_val
+        return mask_
+
     def to_nnUNet_raw_dataset(self):
         """
         Generate nnUNet raw dataset with FL splits.
@@ -191,25 +229,23 @@ class Gleason_dataset_processor:
         }
 
         # get fnames
-        if self.single_seg_mode == "staple":
-            mask_fnames = self.get_fnames(
-                self.single_seg_data_path, filter_img_masks=False
-            )
-            fnames = self.get_fnames(
-                self.single_seg_data_path.replace("staple", "random"),
-                filter_img_masks=False,
-            )
-            img_fnames = [
-                fname for fname in fnames if "classimg_nonconvex" not in fname
-            ]
-        else:
-            fnames = self.get_fnames(
-                self.single_seg_data_path, sub_dirs="", filter_img_masks=False
-            )
-            img_fnames = [
-                fname for fname in fnames if "classimg_nonconvex" not in fname
-            ]
-            mask_fnames = [fname for fname in fnames if fname not in img_fnames]
+        # if self.single_seg_mode == "staple":
+        #     mask_fnames = self.get_fnames(
+        #         self.single_seg_data_path, filter_img_masks=False
+        #     )
+        #     fnames = self.get_fnames(
+        #         self.single_seg_data_path.replace("staple", "random"),
+        #         filter_img_masks=False,
+        #     )
+        #     img_fnames = [
+        #         fname for fname in fnames if "classimg_nonconvex" not in fname
+        #     ]
+        # else:
+        fnames = self.get_fnames(
+            self.single_seg_data_path, sub_dirs="", filter_img_masks=False
+        )
+        img_fnames = [fname for fname in fnames if "classimg_nonconvex" not in fname]
+        mask_fnames = [fname for fname in fnames if fname not in img_fnames]
 
         dataset_num_samples = {x: 0 for x in fl_client_data.keys()}
         # split data
@@ -241,10 +277,10 @@ class Gleason_dataset_processor:
                         if ((f"slide{slide_idx_flc:03d}" in x) and ("classimg" in x))
                     ]
                 )
-                if self.single_seg_mode == "staple":  # and len(mask_slides_fnames) ==
-                    mask_slides_fnames.extend(
-                        [x for x in mask_fnames if f"s{slide_idx_flc:03d}" in x]
-                    )
+                # if self.single_seg_mode == "staple":  # and len(mask_slides_fnames) ==
+                #     mask_slides_fnames.extend(
+                #         [x for x in mask_fnames if f"s{slide_idx_flc:03d}" in x]
+                #     )
 
             for img_idx, img_slide_fname in tqdm(
                 enumerate(img_slide_fnames), desc=f"Processing images of FL cient {idx}"
@@ -288,11 +324,17 @@ class Gleason_dataset_processor:
                     ][0]
                 except IndexError:
                     raise ValueError(f"No seg mask found for {img_slide_fname}")
+                # load seg mask
+                mask = self.load_img(current_segmask_fname, "GRAY")
+                # consecutive labels
+                mask = self.ensure_consecutive_labels(mask)
+                # save seg mask
                 new_seg_mask_fname = new_fname.replace("imagesTr", "labelsTr").replace(
                     f"_{channel_name}.tif", ".tif"
                 )
+                self.save_img(mask, new_seg_mask_fname)
                 # copy seg mask
-                shutil.copy(current_segmask_fname, new_seg_mask_fname)
+                # shutil.copy(current_segmask_fname, new_seg_mask_fname)
 
         # generate dataset.json file per dataset
         for idx, dataset_id in enumerate(fl_client_data.keys()):
@@ -309,7 +351,6 @@ class Gleason_dataset_processor:
                         "gleason_label3": 3,
                         "gleason_label4": 4,
                         "gleason_label5": 5,
-                        "gleason_label6": 6,
                     }
                 ),
                 "name": f"Gleason2019_flcient{idx}",
@@ -324,6 +365,115 @@ class Gleason_dataset_processor:
             )
             with open(dataset_json_fname, "w") as json_file:
                 json.dump(dataset_json, json_file, indent=4)
+
+    # Function to get label distribution in a segmentation mask
+    def get_labels_from_mask(self, mask_path):
+        mask = tiff.imread(mask_path)
+        return set(np.unique(mask))
+
+    # Function to check label coverage in a fold
+    def has_all_labels(self, case_ids, case_label_map, ds_labels):
+        present_labels = set()
+        for case_id in case_ids:
+            present_labels.update(case_label_map[case_id])
+        return all(label in present_labels for label in ds_labels)
+
+    def ensure_label_presence_in_folds(self):
+        """
+        Ensure presence of all labels in all dataset folds.
+        """
+        dataset_ids = self.dataset_ids.split(" ")
+
+        for dataset_id in dataset_ids:
+            ds_dirname = glob.glob(
+                os.path.join(os.getenv("nnUNet_preprocessed"), f"Dataset{dataset_id}*")
+            )[0]
+            split_fname = os.path.join(ds_dirname, "splits_final.json")
+            gt_segmentations_dir = os.path.join(ds_dirname, "gt_segmentations")
+
+            # Load the existing split
+            with open(split_fname, "r") as f:
+                splits = json.load(f)
+
+            # Get label distribution for each case
+            present_labels = set()
+            case_label_map = {}
+            mask_fnames = glob.glob(os.path.join(gt_segmentations_dir, "*.tif"))
+            for mask_fname in tqdm(mask_fnames):
+                case_id = os.path.basename(mask_fname).replace(
+                    ".tif", ""
+                )  # Extract case ID
+                case_label_map[case_id] = self.get_labels_from_mask(mask_fname)
+                present_labels.update(case_label_map[case_id])
+            print(f"Present labels in dataset {dataset_id}: {present_labels}")
+
+            # Modify the first folds to ensure label presence
+            for i in range(2):
+                ensure_label_presence = False
+                while not ensure_label_presence:
+                    train_cases = set(splits[i]["train"])
+                    val_cases = set(splits[i]["val"])
+
+                    # Ensure labels exist in validation set
+                    if not self.has_all_labels(
+                        val_cases, case_label_map, present_labels
+                    ):
+                        missing_labels = set(present_labels) - set().union(
+                            *(case_label_map[c] for c in val_cases)
+                        )
+                        candidates = [
+                            c
+                            for c in train_cases
+                            if any(l in case_label_map[c] for l in missing_labels)
+                        ]
+                        if candidates:
+                            chosen_case = candidates[
+                                np.random.randint(0, len(candidates))
+                            ]  # Move one suitable case from train to val
+                            train_cases.remove(chosen_case)
+                            val_cases.add(chosen_case)
+                            logging.info(f"Moved {chosen_case} from train to val set.")
+
+                    # Ensure labels exist in training set
+                    if not self.has_all_labels(
+                        train_cases, case_label_map, present_labels
+                    ):
+                        missing_labels = set(present_labels) - set().union(
+                            *(case_label_map[c] for c in train_cases)
+                        )
+                        candidates = [
+                            c
+                            for c in val_cases
+                            if any(l in case_label_map[c] for l in missing_labels)
+                        ]
+                        if candidates:
+                            chosen_case = candidates[
+                                np.random.randint(0, len(candidates))
+                            ]  # Move one suitable case from val to train
+                            val_cases.remove(chosen_case)
+                            train_cases.add(chosen_case)
+                            logging.info(f"Moved {chosen_case} from val to train set.")
+
+                    # Update the split
+                    splits[i]["train"] = list(train_cases)
+                    splits[i]["val"] = list(val_cases)
+
+                    if self.has_all_labels(
+                        train_cases, case_label_map, present_labels
+                    ) and self.has_all_labels(
+                        val_cases, case_label_map, present_labels
+                    ):
+                        # If all labels are present, break the loop
+                        ensure_label_presence = True
+                        print(f"Fold {i}: All labels present in train and val sets.")
+
+            # Save the modified split
+            with open(split_fname, "w") as f:
+                json.dump(splits, f, indent=4)
+
+            print(
+                "Updated splits_final.json to ensure label presence in first 2 folds."
+            )
 
 
 if __name__ == "__main__":
@@ -404,4 +554,7 @@ if __name__ == "__main__":
     # gleason_ds_processor.staple_to_consensus_masks()
 
     # Step2: Generate nnUNet datasets with FL splits
-    gleason_ds_processor.to_nnUNet_raw_dataset()
+    # gleason_ds_processor.to_nnUNet_raw_dataset()
+
+    # Step3: Ensure presence of all labels in all dataset folds
+    gleason_ds_processor.ensure_label_presence_in_folds()
