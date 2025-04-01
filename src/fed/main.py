@@ -59,7 +59,13 @@ def main(args):
     ]
 
     # setup orchestrator
-    orchestrator = Orchestrator(clients, fl_args={"num_rounds": args.num_rounds})
+    orchestrator = Orchestrator(
+        clients,
+        fl_args={
+            "num_rounds": args.num_rounds,
+            "strategy": args.noise_mitigation_method,
+        },
+    )
 
     # run federated learning
     orchestrator.fl_run()
@@ -120,6 +126,14 @@ if __name__ == "__main__":
         type=int,
         default=5,
         help="Number of local epochs to run on each client per fl round.",
+    )
+
+    # method arguments
+    parser.add_argument(
+        "--noise_mitigation_method",
+        type=str,
+        default="FedAvg",
+        help="Method to mitigate segmentation label noise: FedA3I, None for vanilla FedAvg FL training.",
     )
 
     # other arguments
