@@ -76,7 +76,7 @@ if __name__ == "__main__":
     # gleason_dir = "/home/m391k/E132-Projekte/Projects/2024_Bujotzek_Noisy-Seg-Label-Benchi/data/Gleason2019/single_seg_staple_grandchallenge"
     # gleason_dir = "/home/m391k/E132-Projekte/Projects/2024_Bujotzek_Noisy-Seg-Label-Benchi/data/Gleason2019/single_seg_annotatormajority"
     # gleason_dir = "/home/m391k/E132-Projekte/Projects/2024_Bujotzek_Noisy-Seg-Label-Benchi/data/Gleason2019/raw_kaggle"
-    gleason_dir = "/home/m391k/E132-Projekte/Projects/2024_Bujotzek_Noisy-Seg-Label-Benchi/data/Gleason2019/nnUNet_raw/Dataset409_Gleason2019_random_flclient1/labelsTr"
+    gleason_dir = "/home/m391k/E132-Projekte/Projects/2024_Bujotzek_Noisy-Seg-Label-Benchi/data/Gleason2019/nnUNet_raw/Dataset414_Gleason2019_random_flclient1/labelsTr"
 
     find_count_unique_labels(gleason_dir)
     # kaggle_random_consensus_masks(gleason_dir, single_seg_random_dir)

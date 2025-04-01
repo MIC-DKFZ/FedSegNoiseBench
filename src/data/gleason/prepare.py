@@ -192,19 +192,29 @@ class Gleason_dataset_processor:
         Ensure consecutive labels in mask.
         """
         # new label mapping with cuurent value: new value
+        # label_value_mapping = {
+        #     0: 0,
+        #     1: 1,
+        #     3: 2,
+        #     4: 3,
+        #     5: 4,
+        #     6: 5
+        # }
+        # label mapping to begnin, gleason 1, 2, 3 from https://github.com/matjesg/deepflash2/blob/master/paper/challenge_data/preprocess_gleason.ipynb 
         label_value_mapping = {
             0: 0,
             1: 1,
-            3: 2,
-            4: 3,
-            5: 4,
-            6: 5,
-            7: 5,
-        }  # TODO: rm 7:5 again
+            3: 1,
+            4: 2,
+            5: 3,
+            6: 3,
+            7: 3,
+        }
         unique_labels = np.unique(mask)
         mask_ = mask.copy()
         for curr_val, new_val in label_value_mapping.items():
             mask_[mask == curr_val] = new_val
+        assert mask_.max() <= 3, f"Max label value in mask {mask_.max()} is not <= 3."
         return mask_
 
     def to_nnUNet_raw_dataset(self):
@@ -327,6 +337,7 @@ class Gleason_dataset_processor:
                 # load seg mask
                 mask = self.load_img(current_segmask_fname, "GRAY")
                 # consecutive labels
+                print(f"Processing seg mask {current_segmask_fname}")
                 mask = self.ensure_consecutive_labels(mask)
                 # save seg mask
                 new_seg_mask_fname = new_fname.replace("imagesTr", "labelsTr").replace(
@@ -348,9 +359,7 @@ class Gleason_dataset_processor:
                         "background": 0,
                         "gleason_label1": 1,
                         "gleason_label2": 2,
-                        "gleason_label3": 3,
-                        "gleason_label4": 4,
-                        "gleason_label5": 5,
+                        "gleason_label3": 3
                     }
                 ),
                 "name": f"Gleason2019_flcient{idx}",
@@ -554,7 +563,7 @@ if __name__ == "__main__":
     # gleason_ds_processor.staple_to_consensus_masks()
 
     # Step2: Generate nnUNet datasets with FL splits
-    # gleason_ds_processor.to_nnUNet_raw_dataset()
+    gleason_ds_processor.to_nnUNet_raw_dataset()
 
     # Step3: Ensure presence of all labels in all dataset folds
-    gleason_ds_processor.ensure_label_presence_in_folds()
+    # gleason_ds_processor.ensure_label_presence_in_folds()
