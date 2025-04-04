@@ -1,8 +1,22 @@
 import copy
 
+
 class FedAvg:
     def __init__(self, clients: list = None):
+        self.name = "fedavg"
         self.clients = clients
+
+    def get_num_datasamples_client(self, client_id: int = None):
+        """
+        Get number of training samples of a client with client_id or of all clients.
+        """
+        if client_id is None:
+            all_samples = sum(
+                [client.dataset_json["numTraining"] for client in self.clients]
+            )
+            return all_samples
+        else:
+            return self.clients[client_id].dataset_json["numTraining"]
 
     def fed_avg(self, client_checkpoints: dict = {}):
         """
@@ -19,9 +33,7 @@ class FedAvg:
         _client_checkpoints = copy.deepcopy(client_checkpoints)
 
         # for sample-weighted averaging, get number of all samples of all clients
-        num_samples_all_clients = sum(
-            [client.dataset_json["numTraining"] for client in self.clients]
-        )
+        num_samples_all_clients = self.get_num_datasamples_client()
 
         # initialize _server_model_weights with model weights of first client
         _server_model_weights = _client_checkpoints[0]
@@ -43,13 +55,16 @@ class FedAvg:
                     # we still need to weight client 0's model params with it's dataset size
                     _server_model_weights[address_key_dict[a][0]] = (
                         _server_model_weights[address_key_dict[a][0]]
-                        * self.clients[client_id].dataset_json["numTraining"]
+                        * self.get_num_datasamples_client(client_id)
                     )
                 else:
                     # weighted sum
-                    _server_model_weights[address_key_dict[a][0]] += (
-                        client_model_weights[address_key_dict[a][0]]
-                        * self.clients[client_id].dataset_json["numTraining"]
+                    _server_model_weights[
+                        address_key_dict[a][0]
+                    ] += client_model_weights[
+                        address_key_dict[a][0]
+                    ] * self.get_num_datasamples_client(
+                        client_id
                     )
             # divided by num_all_samples
             _server_model_weights[address_key_dict[a][0]] /= num_samples_all_clients

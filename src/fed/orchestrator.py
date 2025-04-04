@@ -17,7 +17,7 @@ class Orchestrator:
         if fl_args["strategy"].lower() == "fedavg":
             self.fl_strategy = FedAvg(self.clients)
         elif fl_args["strategy"].lower() == "feda3i":
-            self.fl_strategy = FedA3I()
+            self.fl_strategy = FedA3I(self.clients, fl_args["feda3i_warmup_rounds"])
         else:
             raise NotImplementedError(
                 f"Federated learning strategy {fl_args['strategy']} not implemented!"
@@ -26,7 +26,7 @@ class Orchestrator:
     def fl_run(self):
         orchestrator_start_time = time.time()
         # aggregate initial model weights of clients
-        self.aggregate()
+        self.aggregate(strategy="fedavg")
 
         # iterate over fl rounds
         for i, fl_round in enumerate(range(0, self.num_rounds)):
@@ -47,8 +47,39 @@ class Orchestrator:
 
             orchestrator_start_time = time.time()
 
-            # aggregation
-            self.aggregate()
+            # aggregation with selected FL strategy
+            # FEDAVG
+            if self.fl_strategy.name == "fedavg":
+                logging.info("Aggregating model weights with FedAvg strategy!")
+                # compute server_model_weights via FedAvg
+                self.aggregate(strategy=self.fl_strategy.name)
+
+            # FEDA3I
+            elif self.fl_strategy.name == "feda3i":
+                # warm up phase
+                if fl_round <= self.fl_strategy.feda3i_warmup_rounds:
+                    logging.info(
+                        "FedA3I warum up stage; aggregating model weights with FedAvg strategy!"
+                    )
+                    # compute server_model_weights via FedAvg
+                    self.aggregate(strategy="fedavg")
+                    # last fl_round of warmup phase
+                    if fl_round == self.fl_strategy.feda3i_warmup_rounds:
+                        logging.info(
+                            f"FedA3I warmup phase finished; starting to compute quality-based aggregation weights!"
+                        )
+                        # compute quality aggregation weights
+                        self.fl_strategy.feda3i_compute_quality_agg_weights()
+                # training phase
+                else:
+                    logging.info("Aggregating model weights with FedA3I strategy!")
+                    # compute server_model_weights via FedA3I
+                    self.aggregate(strategy=self.fl_strategy.name)
+
+            else:
+                raise NotImplementedError(
+                    f"Federated learning strategy {self.fl_strategy.name} not implemented!"
+                )
 
         # distiribute flinal fl models to clients
         self.update_clients(checkpoint_name="server_checkpoint_final.pth")
@@ -65,7 +96,7 @@ class Orchestrator:
 
         return self.server_model_weights
 
-    def aggregate(self):
+    def aggregate(self, strategy: str = None):
         """
         Aggregate model weights from clients.
         Output:
@@ -78,7 +109,16 @@ class Orchestrator:
         }
 
         # aggregate model weights with aggreation strategy
-        self.server_model_weights = self.fl_strategy.fed_avg(client_checkpoints)
+        if strategy == "fedavg":
+            self.server_model_weights = self.fl_strategy.fed_avg(client_checkpoints)
+        elif strategy == "feda3i":
+            self.server_model_weights = self.fl_strategy.feda3i_aggregate(
+                client_checkpoints
+            )
+        else:
+            raise NotImplementedError(
+                f"Federated learning strategy {strategy} not implemented!"
+            )
 
     def update_clients(self, checkpoint_name: str = None):
         """

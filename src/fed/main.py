@@ -64,6 +64,11 @@ def main(args):
         fl_args={
             "num_rounds": args.num_rounds,
             "strategy": args.noise_mitigation_method,
+            "feda3i_warmup_rounds": (
+                args.feda3i_warmup_rounds
+                if args.noise_mitigation_method.lower() == "feda3i"
+                else None
+            ),
         },
     )
 
@@ -134,6 +139,12 @@ if __name__ == "__main__":
         type=str,
         default="FedAvg",
         help="Method to mitigate segmentation label noise: FedA3I, None for vanilla FedAvg FL training.",
+    )
+    parser.add_argument(
+        "--feda3i_warmup_rounds",
+        type=int,
+        default=5,
+        help="Number of warmup rounds for FedA3I.",
     )
 
     # other arguments
