@@ -28,7 +28,7 @@ from client import Client
 
 def main(args):
     # setup experiment id
-    experiment_id = f"fold{args.fold}_clients{args.num_clients}_flrounds{args.num_rounds}_localepochs{args.num_local_epochs}_{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    experiment_id = f"{args.args.noise_mitigation_method.lower()}_fold{args.fold}_clients{args.num_clients}_flrounds{args.num_rounds}_localepochs{args.num_local_epochs}_{datetime.now().strftime('%Y%m%d-%H%M%S')}"
 
     # # set up logging
     # setup_logging(args, experiment_id)
