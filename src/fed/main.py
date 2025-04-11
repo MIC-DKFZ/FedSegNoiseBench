@@ -1,29 +1,18 @@
 import os
+import sys
 import argparse
 import logging
 from datetime import datetime
 
+# Add src to PYTHONPATH automatically if it's not there
+src_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+if src_path not in sys.path:
+    sys.path.append(src_path)
+print(f"{src_path=}")
+print(f"{sys.path=}")
+
 from orchestrator import Orchestrator
 from client import Client
-
-# def setup_logging(args, experiment_id):
-#     # Create logger
-#     logger = logging.getLogger("my_logger")
-#     logger.setLevel(args.log_level.upper())
-
-#     # Create file handler
-#     log_file_name = os.path.join(os.getenv("nnUNet_results"), "logs", f"exp{args.dataset_ids.replace(' ','_')}-{experiment_id}.log")
-#     os.makedirs(os.path.dirname(log_file_name), exist_ok=True)
-#     file_handler = logging.FileHandler(log_file_name, mode="w")
-#     file_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
-
-#     # Create console handler
-#     console_handler = logging.StreamHandler()
-#     console_handler.setFormatter(logging.Formatter("%(levelname)s - %(message)s"))
-
-#     # Add handlers to logger
-#     logger.addHandler(file_handler)
-#     logger.addHandler(console_handler)
 
 
 def main(args):
