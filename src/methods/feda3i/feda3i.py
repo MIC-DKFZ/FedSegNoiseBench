@@ -87,9 +87,11 @@ class FedA3I(FedAvg):
         FedA3I's quality- and quantity-based, layerwise aggregation.
         Notes:
         - Code from: https://github.com/wnn2000/FedAAAI/blob/main/code/utils/FedAvg.py#L16
+        - Weight1-weight2-weighted aka. quality-quantity-weighted FedAvg highly adapted from FedAvg.fed_avg() method
         """
-        weight1 = self.quality_agg_weights  # quality-based weights
-        # weight2 = np.array(dict_len) / np.sum(dict_len)  # quantity-based weights
+        # quality-based weights
+        weight1 = self.quality_agg_weights
+        # quantity-based weights
         weight2 = np.array(
             [
                 (
@@ -102,18 +104,9 @@ class FedA3I(FedAvg):
         assert np.allclose(np.sum(weight1), 1), f"{np.sum(weight1)} does not sum to 1.0"
         assert np.allclose(np.sum(weight2), 1), f"{np.sum(weight2)} does not sum to 1.0"
         w_avg = copy.deepcopy(client_checkpoints[0])
-        alpha = np.linspace(0.0, 1.0, 17)
-        alpha = self.alpha_weight * np.power(alpha, self.alpha_power) + self.alpha_bias
-        # print(alpha)
-
-        # adapted from FedAvg
-        # TODO: find synergies to FedAvg and fuse as much as possible
 
         # create deepcopy of client model weights to not directly modify them
         _client_checkpoints = copy.deepcopy(client_checkpoints)
-
-        # for sample-weighted averaging, get number of all samples of all clients
-        num_samples_all_clients = self.get_num_datasamples_client()
 
         keys = list(w_avg.keys())
         address_key_dict = {}
@@ -126,27 +119,39 @@ class FedA3I(FedAvg):
 
         # Define stages and their corresponding temp values
         address_temp_mapping = {}
+        # Define the stage keywords in depth order
+        stage_keywords_in_order = [
+            "encoder.stem.convs",
+            "encoder.stages.0",
+            "encoder.stages.1",
+            "encoder.stages.2",
+            "encoder.stages.3",
+            "encoder.stages.4",
+            "encoder.stages.5",
+            "encoder.stages.6",
+            "encoder.stages.7",
+            "decoder.stages.0",
+            "decoder.stages.1",
+            "decoder.stages.2",
+            "decoder.stages.3",
+            "decoder.stages.4",
+            "decoder.stages.5",
+            "decoder.stages.6",
+            "decoder.transpconvs",
+            "decoder.seg_layers",
+        ]
+        # Get all unique keys from the model (weights)
+        all_keys = list(w_avg.keys())
+        # Find which stages are actually present
+        present_stages = []
+        for stage in stage_keywords_in_order:
+            if any(stage in key for key in all_keys):
+                present_stages.append(stage)
+        # Dynamically assign temperatures
         stage_keywords_temp_dict = {
-            "encoder.stem.convs": 0,  # temp = 0
-            "encoder.stages.0": 0,  # temp = 0
-            "encoder.stages.1": 1,  # temp = 1
-            "encoder.stages.2": 2,  # temp = 2
-            "encoder.stages.3": 3,  # temp = 3
-            "encoder.stages.4": 4,  # temp = 4
-            "encoder.stages.5": 5,  # temp = 5
-            "encoder.stages.6": 6,  # temp = 6
-            "encoder.stages.7": 7,  # temp = 7
-            "decoder.stages.0": 8,  # temp = 0
-            "decoder.stages.1": 9,  # temp = 1
-            "decoder.stages.2": 10,  # temp = 2
-            "decoder.stages.3": 11,  # temp = 3
-            "decoder.stages.4": 12,  # temp = 4
-            "decoder.stages.5": 13,  # temp = 5
-            "decoder.stages.6": 14,  # temp = 6
-            "decoder.transpconvs": 15,  # temp = 7
-            "decoder.seg_layers": 16,  # temp = 8
+            stage: temp for temp, stage in enumerate(present_stages)
         }
-
+        # assign temp values to addresses
         for address, keys in address_key_dict.items():
             temp = None
             for i, (stage, temp) in enumerate(stage_keywords_temp_dict.items()):
@@ -154,7 +159,11 @@ class FedA3I(FedAvg):
                     address_temp_mapping[address] = temp
                     break
 
-        # perform the fedavg
+        # Compute alpha to weight weight1 and weight2 based on temp values, i.e. model depth
+        alpha = np.linspace(0.0, 1.0, len(stage_keywords_temp_dict))
+        alpha = self.alpha_weight * np.power(alpha, self.alpha_power) + self.alpha_bias
+
+        # perform the weight1-weight2-weighted fedavg in a layer-wise manner
         for a, keys in address_key_dict.items():
             # compute weight3
             weight3 = (
@@ -178,9 +187,6 @@ class FedA3I(FedAvg):
                         # * self.get_num_datasamples_client(client_id)
                         * weight3[client_id]
                     )
-            # divided by num_all_samples
-            # w_avg[address_key_dict[a][0]] /= num_samples_all_clients
-            # modifying the 0th keys is sufficient as the other keys point to the same data
 
         return w_avg
 
@@ -210,27 +216,35 @@ class FedA3I(FedAvg):
                     # e.g. [[b, c, h, w], [b, c, h/2, w/2], ...] for 2D due to deep supervision of nnUNet
                     high_res_outputs, high_res_labels = outputs[0], labels[0]
 
+                    # num_classes: count of fg classes + bg class
+                    num_classes = int(high_res_labels.max()) + 1
                     # get labels as one-hot encoded labels
-                    high_res_labels = torch.randint(
-                        0, 3, (12, 1, 512, 512), device="cuda:0", dtype=torch.int16
-                    )
+                    # one_hot_labels to shape: [b, (d), h, w, c]
                     one_hot_labels = F.one_hot(
-                        high_res_labels.squeeze(1).long(), num_classes=3
-                    )  # Shape: [12, 512, 512, 3]
-                    one_hot_labels = one_hot_labels.permute(
-                        0, 3, 1, 2
-                    ).float()  # Shape: [12, 3, 512, 512]
-
-                    loss = criterion(high_res_outputs, one_hot_labels)  # (b, c, h, w)
+                        high_res_labels.squeeze(1).long(), num_classes=num_classes
+                    )
+                    # one_hot_labels to shape: [b, c, (d), h, w]
+                    if len(one_hot_labels.shape) == 4:  # for 2D
+                        one_hot_labels = one_hot_labels.permute(0, 3, 1, 2).float()
+                    elif len(one_hot_labels.shape) == 5:  # for 3D
+                        one_hot_labels = one_hot_labels.permute(0, 4, 1, 2, 3).float()
+                    else:
+                        raise ValueError(
+                            f"Unexpected shape of one_hot_labels: {one_hot_labels.shape}"
+                        )
+                    loss = criterion(
+                        high_res_outputs, one_hot_labels
+                    )  # [b, c, (d), h, w]
                     loss_feature = torch.zeros(
                         (
                             one_hot_labels.shape[0],
-                            2 * (len(self.clients[0].dataset_json["labels"]) - 1),
+                            2 * (num_classes - 1),
                         )
                     )
-                    for c in range((high_res_outputs.shape[1] - 1)):
+                    # iterate over foreground classes
+                    for c in range((num_classes - 1)):
                         region_mask = torch.from_numpy(
-                            self.region(one_hot_labels[:, c].unsqueeze(1))
+                            self.region(one_hot_labels[:, (c + 1)].unsqueeze(1))
                         ).cuda()
                         assert (region_mask == 0).any()
                         loss_n = loss[:, c].unsqueeze(1)
