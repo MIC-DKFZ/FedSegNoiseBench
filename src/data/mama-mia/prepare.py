@@ -119,13 +119,11 @@ class MamaMia_dataset_processor:
                     "1": "MRI after CE",
                     "2": "MRI after CE 2",
                 },
-                "labels": (
-                    {
-                        "0": "background",
-                        "1": "lesion",
-                    },
-                ),
-                "numTraining": len(img_fnames_kept),
+                "labels": {
+                        "background": "0",
+                        "lesion": "1",
+                },
+                "numTraining": len(curr_mask_fnames),
             }
             dataset_json_fname = os.path.join(dataset_folder, "dataset.json")
             with open(dataset_json_fname, "w") as f:
