@@ -14,6 +14,11 @@ from methods.fedavg.fedavg import FedAvg
 
 
 class FedA3I(FedAvg):
+    """
+    FedA3I: Annotation Quality-Aware Aggregation for Federated Medical Image Segmentation against Heterogeneous Annotation Noise
+    Nannen Wu et al., 2024, AAAI
+    https://arxiv.org/abs/2312.12838
+    """
     def __init__(self, clients: list = None, feda3i_warmup_rounds: int = None):
         super().__init__(clients=clients)
         self.name = "feda3i"
