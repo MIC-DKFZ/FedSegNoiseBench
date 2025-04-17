@@ -14,17 +14,17 @@ from torch import Tensor
 from torch.utils.data import DataLoader
 from sklearn.metrics import accuracy_score
 
-from utils import (
-    map_,
-    depth,
-    str2bool,
-    inter_sum,
-    union_sum,
-    probs2one_hot,
-    dice_coef,
-    iIoU,
-)
-from losses import Focal_Cross_Entropy as focal_cross_entropy
+# from utils import (
+#     map_,
+#     depth,
+#     str2bool,
+#     inter_sum,
+#     union_sum,
+#     probs2one_hot,
+#     dice_coef,
+#     iIoU,
+# )
+# from losses import Focal_Cross_Entropy as focal_cross_entropy
 
 from methods.fedavg.fedavg import FedAvg
 
@@ -38,19 +38,63 @@ class FedDM(FedAvg):
 
     def __init__(self, clients: list = None):
         super().__init__(clients=clients)
-        self.name = "feddm"
 
-    def initialize_grad_len(self, server_model, grad_history):
+        self.name = "feddm"
+        self.device = (
+            torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+        )
+
+        # originally they initialize grad_history w/ key=layer_name and value=None
+        # we are working based on model weight#s addresses
+        model_weights0 = self.clients[0].model.current_model_weights
+        keys = list(model_weights0.keys())
+        address_key_dict = {}
+        for k in keys:
+            address = model_weights0[k].data_ptr()
+            if address not in address_key_dict.keys():
+                address_key_dict[address] = [k]
+            else:
+                address_key_dict[address].append(k)
+        self.grad_history = {x: None for x in address_key_dict.keys()}
+        self.grad_len = self.initialize_grad_len(
+            model_weights0, address_key_dict, self.grad_history
+        )
+
+        self.mc_n_samples = 100  # for noisy predictions
+        self.batch_size = self.clients[
+            0
+        ].model.nnunet_trainer.configuration_manager.batch_size
+        self.patch_size = self.clients[
+            0
+        ].model.nnunet_trainer.configuration_manager.patch_size
+        self.num_channels = len(
+            self.clients[0].model.nnunet_trainer.dataset_json["channel_names"]
+        )
+        self.gauss_noise = torch.rand(
+            self.mc_n_samples, self.num_channels, *self.patch_size
+        ).to(
+            self.device
+        )  # Monte-Carlo Sampling
+        self.embeddings = [
+            torch.zeros(self.mc_n_samples, self.num_channels, *self.patch_size).to(
+                self.device
+            )
+            for _ in self.clients
+        ]
+
+        self.clients_peers = {
+            id: {"nearest": None, "farthest": None} for id in range(len(clients))
+        }
+
+    def initialize_grad_len(self, model, address_key_dict, grad_history):
         """
-        Initialize gradient length for each key in the grad_history.
+        Initialize gradient length for each key in the grad_history via model weight's address.
         Original: https://github.com/CityU-AIM-Group/FedDM/blob/main/main.py#L608C1-L616C20
         """
-        grad_len = {key: 0 for key in grad_history.keys()}
-        for g_key in grad_len.keys():
-            for key in server_model.state_dict().keys():
-                if g_key in key:
-                    dims = server_model.state_dict()[key].shape
-                    grad_len[g_key] += dims.numel()
+        grad_len = {add: 0 for add in address_key_dict.keys()}
+        for add in grad_len.keys():
+            dims = model[address_key_dict[add][0]].shape
+            grad_len[add] += dims.numel()
         return grad_len
 
     def do_epoch_peer(
@@ -301,31 +345,38 @@ class FedDM(FedAvg):
 
         return clean_mask
 
-    def communication_FedDM(
+    # def communication_FedDM(
+    def feddm_central_steps(
         self,
-        args,
-        server_model,
-        models,
-        client_weights,
-        device=None,
-        gauss=None,
-        embeddings=None,
-        epoch=None,
-        grad_history=None,
+        client_checkpoints: dict = None,
+        # .args,
+        server_model=None,
+        # models,
+        # client_weights,
+        # device=None,
+        # gauss_noise=None,
+        # embeddings=None,
+        # epoch=None,
+        # grad_history=None,
     ):
         """
         Original: https://github.com/CityU-AIM-Group/FedDM/blob/main/main.py#L578
         """
 
+        # get models from clients
+        # models = [client.model.nnunet_trainer.network.cuda() for client in self.clients]
+        models = [client.model for client in self.clients]
+
+        # sets peers per client in self.clients_peers
         peer_models, embeddings, nearest_clients_bulk, farthest_clients_bulk = (
-            self.find_customized_peers(models, gauss, embeddings, device)
+            self.find_customized_peers(models)
         )
 
         grads = []
         for model in models:
-            grads.append(self.get_grads_(model, server_model))
+            grads.append(self.get_grads_(model.current_model_weights, server_model))
 
-        new_grads, grad_history = self.pcgrad_hierarchy(args, grads, grad_history)
+        new_grads, grad_history = self.pcgrad_hierarchy(grads, grad_history)
 
         for k, model in enumerate(models):
             models[k] = self.set_grads_(model, server_model, new_grads)
@@ -354,39 +405,53 @@ class FedDM(FedAvg):
 
         return server_model, models, peer_models, embeddings, grad_history
 
-    def find_customized_peers(self, models, input, embeddings, device):
+    def find_customized_peers(self, models):
         """
         Original: https://github.com/CityU-AIM-Group/FedDM/blob/main/main.py#L419
         """
         customized_peers = []
-        for client_idx, model in enumerate(models):
+        for client_idx, model_ in enumerate(models):
+            model = model_.nnunet_trainer.network.cuda()
             model.eval()
             with torch.no_grad():
                 # increase the sampling size by batch processing
-                for i in range(4):
-                    input_ = input[
-                        i * input.size(0) // 4 : (i + 1) * input.size(0) // 4
+                for i in range((self.mc_n_samples // self.batch_size) - 1):
+                    # gauss_noise_ = self.gauss_noise[
+                    #     i * self.gauss_noise.size(0) // self.batch_size : (i + 1) * self.gauss_noise.size(0) // self.batch_size
+                    # ]
+                    gauss_noise_ = self.gauss_noise[
+                        i * self.batch_size : (i + 1) * self.batch_size
                     ]
-                    out = torch.softmax(model(input_), dim=1)  # 100, 2, 256, 256
-                    embeddings[client_idx][
-                        i * input.size(0) // 4 : (i + 1) * input.size(0) // 4
+                    print(gauss_noise_.shape)
+                    out_ = model(gauss_noise_)
+                    out = torch.softmax(out_[0], dim=1)
+                    # self.embeddings[client_idx][
+                    #     i
+                    #     * self.gauss_noise.size(0)
+                    #     // self.batch_size : (i + 1)
+                    #     * self.gauss_noise.size(0)
+                    #     // self.batch_size
+                    # ] = out
+                    # TODO: wrong dims between out and embeddings
+                    self.embeddings[client_idx][
+                        i * self.batch_size : (i + 1) * self.batch_size
                     ] = out
 
-        nearest_clients_bulk = torch.zeros(len(embeddings))
-        farthest_clients_bulk = torch.zeros(len(embeddings))
-        for client_i in range(len(embeddings)):
-            embedding = embeddings[client_i].reshape(
-                embeddings[client_i].size(0), -1
-            )  # 100, 2*256*256
-            nearest_samples_bulk = torch.zeros(len(embeddings))
-            farthest_samples_bulk = torch.zeros(len(embeddings))
+        nearest_clients_bulk = torch.zeros(len(self.embeddings))
+        farthest_clients_bulk = torch.zeros(len(self.embeddings))
+        for client_i in range(len(self.embeddings)):
+            embedding = self.embeddings[client_i].reshape(
+                self.embeddings[client_i].size(0), -1
+            )
+            nearest_samples_bulk = torch.zeros(len(self.embeddings))
+            farthest_samples_bulk = torch.zeros(len(self.embeddings))
             for b in range(embedding.size(0)):
-                distances = torch.zeros(len(embeddings))
-                for client_j in range(len(embeddings)):
+                distances = torch.zeros(len(self.embeddings))
+                for client_j in range(len(self.embeddings)):
                     if client_i == client_j:
                         distances[client_j] = 1.0
                     else:
-                        embedding_o = embeddings[client_j][b].view(-1)
+                        embedding_o = self.embeddings[client_j][b].view(-1)
                         distances[client_j] = torch.norm(
                             embedding[b] - embedding_o, p=2
                         )
@@ -409,20 +474,42 @@ class FedDM(FedAvg):
             farthest_idx = farthest_samples_bulk.argmax()
             farthest_clients_bulk[farthest_idx] += 1
             customized_peers.append([models[nearest_idx], models[farthest_idx]])
+            self.clients_peers[client_i]["nearest"] = nearest_idx
+            self.clients_peers[client_i]["farthest"] = farthest_idx
+            print(
+                f"Client {client_i} nearest client: {nearest_idx}, farthest client: {farthest_idx}"
+            )
 
-        return customized_peers, embeddings, nearest_clients_bulk, farthest_clients_bulk
+        return (
+            customized_peers,
+            self.embeddings,
+            nearest_clients_bulk,
+            farthest_clients_bulk,
+        )
 
     def get_grads_(self, model, server_model):
         """
+        Highly adapted to work based on the model weight's addresses (data_ptr()) instead of the keys
         Original: https://github.com/CityU-AIM-Group/FedDM/blob/main/main.py#L487
         """
         grads = []
-        for key in server_model.state_dict().keys():
-            if "num_batches_tracked" not in key:
-                grads.append(
-                    model.state_dict()[key].data.clone().detach().flatten()
-                    - server_model.state_dict()[key].data.clone().detach().flatten()
-                )
+
+        # get addresses of keys instead of using keys directly
+        keys = list(server_model.keys())
+        address_key_dict = {}
+        for k in keys:
+            address = server_model[k].data_ptr()
+            if address not in address_key_dict.keys():
+                address_key_dict[address] = [k]
+            else:
+                address_key_dict[address].append(k)
+
+        # per address, compute gradient
+        for a in address_key_dict.keys():
+            grads.append(
+                model[address_key_dict[a][0]].data.clone().detach().flatten()
+                - server_model[address_key_dict[a][0]].data.clone().detach().flatten()
+            )
         return torch.cat(grads)
 
     def set_grads_(self, model, server_model, new_grads):

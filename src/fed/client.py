@@ -58,6 +58,7 @@ class Client:
         fl_round,
         very_last_fl_predict_round: bool = False,
         only_run_validation: bool = False,
+        fl_strategy = None,
     ):
         """
         Perform a federated learning round on the client.
@@ -69,10 +70,6 @@ class Client:
         target_num_epochs = self.current_epoch + self.fl_args["num_local_epochs"]
 
         # run local training
-        # TODO: FIx last_fl_round condition to sth like target_num_epochs == (self.fl_args["num_rounds"] * self.fl_args["num_local_epochs"])
-        # last_fl_round=(
-        #     True if target_num_epochs == self.fl_args["num_rounds"] else False
-        # )
         last_fl_round = (
             abs(
                 target_num_epochs
@@ -83,16 +80,31 @@ class Client:
         logging.info(
             f"{target_num_epochs=} ; {self.fl_args['num_rounds']=} ; {self.fl_args['num_local_epochs']=} ==> Setting {last_fl_round}"
         )
-        self.model.run(
-            initialize_fed_training=False,
-            # continue_training=True,
-            num_epochs=target_num_epochs,
-            current_epoch=self.current_epoch,
-            epochs_per_round=self.fl_args["num_local_epochs"],
-            last_fl_round=last_fl_round,
-            very_last_fl_predict_round=very_last_fl_predict_round,
-            only_run_validation=only_run_validation,
-        )
+
+        # run client's local training
+        if fl_strategy.name == "feddm" and fl_round > 0:
+            # FedDM's peer training
+            self.model.run(
+                initialize_fed_training=False,
+                num_epochs=target_num_epochs,
+                current_epoch=self.current_epoch,
+                epochs_per_round=self.fl_args["num_local_epochs"],
+                last_fl_round=last_fl_round,
+                very_last_fl_predict_round=very_last_fl_predict_round,
+                only_run_validation=only_run_validation,
+                feddm_client_peers=fl_strategy.clients_peers[self.client_id]
+            )
+        else:
+            self.model.run(
+                initialize_fed_training=False,
+                # continue_training=True,
+                num_epochs=target_num_epochs,
+                current_epoch=self.current_epoch,
+                epochs_per_round=self.fl_args["num_local_epochs"],
+                last_fl_round=last_fl_round,
+                very_last_fl_predict_round=very_last_fl_predict_round,
+                only_run_validation=only_run_validation,
+            )
         self.current_epoch = target_num_epochs
 
         # log time

@@ -47,6 +47,7 @@ class nnUNetv2_fed:
         last_fl_round: bool = False,
         very_last_fl_predict_round: bool = False,
         only_run_validation: bool = False,
+        feddm_client_peers: list = None,
     ):
         self.current_model_weights, self.nnunet_trainer = run_training(
             nnunet_trainer=self.nnunet_trainer,

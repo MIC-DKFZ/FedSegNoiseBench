@@ -5,6 +5,7 @@ import copy
 from client import Client
 from methods.fedavg.fedavg import FedAvg
 from methods.feda3i.feda3i import FedA3I
+from methods.feddm.feddm import FedDM
 
 
 class Orchestrator:
@@ -18,6 +19,8 @@ class Orchestrator:
             self.fl_strategy = FedAvg(self.clients)
         elif fl_args["strategy"].lower() == "feda3i":
             self.fl_strategy = FedA3I(self.clients, fl_args["feda3i_warmup_rounds"])
+        elif fl_args["strategy"].lower() == "feddm":
+            self.fl_strategy = FedDM(self.clients)
         else:
             raise NotImplementedError(
                 f"Federated learning strategy {fl_args['strategy']} not implemented!"
@@ -43,7 +46,7 @@ class Orchestrator:
             # iterate over clients
             for client in self.clients:
                 # local training
-                client.fed_round(fl_round)
+                client.fed_round(fl_round, fl_strategy=self.fl_strategy)
 
             orchestrator_start_time = time.time()
 
@@ -76,6 +79,12 @@ class Orchestrator:
                     # compute server_model_weights via FedA3I
                     self.aggregate(strategy=self.fl_strategy.name)
 
+            # FEDDM
+            elif self.fl_strategy.name == "feddm":
+                logging.info("Central steps of FedDM strategy:" \
+                             "Collaborative Annotation Calibration and Hierarchical Gradient De-Conflicting!")
+                # compute server_model_weights via FedDM
+                self.aggregate(strategy=self.fl_strategy.name)
             else:
                 raise NotImplementedError(
                     f"Federated learning strategy {self.fl_strategy.name} not implemented!"
@@ -114,6 +123,10 @@ class Orchestrator:
         elif strategy == "feda3i":
             self.server_model_weights = self.fl_strategy.feda3i_aggregate(
                 client_checkpoints
+            )
+        elif strategy == "feddm":
+            self.server_model_weights = self.fl_strategy.feddm_central_steps(
+                client_checkpoints, self.server_model_weights
             )
         else:
             raise NotImplementedError(

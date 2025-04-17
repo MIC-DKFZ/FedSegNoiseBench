@@ -127,7 +127,7 @@ if __name__ == "__main__":
         "--noise_mitigation_method",
         type=str,
         default="FedAvg",
-        help="Method to mitigate segmentation label noise: FedA3I, None for vanilla FedAvg FL training.",
+        help="Method to mitigate segmentation label noise: FedA3I, FedDM, None for vanilla FedAvg FL training.",
     )
     parser.add_argument(
         "--feda3i_warmup_rounds",
