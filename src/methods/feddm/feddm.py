@@ -59,6 +59,7 @@ class FedDM(FedAvg):
         self.grad_len = self.initialize_grad_len(
             model_weights0, address_key_dict, self.grad_history
         )
+        self.grad_history["grad_len"] = self.grad_len
 
         self.mc_n_samples = 100  # for noisy predictions
         self.batch_size = self.clients[
@@ -367,8 +368,8 @@ class FedDM(FedAvg):
         # models = [client.model.nnunet_trainer.network.cuda() for client in self.clients]
         models = [client.model for client in self.clients]
 
-        # sets peers per client in self.clients_peers
-        peer_models, embeddings, nearest_clients_bulk, farthest_clients_bulk = (
+        # Central-CAC: Sets peers per client in self.clients_peers
+        _, embeddings, nearest_clients_bulk, farthest_clients_bulk = (
             self.find_customized_peers(models)
         )
 
@@ -376,34 +377,19 @@ class FedDM(FedAvg):
         for model in models:
             grads.append(self.get_grads_(model.current_model_weights, server_model))
 
-        new_grads, grad_history = self.pcgrad_hierarchy(grads, grad_history)
+        # Central-HGD: Compute de-conflicted gradients
+        new_grads, self.grad_history = self.pcgrad_hierarchy(grads)
 
+        # clients models get intermediately updated by adding new gradients to server model
+        intermediate_updated_model_weights = {}
         for k, model in enumerate(models):
-            models[k] = self.set_grads_(model, server_model, new_grads)
+            intermediate_updated_model_weights[k] = self.set_grads_(
+                model.current_model_weights, server_model, new_grads
+            )
 
-        with torch.no_grad():
-            # aggregate params
-            for key in server_model.state_dict().keys():
-                # num_batches_tracked is a non trainable LongTensor and
-                # num_batches_tracked are the same for all clients for the given datasets
-                if "num_batches_tracked" in key:
-                    server_model.state_dict()[key].data.copy_(
-                        models[0].state_dict()[key]
-                    )
-                else:
-                    temp = torch.zeros_like(server_model.state_dict()[key])
-                    for client_idx in range(len(client_weights)):
-                        temp += (
-                            client_weights[client_idx]
-                            * models[client_idx].state_dict()[key]
-                        )
-                    server_model.state_dict()[key].data.copy_(temp)
-                    for client_idx in range(len(client_weights)):
-                        models[client_idx].state_dict()[key].data.copy_(
-                            server_model.state_dict()[key]
-                        )
-
-        return server_model, models, peer_models, embeddings, grad_history
+        # perform FedAvg of intermediately updated client models
+        server_model_weights = self.fed_avg(intermediate_updated_model_weights)
+        return server_model_weights
 
     def find_customized_peers(self, models):
         """
@@ -416,23 +402,12 @@ class FedDM(FedAvg):
             with torch.no_grad():
                 # increase the sampling size by batch processing
                 for i in range((self.mc_n_samples // self.batch_size) - 1):
-                    # gauss_noise_ = self.gauss_noise[
-                    #     i * self.gauss_noise.size(0) // self.batch_size : (i + 1) * self.gauss_noise.size(0) // self.batch_size
-                    # ]
                     gauss_noise_ = self.gauss_noise[
                         i * self.batch_size : (i + 1) * self.batch_size
                     ]
                     print(gauss_noise_.shape)
                     out_ = model(gauss_noise_)
                     out = torch.softmax(out_[0], dim=1)
-                    # self.embeddings[client_idx][
-                    #     i
-                    #     * self.gauss_noise.size(0)
-                    #     // self.batch_size : (i + 1)
-                    #     * self.gauss_noise.size(0)
-                    #     // self.batch_size
-                    # ] = out
-                    # TODO: wrong dims between out and embeddings
                     self.embeddings[client_idx][
                         i * self.batch_size : (i + 1) * self.batch_size
                     ] = out
@@ -516,40 +491,62 @@ class FedDM(FedAvg):
         """
         Original: https://github.com/CityU-AIM-Group/FedDM/blob/main/main.py#L494
         """
+        # Build address-to-key mapping for server_model
+        keys = list(server_model.keys())
+        address_key_dict = {}
+        for k in keys:
+            address = server_model[k].data_ptr()
+            if address not in address_key_dict.keys():
+                address_key_dict[address] = [k]
+            else:
+                address_key_dict[address].append(k)
+
+        # Apply the gradients to model
         start = 0
-        for key in server_model.state_dict().keys():
+        for address, key_list in address_key_dict.items():
+            key = key_list[0]  # take the first key pointing to this address
             if "num_batches_tracked" not in key:
-                dims = model.state_dict()[key].shape
+                dims = model[key].shape
                 end = start + dims.numel()
-                model.state_dict()[key].data.copy_(
-                    server_model.state_dict()[key].data.clone().detach()
+                model[key].data.copy_(
+                    server_model[key].data.clone().detach()
                     + new_grads[start:end].reshape(dims).clone()
                 )
                 start = end
         return model
 
-    def pcgrad_hierarchy(self, args, client_grads, grad_history=None):
+    def pcgrad_hierarchy(self, client_grads):
         """
         Projecting conflicting gradients
         Original: https://github.com/CityU-AIM-Group/FedDM/blob/main/main.py#L505
         """
+        # initialize
         client_grads_ = torch.stack(client_grads)
         grads = []
-        grad_len = grad_history["grad_len"]
+        grad_len = self.grad_history["grad_len"]
         start = 0
+
+        # iterate over gradient keys
         for key in grad_len.keys():
             g_len = grad_len[key]
             end = start + g_len
-            layer_grad_history = grad_history[key]
+            layer_grad_history = self.grad_history[key]
+
+            # grad_history exists from 2nd fl_round
             if layer_grad_history is not None:
                 pc_v = layer_grad_history.unsqueeze(0)
                 client_grads_layer = client_grads_[:, start:end]
                 while True:
                     num = client_grads_layer.size(0)
+
+                    # more than 2 clients left
                     if num > 2:
+                        # compute similarity across clients and sort w.r.t. similarity
                         inner_prod = torch.mul(client_grads_layer, pc_v).sum(1)
                         project = inner_prod / (pc_v**2).sum().sqrt()
                         _, ind = project.sort(descending=True)
+
+                        # compose pairs
                         pair_list = []
                         if num % 2 == 0:
                             for i in range(num // 2):
@@ -558,8 +555,12 @@ class FedDM(FedAvg):
                             for i in range(num // 2):
                                 pair_list.append([ind[i], ind[num - i - 1]])
                             pair_list.append([ind[num // 2]])
+
+                        # TODO: describe what's done
                         client_grads_new = []
                         for pair in pair_list:
+
+                            # if pair is really a pair, de-conflict and sum gradients
                             if len(pair) > 1:
                                 grad_0 = client_grads_layer[pair[0]]
                                 grad_1 = client_grads_layer[pair[1]]
@@ -577,10 +578,14 @@ class FedDM(FedAvg):
                                     grad_pc_1 = grad_1
                                 grad_pc_0_1 = grad_pc_0 + grad_pc_1
                                 client_grads_new.append(grad_pc_0_1)
+
+                            # if pair is a single client, just append the gradient
                             else:
                                 grad_single = client_grads_layer[pair[0]]
                                 client_grads_new.append(grad_single)
                         client_grads_layer = torch.stack(client_grads_new)
+
+                    # just 2 clients left -> de-conflict and sum gradients
                     elif num == 2:
                         grad_pc_0 = client_grads_layer[0]
                         grad_pc_1 = client_grads_layer[1]
@@ -597,18 +602,28 @@ class FedDM(FedAvg):
                             )
 
                         grad_pc_0_1 = grad_pc_0 + grad_pc_1
-                        grad_new = grad_pc_0_1 / args.client_num
+                        grad_new = grad_pc_0_1 / len(self.clients)
                         break
                     else:
-                        assert False
+                        raise NotImplementedError("No implementation for ONE client!")
+
+                # update grad_history
                 gamma = 0.99
-                grad_history[key] = gamma * grad_history[key] + (1 - gamma) * grad_new
+                self.grad_history[key] = (
+                    gamma * self.grad_history[key] + (1 - gamma) * grad_new
+                )
                 grads.append(grad_new)
+
+            # grad_history does not exist from 1st fl_round
             else:
                 grad_new = client_grads_[:, start:end].mean(0)
-                grad_history[key] = grad_new
+                self.grad_history[key] = grad_new
                 grads.append(grad_new)
+
+            # update start iterator for next model weights in stacked client_grads_
             start = end
+
+        # concatenate all gradients
         grad_new = torch.cat(grads)
 
-        return grad_new, grad_history
+        return grad_new, self.grad_history
