@@ -127,7 +127,7 @@ class Orchestrator:
                 client_checkpoints
             )
         elif strategy == "feddm":
-            self.server_model_weights = self.fl_strategy.feddm_central_steps(
+             self.server_model_weights = self.fl_strategy.feddm_central_steps(
                 client_checkpoints, self.server_model_weights
             )
         else:

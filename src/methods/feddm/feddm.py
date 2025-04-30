@@ -1,21 +1,21 @@
 import copy
-import argparse
-import warnings
-from pathlib import Path
+# import argparse
+# import warnings
+# from pathlib import Path
 from functools import reduce
-from operator import add, itemgetter
-from shutil import copytree, rmtree
-from typing import Any, Callable, Dict, List, Tuple, Optional, cast
+from operator import add # , itemgetter
+# from shutil import copytree, rmtree
+from typing import Any, Tuple, Optional, cast # , Callable, Dict, List
 import matplotlib.pyplot as plt
 
-import os
+# import os
 import torch
 from torch import autocast
-import numpy as np
+# import numpy as np
 import torch.nn.functional as F
 from torch import Tensor
-from torch.utils.data import DataLoader
-from sklearn.metrics import accuracy_score
+# from torch.utils.data import DataLoader
+# from sklearn.metrics import accuracy_score
 
 # from utils import (
 #     map_,
@@ -27,7 +27,7 @@ from sklearn.metrics import accuracy_score
 #     dice_coef,
 #     iIoU,
 # )
-from methods.feddm.losses import Focal_Cross_Entropy as focal_cross_entropy
+# from methods.feddm.losses import Focal_Cross_Entropy as focal_cross_entropy
 
 from nnunetv2.utilities.helpers import dummy_context
 
@@ -250,6 +250,27 @@ class FedDM(FedAvg):
         _, F, _, _ = clean_mask.shape  # F = num foreground classes (C - 1)
 
         # Step 1: Apply correction to target where label is uncertain (==2)
+        # for b in range(B):
+        #     # find dominant fg class
+        #     counts = [(clean_mask[b, f] == 1).sum().item() for f in range(F)]
+        #     if sum(counts) == 0:
+        #         # no certain fg -> skip adjustment entirely
+        #         continue
+        #     dominant_class_idx = counts.index(max(counts)) + 1  # +1 because class indices in target
+        #     # set uncertain pixels to dominant class
+        #     for class_idx in range(1, C):
+        #         # set dominant class
+        #         target[b, dominant_class_idx, :, :][
+        #             clean_mask[b, class_idx - 1, :, :] == 2
+        #         ] = 1
+        #         # clear other classes
+        #         target[b, class_idx, :, :][
+        #             clean_mask[b, class_idx - 1, :, :] == 2
+        #         ] = 0
+        #         # ensure that background is also cleared
+        #         target[b, 0, :, :][
+        #             clean_mask[b, class_idx - 1, :, :] == 2
+        #         ] = 0
         for class_idx in range(1, C):  # Skip background at index 0
             target[:, 0, :, :][
                 clean_mask[:, class_idx - 1, :, :] == 2
