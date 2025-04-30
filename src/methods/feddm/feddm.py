@@ -61,15 +61,12 @@ class FedDM(FedAvg):
         self.n_classes = len(
             self.clients[0].model.nnunet_trainer.dataset_json["labels"]
         )
+        # Monte-Carlo Sampling
         self.gauss_noise = torch.rand(
             self.mc_n_samples, self.num_channels, *self.patch_size
-        ).to(
-            self.device
-        )  # Monte-Carlo Sampling
+        )
         self.embeddings = [
-            torch.zeros(self.mc_n_samples, self.n_classes, *self.patch_size).to(
-                self.device
-            )
+            torch.zeros(self.mc_n_samples, self.n_classes, *self.patch_size)
             for _ in self.clients
         ]
 
@@ -121,6 +118,8 @@ class FedDM(FedAvg):
             )
         )
         peer_model_nearst = nnunet_trainer_w_new_weights_nearst.network.eval()
+        for p in peer_model_nearst.parameters():
+            p.requires_grad = False
         # get farthest peer model and set weights
         peer_model_farthest_statedict = self.clients_peers[next(iter(peer_models))][
             "farthest"
@@ -133,6 +132,8 @@ class FedDM(FedAvg):
             )
         )
         peer_model_farthest = nnunet_trainer_w_new_weights_farthest.network.eval()
+        for p in peer_model_farthest.parameters():
+            p.requires_grad = False
 
         # define pixel selection ratio
         p = 1 - (self.ratio * epoch / self.stop_epoch)
@@ -174,6 +175,26 @@ class FedDM(FedAvg):
                 pred_logits1 = peer_model_nearst(data)
                 pred_logits2 = peer_model_farthest(data)
 
+            # Local-CAC to obtain corrected mask
+            clean_mask = self.pixel_selection_by_Peers(
+                output[0].detach(),
+                pred_logits1[0].detach(),
+                pred_logits2[0].detach(),
+                onehot_highres_targets,
+                p=p,
+            )
+
+            # softmax model predictions
+            pred_probs: Tensor = F.softmax(self.sm_temp * output[0], dim=1)
+
+            # label correction and loss computation
+            loss1 = self.Focal_Cross_Entropy(
+                pred_probs, onehot_highres_targets, clean_mask
+            )
+            losses = [loss1]
+            loss = reduce(add, losses)
+            assert loss.shape == (), loss.shape
+
         # Not sure whether necessary, but reassign correct weigths to peer models
         _, _ = self.assign_model_weights_to_trainer(
             client_idx=nearest_idx, new_statedict=actual_statedict_nearst
@@ -181,30 +202,17 @@ class FedDM(FedAvg):
         _, _ = self.assign_model_weights_to_trainer(
             client_idx=farthest_idx, new_statedict=actual_statedict_farthest
         )
-
-        # Local-CAC to obtain corrected mask
-        clean_mask = self.pixel_selection_by_Peers(
-            output[0].detach(),
-            pred_logits1[0].detach(),
-            pred_logits2[0].detach(),
-            onehot_highres_targets,
-            p=p,
-        )
-
-        # softmax model predictions
-        pred_probs: Tensor = F.softmax(self.sm_temp * output[0], dim=1)
-
-        # label correction and loss computation
-        loss1 = self.Focal_Cross_Entropy(pred_probs, onehot_highres_targets, clean_mask)
-        losses = [loss1]
-        loss = reduce(add, losses)
-        assert loss.shape == (), loss.shape
+        del nnunet_trainer_w_new_weights_nearst
+        del actual_statedict_nearst
+        del nnunet_trainer_w_new_weights_farthest
+        del actual_statedict_farthest
 
         # Backward
         if optimizer:
             loss.backward()
             torch.nn.utils.clip_grad_norm_(net.parameters(), 12)
             optimizer.step()
+            torch.cuda.empty_cache()
 
         return {"loss": loss.detach().cpu().numpy()}
 
@@ -446,6 +454,7 @@ class FedDM(FedAvg):
         Original: https://github.com/CityU-AIM-Group/FedDM/blob/main/main.py#L419
         """
         customized_peers = []
+        self.gauss_noise.to(self.device)
         for client_idx, client_checkpoint in client_checkpoints.items():
             # set client_checkpoint to model
             client_nnunet_trainer, current_client_model_weights = (
@@ -475,6 +484,7 @@ class FedDM(FedAvg):
             ].model.nnunet_trainer.set_model_weights_to_checkpoint(
                 current_client_model_weights
             )
+        self.gauss_noise.to("cpu")
 
         nearest_clients_bulk = torch.zeros(len(self.embeddings))
         farthest_clients_bulk = torch.zeros(len(self.embeddings))
