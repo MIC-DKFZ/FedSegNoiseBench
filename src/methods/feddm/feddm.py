@@ -1,3 +1,4 @@
+import copy
 import argparse
 import warnings
 from pathlib import Path
@@ -5,9 +6,11 @@ from functools import reduce
 from operator import add, itemgetter
 from shutil import copytree, rmtree
 from typing import Any, Callable, Dict, List, Tuple, Optional, cast
+import matplotlib.pyplot as plt
 
 import os
 import torch
+from torch import autocast
 import numpy as np
 import torch.nn.functional as F
 from torch import Tensor
@@ -24,7 +27,9 @@ from sklearn.metrics import accuracy_score
 #     dice_coef,
 #     iIoU,
 # )
-# from losses import Focal_Cross_Entropy as focal_cross_entropy
+from methods.feddm.losses import Focal_Cross_Entropy as focal_cross_entropy
+
+from nnunetv2.utilities.helpers import dummy_context
 
 from methods.fedavg.fedavg import FedAvg
 
@@ -83,8 +88,17 @@ class FedDM(FedAvg):
             for _ in self.clients
         ]
 
+        # some other hparams
+        self.sm_temp = 1.0  # softmax temperature
+        self.ratio = 0.6  # ratio for pixel selection
+        # feddm stop epoch ~= 1/4 of total training epochs
+        # self.stop_epoch = self.clients[0].model.nnunet_trainer.num_peochs // 4
+        self.stop_epoch = 50
+        self.eps = 1e-6
+
         self.clients_peers = {
-            id: {"nearest": None, "farthest": None} for id in range(len(clients))
+            id: {x: {"id": None, "model": None} for x in ["nearest", "farthest"]}
+            for id in range(len(clients))
         }
 
     def initialize_grad_len(self, model, address_key_dict, grad_history):
@@ -98,306 +112,334 @@ class FedDM(FedAvg):
             grad_len[add] += dims.numel()
         return grad_len
 
-    def do_epoch_peer(
+    def do_trainstep_peer(
         self,
-        args,
-        mode: str,
         net: Any,
-        device: Any,
-        loader: DataLoader,
-        epc: int,
-        list_loss_fns: List[List[Callable]],
-        K: int,
-        savedir: str = "",
+        batch: Any,
+        epoch: int,
         optimizer: Any = None,
-        compute_miou: bool = False,
-        temperature: float = 1,
-        client_idx=None,
-        lr=None,
         peer_models=None,
     ) -> Tuple[Tensor, Tensor, Optional[Tensor], Optional[Tensor], Optional[Tensor]]:
         """
         Original: https://github.com/CityU-AIM-Group/FedDM/blob/main/main.py#L207
+        Adapted to work with nnUNetv2 and as nnUNetv2's def train_step().
         """
-        assert mode in ["train", "val"]
-
-        if mode == "train":
-            net.train()
-        elif mode == "val":
-            net.eval()
-
-        total_iteration: int = len(loader)  # U
-        total_images: int = len(loader.dataset)
-        n_loss: int = max(map(len, list_loss_fns))
-
-        all_dices: Tensor = torch.zeros(
-            (total_images, K), dtype=torch.float32, device=device
-        )
-        loss_log: Tensor = torch.zeros(
-            (total_iteration, n_loss), dtype=torch.float32, device=device
-        )
-
-        iiou_log: Optional[Tensor]
-        intersections: Optional[Tensor]
-        unions: Optional[Tensor]
-        if compute_miou:
-            iiou_log = torch.zeros(
-                (total_images, K), dtype=torch.float32, device=device
+        # get nearest peer model and set weights
+        peer_model_nearst_statedict = self.clients_peers[next(iter(peer_models))][
+            "nearest"
+        ]["model"]
+        nearest_idx = self.clients_peers[next(iter(peer_models))]["nearest"]["id"]
+        nnunet_trainer_w_new_weights_nearst, actual_statedict_nearst = (
+            self.assign_model_weights_to_trainer(
+                client_idx=nearest_idx,
+                new_statedict=peer_model_nearst_statedict,
             )
-            intersections = torch.zeros(
-                (total_images, K), dtype=torch.float32, device=device
+        )
+        peer_model_nearst = nnunet_trainer_w_new_weights_nearst.network.eval()
+        # get farthest peer model and set weights
+        peer_model_farthest_statedict = self.clients_peers[next(iter(peer_models))][
+            "farthest"
+        ]["model"]
+        farthest_idx = self.clients_peers[next(iter(peer_models))]["farthest"]["id"]
+        nnunet_trainer_w_new_weights_farthest, actual_statedict_farthest = (
+            self.assign_model_weights_to_trainer(
+                client_idx=farthest_idx,
+                new_statedict=peer_model_farthest_statedict,
             )
-            unions = torch.zeros((total_images, K), dtype=torch.float32, device=device)
+        )
+        peer_model_farthest = nnunet_trainer_w_new_weights_farthest.network.eval()
+
+        # define pixel selection ratio
+        p = 1 - (self.ratio * epoch / self.stop_epoch)
+        if epoch > self.stop_epoch:
+            p = 1 - self.ratio
+
+        # get img and label
+        data = batch["data"]
+        target = batch["target"]
+        data = data.to(self.device, non_blocking=True)
+        if isinstance(target, list):
+            target = [i.to(self.device, non_blocking=True) for i in target]
         else:
-            iiou_log = None
-            intersections = None
-            unions = None
+            target = target.to(self.device, non_blocking=True)
+        num_classes = int(target[0].max()) + 1
+        onehot_highres_targets = F.one_hot(
+            target[0].squeeze(1).long(), num_classes=num_classes
+        ).permute(0, 3, 1, 2)
 
-        done_img: int = 0
-        done_batch: int = 0
-        loss_fns = list_loss_fns[0]
+        optimizer.zero_grad(set_to_none=True)
+        # Autocast can be annoying
+        # If the device_type is 'cpu' then it's slow as heck and needs to be disabled.
+        # If the device_type is 'mps' then it will complain that mps is not implemented, even if enabled=False is set. Whyyyyyyy. (this is why we don't make use of enabled=False)
+        # So autocast will only be active if we have a cuda device.
+        with (
+            autocast(self.device.type, enabled=True)
+            if self.device.type == "cuda"
+            else dummy_context()
+        ):
+            # output are logits, NOT softmax-ed outputs
+            output = net(data)
 
-        peer_model_nearst = peer_models[0].eval()
-        peer_model_farthest = peer_models[1].eval()
-
-        n_epoch = args.stop_epoch
-        ratio = args.ratio
-        p = 1 - (ratio * epc / n_epoch)
-        if epc > n_epoch:
-            p = 1 - ratio
-
-        seg_sen = []
-        seg_spe = []
-        seg_acc = []
-        seg_jac_score = []
-
-        for data in loader:
-            image: Tensor = data["images"].to(device)
-            target: Tensor = data["gt"].to(device)
-            assert not target.requires_grad
-            labels: List[Tensor] = [e.to(device) for e in data["labels"]]
-            # meilu
-            B, C, *_ = image.shape
-            # Reset gradients
-            if optimizer:
-                optimizer.zero_grad()
-
-                # Forward
-            pred_logits = net(image)
-
+            # just logits, not softmax-ed outputs
             with torch.no_grad():
-                pred_logits1 = peer_model_nearst(image)
-                pred_logits2 = peer_model_farthest(image)
+                pred_logits1 = peer_model_nearst(data)
+                pred_logits2 = peer_model_farthest(data)
 
-            clean_mask = self.pixel_selection_by_Peers(
-                pred_logits.detach(),
-                pred_logits1.detach(),
-                pred_logits2.detach(),
-                labels,
-                p=p,
-            )
+        # Not sure whether necessary, but reassign correct weigths to peer models
+        _, _ = self.assign_model_weights_to_trainer(
+            client_idx=nearest_idx, new_statedict=actual_statedict_nearst
+        )
+        _, _ = self.assign_model_weights_to_trainer(
+            client_idx=farthest_idx, new_statedict=actual_statedict_farthest
+        )
 
-            pred_probs: Tensor = F.softmax(temperature * pred_logits, dim=1)
-            predicted_mask: Tensor = probs2one_hot(pred_probs.detach())
-            assert not predicted_mask.requires_grad
+        # Local-CAC to obtain corrected mask
+        clean_mask = self.pixel_selection_by_Peers(
+            output[0].detach(),
+            pred_logits1[0].detach(),
+            pred_logits2[0].detach(),
+            onehot_highres_targets,
+            p=p,
+        )
 
-            mask = target[:, 1, :, :].cpu().data.numpy()
-            pred_segs = pred_probs.cpu().data.numpy()
-            smooth: float = 1e-8
-            for i in range(B):
-                val_mask = mask[i]
-                y_true_f = val_mask.reshape(
-                    val_mask.shape[0] * val_mask.shape[1], order="F"
+        # softmax model predictions
+        pred_probs: Tensor = F.softmax(self.sm_temp * output[0], dim=1)
+
+        # label correction and loss computation
+        loss1 = self.Focal_Cross_Entropy(pred_probs, onehot_highres_targets, clean_mask)
+        losses = [loss1]
+        loss = reduce(add, losses)
+        assert loss.shape == (), loss.shape
+
+        # Backward
+        if optimizer:
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(net.parameters(), 12)
+            optimizer.step()
+
+        return {"loss": loss.detach().cpu().numpy()}
+
+    def assign_model_weights_to_trainer(
+        self, client_idx: int = None, new_statedict: dict = None
+    ):
+        """
+        Assign new model weights to nnunet_trainer.
+        """
+        # set client_checkpoint to model
+        # get nnunet_trainer of current client
+        client_nnunet_trainer = self.clients[client_idx].model.nnunet_trainer
+        # save current model weights of current client
+        current_client_model_weights = (
+            client_nnunet_trainer.get_model_weights_from_checkpoint()
+        )
+        # set client_checkpoint to current client model
+        client_nnunet_trainer.set_model_weights_to_checkpoint(new_statedict)
+
+        return client_nnunet_trainer, current_client_model_weights
+
+    def Focal_Cross_Entropy(self, probs, target, clean_mask, alpha=0.25, gamma=2.0):
+        """
+        Correct ground_trough seg mask and compute multi-class focal loss.
+
+        Notes:
+        - Uncertain fg pixels are always set to bg
+        """
+        # Clone target to avoid in-place modification issues
+        target = target.clone()
+        B, C, H, W = target.shape  # C = num_classes
+        _, F, _, _ = clean_mask.shape  # F = num foreground classes (C - 1)
+
+        # Step 1: Apply correction to target where label is uncertain (==2)
+        for class_idx in range(1, C):  # Skip background at index 0
+            target[:, 0, :, :][
+                clean_mask[:, class_idx - 1, :, :] == 2
+            ] = 1  # set background
+            target[:, class_idx, :, :][
+                clean_mask[:, class_idx - 1, :, :] == 2
+            ] = 0  # clear class
+
+        mask: Tensor = cast(Tensor, target.type(torch.float32))
+        log_p: Tensor = (probs + self.eps).log()
+
+        # Step 2: Compute class-wise focal losses
+        total_loss = 0.0
+        total_pixels = 0
+
+        for class_idx in range(C):
+            probs_c = probs[:, class_idx, :, :]
+            log_p_c = log_p[:, class_idx, :, :]
+            mask_c = mask[:, class_idx, :, :]
+
+            # Weighting for focal loss
+            if class_idx == 0:  # background
+                weight = (1 - alpha) * torch.pow(1 - probs_c, gamma)
+                idx_mask = torch.ones_like(
+                    probs_c, dtype=torch.bool
+                )  # apply to all pixels
+            else:  # foreground
+                weight = alpha * torch.pow(1 - probs_c, gamma)
+                idx_mask = (clean_mask[:, class_idx - 1, :, :] == 1) | (
+                    clean_mask[:, class_idx - 1, :, :] == 2
                 )
-                pred_seg = pred_segs[i]
-                pred_arg = np.argmax(pred_seg, axis=0)
-                y_pred_f = pred_arg.reshape(
-                    pred_arg.shape[0] * pred_arg.shape[1], order="F"
-                )
-                intersection = np.float(np.sum(y_true_f * y_pred_f))
-                seg_sen.append((intersection + smooth) / (np.sum(y_true_f) + smooth))
-                intersection0 = np.float(np.sum((1 - y_true_f) * (1 - y_pred_f)))
-                seg_spe.append(
-                    (intersection0 + smooth) / (np.sum(1 - y_true_f) + smooth)
-                )
-                seg_acc.append(accuracy_score(y_true_f, y_pred_f))
-                seg_jac_score.append(
-                    (intersection + smooth)
-                    / (np.sum(y_true_f) + np.sum(y_pred_f) - intersection + smooth)
-                )
 
-            mask_receptacle = predicted_mask[...]
+            class_loss = -weight * mask_c * log_p_c
+            total_loss += class_loss[idx_mask].sum()
+            total_pixels += idx_mask.sum()
 
-            loss1 = focal_cross_entropy(pred_probs, labels[0], clean_mask)
-            losses = [loss1]
-            loss = reduce(add, losses)
-            assert loss.shape == (), loss.shape
-
-            # Backward
-            if optimizer:
-                loss.backward()
-                optimizer.step()
-
-            # Compute and log metrics
-            loss_sub_log: Tensor = torch.zeros(
-                len(loss_fns), dtype=torch.float32, device=device
-            )
-            for j in range(len(loss_fns)):
-                loss_sub_log[j] = losses[j].detach()
-            loss_log[done_batch, ...] = loss_sub_log[...]
-            del loss_sub_log
-
-            sm_slice = slice(done_img, done_img + B)  # Values only for current batch
-
-            dices: Tensor = dice_coef(mask_receptacle, target)
-            assert dices.shape == (B, K), (dices.shape, B, K)
-            all_dices[sm_slice, ...] = dices
-
-            if compute_miou:
-                IoUs: Tensor = iIoU(mask_receptacle, target)
-                assert IoUs.shape == (B, K), IoUs.shape
-                iiou_log[sm_slice] = IoUs  # type: ignore
-                intersections[sm_slice] = inter_sum(mask_receptacle, target)  # type: ignore
-                unions[sm_slice] = union_sum(mask_receptacle, target)  # type: ignore
-
-            # Logging
-            done_img += B
-            done_batch += 1
-
-        mIoUs: Optional[Tensor]
-        if intersections is not None and unions is not None:
-            mIoUs = intersections.sum(dim=0) / (unions.sum(dim=0) + 1e-10)
-            assert mIoUs.shape == (K,), mIoUs.shape
-        else:
-            mIoUs = None
-
-        loss = loss_log.mean().detach().cpu()
-        DSC = all_dices.mean().detach().cpu()
-        DSC0 = all_dices[:, 0].mean().detach().cpu()
-        DSC1 = all_dices[:, 1].mean().detach().cpu()
-        mIoU = mIoUs.mean().detach().cpu()
-
-        seg_sen = np.nanmean(seg_sen)
-        seg_spe = np.nanmean(seg_spe)
-        seg_acc = np.nanmean(seg_acc)
-        seg_jac_score = np.nanmean(seg_jac_score)
-
-        return loss, DSC, DSC0, DSC1, mIoU, seg_sen, seg_spe, seg_acc, seg_jac_score
+        final_loss = total_loss / (total_pixels + self.eps)
+        return final_loss
 
     def pixel_selection_by_Peers(self, logits, logits1, logits2, labels, p=0):
         """
         Original: https://github.com/CityU-AIM-Group/FedDM/blob/main/main.py#L356
+
+        Inputs:
+        - labels and all logits are in the shape of B, C, H, W w/ C = bg + #fg_classes
         """
-        bg_mask = labels[0][:, 0, :, :]  # B, H, W
-        fg_mask = labels[0][:, 1, :, :]  # B, H, W
+        # extract the background and (multi-channel) foreground masks
+        bg_mask = labels[:, 0, :, :]  # B, H, W
+        fg_mask = labels[:, 1:, :, :]  # B, #fg_classes, H, W
 
-        pred = torch.softmax(logits, dim=1)  # B, 2, H, W
-        pred1 = torch.softmax(logits1, dim=1)  # B, 2, H, W
-        pred2 = torch.softmax(logits2, dim=1)  # B, 2, H, W
-        log_p: Tensor = (pred + 1e-10).log()
-        log_p1: Tensor = (pred1 + 1e-10).log()
-        log_p2: Tensor = (pred2 + 1e-10).log()
-        mask: Tensor = cast(Tensor, labels[0].type(torch.float32))
-        loss = -mask * log_p  # ls B, 2, H, W
-        loss_fg = loss[:, 1, :, :]
-        loss_fg_flatten = loss_fg.flatten(1, 2)
+        # softmax to get probabilities for each class
+        pred = torch.softmax(logits, dim=1)  # B, C, H, W
+        pred1 = torch.softmax(logits1, dim=1)  # B, C, H, W
+        pred2 = torch.softmax(logits2, dim=1)  # B, C, H, W
 
-        loss1 = -mask * log_p1  # B, 2, H, W
-        loss1_fg = loss1[:, 1, :, :]
-        loss1_fg_flatten = loss1_fg.flatten(1, 2)
+        # log the preds
+        log_p: Tensor = (pred + self.eps).log()  # B, C, H, W
+        log_p1: Tensor = (pred1 + self.eps).log()  # B, C, H, W
+        log_p2: Tensor = (pred2 + self.eps).log()  # B, C, H, W
 
-        loss2 = -mask * log_p2  # B, 2, H, W
-        loss2_fg = loss2[:, 1, :, :]
-        loss2_fg_flatten = loss2_fg.flatten(1, 2)
+        clean_mask = torch.zeros_like(fg_mask)  # B, #fg_classes, H, W
 
-        clean_mask = torch.zeros_like(loss_fg)  # B, H, W
-
+        # iterate over each batch
         for b in range(fg_mask.size(0)):
-
-            # fg_num = (fg_mask.sum((1,2)) * p).type(torch.int)
-            fg_num_selected = (fg_mask[b].sum() * p).type(torch.int).item()
-            threshold = fg_num_selected + bg_mask[b].sum()
-            # print('fg_num:', fg_num_selected)
-            if fg_num_selected > 5:
-                value_fg, _ = torch.topk(
-                    loss_fg_flatten[b, :], threshold, largest=False, sorted=True
+            # iterate over each fg class
+            for class_idx in range(fg_mask.size(1)):
+                # Calculate the class-wise loss
+                loss = (
+                    -fg_mask[b, class_idx, :, :] * log_p[b, (class_idx + 1), :, :]
+                )  # H, W
+                loss1 = (
+                    -fg_mask[b, class_idx, :, :] * log_p1[b, (class_idx + 1), :, :]
+                )  # H, W
+                loss2 = (
+                    -fg_mask[b, class_idx, :, :] * log_p2[b, (class_idx + 1), :, :]
+                )  # H, W
+                # Flatten the losses
+                loss_flat = loss.flatten()  # H*W
+                loss1_flat = loss1.flatten()  # H*W
+                loss2_flat = loss2.flatten()  # H*W
+                # Select the number of pixels to keep based on p
+                fg_num_selected = (
+                    (fg_mask[b, class_idx, :, :].sum() * p).type(torch.int).item()
                 )
-                thresh_fg = value_fg[-1]
-                value_fg1, _ = torch.topk(
-                    loss1_fg_flatten[b, :], threshold, largest=False, sorted=True
-                )
-                thresh_fg1 = value_fg1[-1]
-                value_fg2, _ = torch.topk(
-                    loss2_fg_flatten[b, :], threshold, largest=False, sorted=True
-                )
-                thresh_fg2 = value_fg2[-1]
-                clean_mask_ = loss_fg[b, :, :] <= thresh_fg
-                clean_mask1_ = loss1_fg[b, :, :] <= thresh_fg1
-                clean_mask2_ = loss2_fg[b, :, :] <= thresh_fg2
+                threshold = fg_num_selected  # + bg_mask[b].sum()
 
-                clean_mask[b, :, :][(clean_mask_ & clean_mask2_)] = 1.0
-                clean_mask[b, :, :][
-                    (clean_mask_ | clean_mask1_) ^ (clean_mask_ & clean_mask1_)
-                ] = 2
-            else:
-                clean_mask[b, :, :] = 1.0
+                # Apply selection for each peer model (logits, logits1, logits2)
+                if fg_num_selected > 5:
+                    value_fg, _ = torch.topk(
+                        loss_flat, threshold, largest=False, sorted=True
+                    )
+                    thresh_fg = value_fg[-1]
+                    value_fg1, _ = torch.topk(
+                        loss1_flat, threshold, largest=False, sorted=True
+                    )
+                    thresh_fg1 = value_fg1[-1]
+                    value_fg2, _ = torch.topk(
+                        loss2_flat, threshold, largest=False, sorted=True
+                    )
+                    thresh_fg2 = value_fg2[-1]
 
-        clean_mask = clean_mask * fg_mask + bg_mask  # B, H, W
+                    clean_mask_ = loss <= thresh_fg
+                    clean_mask1_ = loss1 <= thresh_fg1
+                    clean_mask2_ = loss2 <= thresh_fg2
 
-        return clean_mask
+                    # pixels w/ low loss for current model and distal model are clean
+                    clean_mask[b, class_idx, :, :][(clean_mask_ & clean_mask2_)] = 1.0
+                    # pixels w/ disagreement between current model and proximal model are uncertain
+                    clean_mask[b, class_idx, :, :][
+                        (clean_mask_ | clean_mask1_) ^ (clean_mask_ & clean_mask1_)
+                    ] = 2
+                else:
+                    # if label is in gt smaller than 5 pixels, pixels are clean
+                    clean_mask[b, class_idx, :, :] = 1.0
+
+        # Ensure background pixels are preserved
+        clean_mask_final = clean_mask * fg_mask + bg_mask.unsqueeze(
+            1
+        )  # B, num_classes, H, W
+
+        # self.plot_it(clean_mask_final, 5, 2)
+
+        return clean_mask_final
+
+    def plot_it(self, tensor, batch_to_plot, channels, save_path="clean_mask_plot.png"):
+        fig, axs = plt.subplots(
+            batch_to_plot, channels, figsize=(6 * channels, 5 * batch_to_plot)
+        )
+
+        for b in range(batch_to_plot):
+            for c in range(channels):
+                ax = axs[b, c] if batch_to_plot > 1 else axs[c]
+                ax.imshow(tensor[b, c].cpu(), cmap="gray")
+                ax.set_title(f"Batch {b}, Channel {c}")
+                ax.axis("off")
+
+        plt.tight_layout()
+        plt.savefig(save_path)
+        plt.close(fig)  # Close the figure to free memory
 
     # def communication_FedDM(
     def feddm_central_steps(
         self,
         client_checkpoints: dict = None,
-        # .args,
         server_model=None,
-        # models,
-        # client_weights,
-        # device=None,
-        # gauss_noise=None,
-        # embeddings=None,
-        # epoch=None,
-        # grad_history=None,
     ):
         """
         Original: https://github.com/CityU-AIM-Group/FedDM/blob/main/main.py#L578
         """
 
-        # get models from clients
-        # models = [client.model.nnunet_trainer.network.cuda() for client in self.clients]
-        models = [client.model for client in self.clients]
+        # let's rather use the client_checkpoints
 
         # Central-CAC: Sets peers per client in self.clients_peers
         _, embeddings, nearest_clients_bulk, farthest_clients_bulk = (
-            self.find_customized_peers(models)
+            self.find_customized_peers(client_checkpoints)
         )
 
         grads = []
-        for model in models:
-            grads.append(self.get_grads_(model.current_model_weights, server_model))
+        for client_idx, client_checkpoint in client_checkpoints.items():
+            grads.append(self.get_grads_(client_checkpoint, server_model))
 
         # Central-HGD: Compute de-conflicted gradients
         new_grads, self.grad_history = self.pcgrad_hierarchy(grads)
 
         # clients models get intermediately updated by adding new gradients to server model
-        intermediate_updated_model_weights = {}
-        for k, model in enumerate(models):
-            intermediate_updated_model_weights[k] = self.set_grads_(
-                model.current_model_weights, server_model, new_grads
+        intermediate_updated_client_checkpoints = {}
+        for k, client_checkpoint in client_checkpoints.items():
+            intermediate_updated_client_checkpoints[k] = self.set_grads_(
+                client_checkpoint, server_model, new_grads
             )
 
         # perform FedAvg of intermediately updated client models
-        server_model_weights = self.fed_avg(intermediate_updated_model_weights)
+        server_model_weights = self.fed_avg(intermediate_updated_client_checkpoints)
         return server_model_weights
 
-    def find_customized_peers(self, models):
+    def find_customized_peers(self, client_checkpoints):
         """
         Original: https://github.com/CityU-AIM-Group/FedDM/blob/main/main.py#L419
         """
         customized_peers = []
-        for client_idx, model_ in enumerate(models):
-            model = model_.nnunet_trainer.network.cuda()
+        for client_idx, client_checkpoint in client_checkpoints.items():
+            # set client_checkpoint to model
+            client_nnunet_trainer, current_client_model_weights = (
+                self.assign_model_weights_to_trainer(
+                    client_idx=client_idx, new_statedict=client_checkpoint
+                )
+            )
+            # get nnunet_trainer of current client
+            model = client_nnunet_trainer.network
+
             model.eval()
             with torch.no_grad():
                 # increase the sampling size by batch processing
@@ -405,12 +447,18 @@ class FedDM(FedAvg):
                     gauss_noise_ = self.gauss_noise[
                         i * self.batch_size : (i + 1) * self.batch_size
                     ]
-                    print(gauss_noise_.shape)
                     out_ = model(gauss_noise_)
                     out = torch.softmax(out_[0], dim=1)
                     self.embeddings[client_idx][
                         i * self.batch_size : (i + 1) * self.batch_size
                     ] = out
+
+            # set current_client_model_weights back to nnunet_trainer of current client
+            self.clients[
+                client_idx
+            ].model.nnunet_trainer.set_model_weights_to_checkpoint(
+                current_client_model_weights
+            )
 
         nearest_clients_bulk = torch.zeros(len(self.embeddings))
         farthest_clients_bulk = torch.zeros(len(self.embeddings))
@@ -448,9 +496,20 @@ class FedDM(FedAvg):
             farthest_samples_bulk[client_i] = -1e10
             farthest_idx = farthest_samples_bulk.argmax()
             farthest_clients_bulk[farthest_idx] += 1
-            customized_peers.append([models[nearest_idx], models[farthest_idx]])
-            self.clients_peers[client_i]["nearest"] = nearest_idx
-            self.clients_peers[client_i]["farthest"] = farthest_idx
+            customized_peers.append(
+                [
+                    client_checkpoints[int(nearest_idx)],
+                    client_checkpoints[int(farthest_idx)],
+                ]
+            )
+            self.clients_peers[client_i]["nearest"]["id"] = int(nearest_idx)
+            self.clients_peers[client_i]["nearest"]["model"] = copy.deepcopy(
+                client_checkpoints[int(nearest_idx)]
+            )
+            self.clients_peers[client_i]["farthest"]["id"] = int(farthest_idx)
+            self.clients_peers[client_i]["farthest"]["model"] = copy.deepcopy(
+                client_checkpoints[int(farthest_idx)]
+            )
             print(
                 f"Client {client_i} nearest client: {nearest_idx}, farthest client: {farthest_idx}"
             )
@@ -462,7 +521,7 @@ class FedDM(FedAvg):
             farthest_clients_bulk,
         )
 
-    def get_grads_(self, model, server_model):
+    def get_grads_(self, client_checkpoint, server_model):
         """
         Highly adapted to work based on the model weight's addresses (data_ptr()) instead of the keys
         Original: https://github.com/CityU-AIM-Group/FedDM/blob/main/main.py#L487
@@ -482,12 +541,15 @@ class FedDM(FedAvg):
         # per address, compute gradient
         for a in address_key_dict.keys():
             grads.append(
-                model[address_key_dict[a][0]].data.clone().detach().flatten()
+                client_checkpoint[address_key_dict[a][0]]
+                .data.clone()
+                .detach()
+                .flatten()
                 - server_model[address_key_dict[a][0]].data.clone().detach().flatten()
             )
         return torch.cat(grads)
 
-    def set_grads_(self, model, server_model, new_grads):
+    def set_grads_(self, client_checkpoint, server_model, new_grads):
         """
         Original: https://github.com/CityU-AIM-Group/FedDM/blob/main/main.py#L494
         """
@@ -506,14 +568,14 @@ class FedDM(FedAvg):
         for address, key_list in address_key_dict.items():
             key = key_list[0]  # take the first key pointing to this address
             if "num_batches_tracked" not in key:
-                dims = model[key].shape
+                dims = client_checkpoint[key].shape
                 end = start + dims.numel()
-                model[key].data.copy_(
+                client_checkpoint[key].data.copy_(
                     server_model[key].data.clone().detach()
                     + new_grads[start:end].reshape(dims).clone()
                 )
                 start = end
-        return model
+        return client_checkpoint
 
     def pcgrad_hierarchy(self, client_grads):
         """
@@ -556,10 +618,9 @@ class FedDM(FedAvg):
                                 pair_list.append([ind[i], ind[num - i - 1]])
                             pair_list.append([ind[num // 2]])
 
-                        # TODO: describe what's done
+                        # De-conflict and fuse gradients
                         client_grads_new = []
                         for pair in pair_list:
-
                             # if pair is really a pair, de-conflict and sum gradients
                             if len(pair) > 1:
                                 grad_0 = client_grads_layer[pair[0]]

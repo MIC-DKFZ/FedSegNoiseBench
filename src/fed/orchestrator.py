@@ -81,8 +81,10 @@ class Orchestrator:
 
             # FEDDM
             elif self.fl_strategy.name == "feddm":
-                logging.info("Central steps of FedDM strategy:" \
-                             "Collaborative Annotation Calibration and Hierarchical Gradient De-Conflicting!")
+                logging.info(
+                    "Central steps of FedDM strategy: "
+                    "Collaborative Annotation Calibration and Hierarchical Gradient De-Conflicting!"
+                )
                 # compute server_model_weights via FedDM
                 self.aggregate(strategy=self.fl_strategy.name)
             else:

@@ -58,7 +58,7 @@ class Client:
         fl_round,
         very_last_fl_predict_round: bool = False,
         only_run_validation: bool = False,
-        fl_strategy = None,
+        fl_strategy=None,
     ):
         """
         Perform a federated learning round on the client.
@@ -83,6 +83,15 @@ class Client:
 
         # run client's local training
         if fl_strategy.name == "feddm" and fl_round > 0:
+            # # don't give feddm_client_peers incl. models to nnUNet
+            feddm_client_peers = {
+                key: {
+                    "nearest": d["nearest"]["id"],
+                    "farthest": d["farthest"]["id"],
+                }
+                for key, d in fl_strategy.clients_peers.items()
+                if key == self.client_id
+            }
             # FedDM's peer training
             self.model.run(
                 initialize_fed_training=False,
@@ -92,7 +101,8 @@ class Client:
                 last_fl_round=last_fl_round,
                 very_last_fl_predict_round=very_last_fl_predict_round,
                 only_run_validation=only_run_validation,
-                feddm_client_peers=fl_strategy.clients_peers[self.client_id]
+                fl_strategy=fl_strategy,
+                feddm_client_peers=feddm_client_peers,
             )
         else:
             self.model.run(
