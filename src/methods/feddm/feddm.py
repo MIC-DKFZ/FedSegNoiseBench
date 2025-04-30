@@ -1,33 +1,15 @@
 import copy
-# import argparse
-# import warnings
-# from pathlib import Path
 from functools import reduce
-from operator import add # , itemgetter
-# from shutil import copytree, rmtree
-from typing import Any, Tuple, Optional, cast # , Callable, Dict, List
+from operator import add
+from typing import Any, Tuple, Optional, cast
 import matplotlib.pyplot as plt
 
-# import os
 import torch
 from torch import autocast
-# import numpy as np
+
 import torch.nn.functional as F
 from torch import Tensor
-# from torch.utils.data import DataLoader
-# from sklearn.metrics import accuracy_score
 
-# from utils import (
-#     map_,
-#     depth,
-#     str2bool,
-#     inter_sum,
-#     union_sum,
-#     probs2one_hot,
-#     dice_coef,
-#     iIoU,
-# )
-# from methods.feddm.losses import Focal_Cross_Entropy as focal_cross_entropy
 
 from nnunetv2.utilities.helpers import dummy_context
 
@@ -76,13 +58,16 @@ class FedDM(FedAvg):
         self.num_channels = len(
             self.clients[0].model.nnunet_trainer.dataset_json["channel_names"]
         )
+        self.n_classes = len(
+            self.clients[0].model.nnunet_trainer.dataset_json["labels"]
+        )
         self.gauss_noise = torch.rand(
             self.mc_n_samples, self.num_channels, *self.patch_size
         ).to(
             self.device
         )  # Monte-Carlo Sampling
         self.embeddings = [
-            torch.zeros(self.mc_n_samples, self.num_channels, *self.patch_size).to(
+            torch.zeros(self.mc_n_samples, self.n_classes, *self.patch_size).to(
                 self.device
             )
             for _ in self.clients
@@ -162,10 +147,14 @@ class FedDM(FedAvg):
             target = [i.to(self.device, non_blocking=True) for i in target]
         else:
             target = target.to(self.device, non_blocking=True)
-        num_classes = int(target[0].max()) + 1
-        onehot_highres_targets = F.one_hot(
-            target[0].squeeze(1).long(), num_classes=num_classes
-        ).permute(0, 3, 1, 2)
+        onehot_highres_targets_ = F.one_hot(
+            target[0].squeeze(1).long(), num_classes=self.n_classes
+        )
+        onehot_highres_targets = (
+            onehot_highres_targets_.permute(0, 3, 1, 2)
+            if onehot_highres_targets_.ndim == 4
+            else onehot_highres_targets_.permute(0, 4, 1, 2, 3)
+        )
 
         optimizer.zero_grad(set_to_none=True)
         # Autocast can be annoying
@@ -246,8 +235,14 @@ class FedDM(FedAvg):
         """
         # Clone target to avoid in-place modification issues
         target = target.clone()
-        B, C, H, W = target.shape  # C = num_classes
-        _, F, _, _ = clean_mask.shape  # F = num foreground classes (C - 1)
+        if target.ndim == 4:
+            B, C, H, W = target.shape  # C = num_classes
+            _, F, _, _ = clean_mask.shape  # F = num foreground classes (C - 1)
+        elif target.ndim == 5:
+            B, C, D, H, W = target.shape
+            _, F, _, _, _ = clean_mask.shape
+        else:
+            raise ValueError("Target must be 4D or 5D tensor.")
 
         # Step 1: Apply correction to target where label is uncertain (==2)
         # for b in range(B):
@@ -260,23 +255,23 @@ class FedDM(FedAvg):
         #     # set uncertain pixels to dominant class
         #     for class_idx in range(1, C):
         #         # set dominant class
-        #         target[b, dominant_class_idx, :, :][
-        #             clean_mask[b, class_idx - 1, :, :] == 2
+        #         target[b, dominant_class_idx, ...][
+        #             clean_mask[b, class_idx - 1, ...] == 2
         #         ] = 1
         #         # clear other classes
-        #         target[b, class_idx, :, :][
-        #             clean_mask[b, class_idx - 1, :, :] == 2
+        #         target[b, class_idx, ...][
+        #             clean_mask[b, class_idx - 1, ...] == 2
         #         ] = 0
         #         # ensure that background is also cleared
-        #         target[b, 0, :, :][
-        #             clean_mask[b, class_idx - 1, :, :] == 2
+        #         target[b, 0, ...][
+        #             clean_mask[b, class_idx - 1, ...] == 2
         #         ] = 0
         for class_idx in range(1, C):  # Skip background at index 0
-            target[:, 0, :, :][
-                clean_mask[:, class_idx - 1, :, :] == 2
+            target[:, 0, ...][
+                clean_mask[:, class_idx - 1, ...] == 2
             ] = 1  # set background
-            target[:, class_idx, :, :][
-                clean_mask[:, class_idx - 1, :, :] == 2
+            target[:, class_idx, ...][
+                clean_mask[:, class_idx - 1, ...] == 2
             ] = 0  # clear class
 
         mask: Tensor = cast(Tensor, target.type(torch.float32))
@@ -287,9 +282,9 @@ class FedDM(FedAvg):
         total_pixels = 0
 
         for class_idx in range(C):
-            probs_c = probs[:, class_idx, :, :]
-            log_p_c = log_p[:, class_idx, :, :]
-            mask_c = mask[:, class_idx, :, :]
+            probs_c = probs[:, class_idx, ...]
+            log_p_c = log_p[:, class_idx, ...]
+            mask_c = mask[:, class_idx, ...]
 
             # Weighting for focal loss
             if class_idx == 0:  # background
@@ -299,8 +294,8 @@ class FedDM(FedAvg):
                 )  # apply to all pixels
             else:  # foreground
                 weight = alpha * torch.pow(1 - probs_c, gamma)
-                idx_mask = (clean_mask[:, class_idx - 1, :, :] == 1) | (
-                    clean_mask[:, class_idx - 1, :, :] == 2
+                idx_mask = (clean_mask[:, class_idx - 1, ...] == 1) | (
+                    clean_mask[:, class_idx - 1, ...] == 2
                 )
 
             class_loss = -weight * mask_c * log_p_c
@@ -318,8 +313,8 @@ class FedDM(FedAvg):
         - labels and all logits are in the shape of B, C, H, W w/ C = bg + #fg_classes
         """
         # extract the background and (multi-channel) foreground masks
-        bg_mask = labels[:, 0, :, :]  # B, H, W
-        fg_mask = labels[:, 1:, :, :]  # B, #fg_classes, H, W
+        bg_mask = labels[:, 0, ...]  # B, H, W
+        fg_mask = labels[:, 1:, ...]  # B, #fg_classes, H, W
 
         # softmax to get probabilities for each class
         pred = torch.softmax(logits, dim=1)  # B, C, H, W
@@ -339,13 +334,13 @@ class FedDM(FedAvg):
             for class_idx in range(fg_mask.size(1)):
                 # Calculate the class-wise loss
                 loss = (
-                    -fg_mask[b, class_idx, :, :] * log_p[b, (class_idx + 1), :, :]
+                    -fg_mask[b, class_idx, ...] * log_p[b, (class_idx + 1), ...]
                 )  # H, W
                 loss1 = (
-                    -fg_mask[b, class_idx, :, :] * log_p1[b, (class_idx + 1), :, :]
+                    -fg_mask[b, class_idx, ...] * log_p1[b, (class_idx + 1), ...]
                 )  # H, W
                 loss2 = (
-                    -fg_mask[b, class_idx, :, :] * log_p2[b, (class_idx + 1), :, :]
+                    -fg_mask[b, class_idx, ...] * log_p2[b, (class_idx + 1), ...]
                 )  # H, W
                 # Flatten the losses
                 loss_flat = loss.flatten()  # H*W
@@ -353,7 +348,7 @@ class FedDM(FedAvg):
                 loss2_flat = loss2.flatten()  # H*W
                 # Select the number of pixels to keep based on p
                 fg_num_selected = (
-                    (fg_mask[b, class_idx, :, :].sum() * p).type(torch.int).item()
+                    (fg_mask[b, class_idx, ...].sum() * p).type(torch.int).item()
                 )
                 threshold = fg_num_selected  # + bg_mask[b].sum()
 
@@ -377,14 +372,14 @@ class FedDM(FedAvg):
                     clean_mask2_ = loss2 <= thresh_fg2
 
                     # pixels w/ low loss for current model and distal model are clean
-                    clean_mask[b, class_idx, :, :][(clean_mask_ & clean_mask2_)] = 1.0
+                    clean_mask[b, class_idx, ...][(clean_mask_ & clean_mask2_)] = 1.0
                     # pixels w/ disagreement between current model and proximal model are uncertain
-                    clean_mask[b, class_idx, :, :][
+                    clean_mask[b, class_idx, ...][
                         (clean_mask_ | clean_mask1_) ^ (clean_mask_ & clean_mask1_)
                     ] = 2
                 else:
                     # if label is in gt smaller than 5 pixels, pixels are clean
-                    clean_mask[b, class_idx, :, :] = 1.0
+                    clean_mask[b, class_idx, ...] = 1.0
 
         # Ensure background pixels are preserved
         clean_mask_final = clean_mask * fg_mask + bg_mask.unsqueeze(
