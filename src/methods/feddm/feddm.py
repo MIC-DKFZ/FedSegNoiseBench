@@ -159,6 +159,7 @@ class FedDM(FedAvg):
         onehot_highres_targets = onehot_highres_targets.to(self.device)
 
         optimizer.zero_grad(set_to_none=True)
+        net.train()
         # Autocast can be annoying
         # If the device_type is 'cpu' then it's slow as heck and needs to be disabled.
         # If the device_type is 'mps' then it will complain that mps is not implemented, even if enabled=False is set. Whyyyyyyy. (this is why we don't make use of enabled=False)
@@ -208,12 +209,13 @@ class FedDM(FedAvg):
         _, _ = self.assign_model_weights_to_trainer(
             client_idx=farthest_idx, new_statedict=actual_statedict_farthest
         )
-        del nnunet_trainer_w_new_weights_nearst
-        del actual_statedict_nearst
-        del nnunet_trainer_w_new_weights_farthest
-        del actual_statedict_farthest
+        # del nnunet_trainer_w_new_weights_nearst
+        # del actual_statedict_nearst
+        # del nnunet_trainer_w_new_weights_farthest
+        # del actual_statedict_farthest
 
         # Backward
+        assert loss.requires_grad, "Loss does not require grad!"
         if optimizer:
             loss.backward()
             torch.nn.utils.clip_grad_norm_(net.parameters(), 12)
