@@ -144,10 +144,10 @@ class FedDM(FedAvg):
         data = batch["data"]
         target = batch["target"]
         data = data.to(self.device, non_blocking=True)
-        if isinstance(target, list):
-            target = [i.to(self.device, non_blocking=True) for i in target]
-        else:
-            target = target.to(self.device, non_blocking=True)
+        # if isinstance(target, list):
+        #     target = [i.to(self.device, non_blocking=True) for i in target]
+        # else:
+        #     target = target.to(self.device, non_blocking=True)
         onehot_highres_targets_ = F.one_hot(
             target[0].squeeze(1).long(), num_classes=self.n_classes
         )
@@ -156,6 +156,7 @@ class FedDM(FedAvg):
             if onehot_highres_targets_.ndim == 4
             else onehot_highres_targets_.permute(0, 4, 1, 2, 3)
         )
+        onehot_highres_targets = onehot_highres_targets.to(self.device)
 
         optimizer.zero_grad(set_to_none=True)
         # Autocast can be annoying
@@ -186,6 +187,11 @@ class FedDM(FedAvg):
 
             # softmax model predictions
             pred_probs: Tensor = F.softmax(self.sm_temp * output[0], dim=1)
+
+            # check if all tensors used for loss calculation require grad
+            print(f"pred_probs: {pred_probs.requires_grad=}, grad_fn: {pred_probs.grad_fn=}")
+            print(f"onehot_highres_targets: {onehot_highres_targets.requires_grad=}, grad_fn: {onehot_highres_targets.grad_fn=}")
+            print(f"clean_mask: {clean_mask.requires_grad=}, grad_fn: {clean_mask.grad_fn=}")
 
             # label correction and loss computation
             loss1 = self.Focal_Cross_Entropy(
@@ -253,6 +259,7 @@ class FedDM(FedAvg):
             raise ValueError("Target must be 4D or 5D tensor.")
 
         # Step 1: Apply correction to target where label is uncertain (==2)
+        # set uncertain pixels to dominant fg class
         # for b in range(B):
         #     # find dominant fg class
         #     counts = [(clean_mask[b, f] == 1).sum().item() for f in range(F)]
@@ -274,6 +281,7 @@ class FedDM(FedAvg):
         #         target[b, 0, ...][
         #             clean_mask[b, class_idx - 1, ...] == 2
         #         ] = 0
+        # set uncertain pixels to background
         for class_idx in range(1, C):  # Skip background at index 0
             target[:, 0, ...][
                 clean_mask[:, class_idx - 1, ...] == 2
@@ -286,8 +294,9 @@ class FedDM(FedAvg):
         log_p: Tensor = (probs + self.eps).log()
 
         # Step 2: Compute class-wise focal losses
-        total_loss = 0.0
-        total_pixels = 0
+        total_loss = torch.tensor(0.0, device=probs.device, dtype=probs.dtype)
+        total_pixels = torch.tensor(0.0, device=probs.device, dtype=probs.dtype)
+
 
         for class_idx in range(C):
             probs_c = probs[:, class_idx, ...]
