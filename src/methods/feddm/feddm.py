@@ -454,7 +454,7 @@ class FedDM(FedAvg):
         Original: https://github.com/CityU-AIM-Group/FedDM/blob/main/main.py#L419
         """
         customized_peers = []
-        self.gauss_noise.to(self.device)
+        self.gauss_noise = self.gauss_noise.to(self.device)
         for client_idx, client_checkpoint in client_checkpoints.items():
             # set client_checkpoint to model
             client_nnunet_trainer, current_client_model_weights = (
@@ -484,7 +484,7 @@ class FedDM(FedAvg):
             ].model.nnunet_trainer.set_model_weights_to_checkpoint(
                 current_client_model_weights
             )
-        self.gauss_noise.to("cpu")
+        self.gauss_noise = self.gauss_noise.to("cpu")
 
         nearest_clients_bulk = torch.zeros(len(self.embeddings))
         farthest_clients_bulk = torch.zeros(len(self.embeddings))
