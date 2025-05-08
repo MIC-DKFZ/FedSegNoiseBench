@@ -5,7 +5,7 @@ import logging
 from datetime import datetime
 
 # Add src to PYTHONPATH automatically if it's not there
-src_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+src_path = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if src_path not in sys.path:
     sys.path.append(src_path)
 print(f"{src_path=}")
@@ -17,7 +17,7 @@ from client import Client
 
 def main(args):
     # setup experiment id
-    experiment_id = f"{args.noise_mitigation_method.lower()}_fold{args.fold}_clients{args.num_clients}_flrounds{args.num_rounds}_localepochs{args.num_local_epochs}_{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    experiment_id = f"{args.noise_mitigation_method.lower()}_noiseroa{args.noise_ratio}_fold{args.fold}_clients{args.num_clients}_flrounds{args.num_rounds}_localepochs{args.num_local_epochs}_{datetime.now().strftime('%Y%m%d-%H%M%S')}"
 
     # # set up logging
     # setup_logging(args, experiment_id)
@@ -38,6 +38,12 @@ def main(args):
                     else None
                 ),
                 "experiment_id": f"D{args.dataset_ids.split()[i]}_{experiment_id}",
+                "noisy_train_folder": (
+                    args.noisy_train_folder.split()[i]
+                    if args.noisy_train_folder
+                    else None
+                ),
+                "noise_ratio": args.noise_ratio,
             },
             fl_args={
                 "num_local_epochs": args.num_local_epochs,
@@ -67,9 +73,19 @@ def main(args):
 
 def check_cli_args(args):
     dataset_ids = args.dataset_ids.split()
+
+    # num dataset_ids != num_clients
     assert (
         len(dataset_ids) == args.num_clients
     ), "Every client needs its dataset! Please provide as many datasets as clients."
+
+    # if all clients are partially noise, clean_validation_folder has to be given
+    assert (
+        args.noisy_train_folder is None and args.clean_validation_dataset is None
+    ) or (
+        args.noisy_train_folder is not None
+        and args.clean_validation_dataset is not None
+    ), "Arguments --noisy_train_folder and --clean_validation_dataset must be provided together or not at all"
 
 
 if __name__ == "__main__":
@@ -150,6 +166,18 @@ if __name__ == "__main__":
         type=str,
         default=None,
         help="Path to clean validation data, to not evaluate on noisy data if training on noisy data.",
+    )
+    parser.add_argument(
+        "--noisy_train_folder",
+        type=str,
+        default=None,
+        help="Path to noisy train data, to create clients with partially clean, partially noisy data.",
+    )
+    parser.add_argument(
+        "--noise_ratio",
+        type=float,
+        default=None,
+        help="Ratio of noisy and clean train data, to create clients with partially clean, partially noisy data.",
     )
     args = parser.parse_args()
 

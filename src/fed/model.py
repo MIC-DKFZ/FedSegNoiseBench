@@ -14,6 +14,8 @@ class nnUNetv2_fed:
         trainer: str = None,
         clean_validation_dataset: str = None,
         experiment_id: str = None,
+        noisy_train_folder: str = None,
+        noise_ratio: float = None
     ):
         # set input args
         self.dataset_id = dataset_id
@@ -31,6 +33,16 @@ class nnUNetv2_fed:
             else None
         )
         self.experiment_id = experiment_id
+        self.noisy_train_folder = (
+            os.path.join(
+                os.getenv("nnUNet_preprocessed"),
+                noisy_train_folder,
+                f"nnUNetPlans_{self.configuration}",
+            )
+            if noisy_train_folder
+            else None
+        )
+        self.noise_ratio = noise_ratio
 
         # initate model
         self.current_model_weights = None
@@ -76,4 +88,6 @@ class nnUNetv2_fed:
             experiment_id=self.experiment_id,
             fl_strategy=fl_strategy,
             feddm_client_peers=feddm_client_peers,
+            noisy_train_folder=self.noisy_train_folder,
+            noise_ratio=self.noise_ratio
         )
