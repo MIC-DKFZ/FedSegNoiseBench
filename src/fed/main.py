@@ -80,12 +80,13 @@ def check_cli_args(args):
     ), "Every client needs its dataset! Please provide as many datasets as clients."
 
     # if all clients are partially noise, clean_validation_folder has to be given
-    assert (
-        args.noisy_train_folder is None and args.clean_validation_dataset is None
-    ) or (
-        args.noisy_train_folder is not None
-        and args.clean_validation_dataset is not None
-    ), "Arguments --noisy_train_folder and --clean_validation_dataset must be provided together or not at all"
+    if args.noisy_train_folder:
+        assert (
+            args.noisy_train_folder is None and args.clean_validation_dataset is None
+        ) or (
+            args.noisy_train_folder is not None
+            and args.clean_validation_dataset is not None
+        ), "Arguments --noisy_train_folder and --clean_validation_dataset must be provided together or not at all"
 
 
 if __name__ == "__main__":
