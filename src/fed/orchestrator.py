@@ -103,6 +103,7 @@ class Orchestrator:
                 very_last_fl_predict_round=True,
                 only_run_validation=True,
                 fl_round=self.num_rounds,
+                fl_strategy=self.fl_strategy
             )
 
         return self.server_model_weights
