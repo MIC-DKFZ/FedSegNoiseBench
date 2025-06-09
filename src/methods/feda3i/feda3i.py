@@ -19,6 +19,7 @@ class FedA3I(FedAvg):
     Nannen Wu et al., 2024, AAAI
     https://arxiv.org/abs/2312.12838
     """
+
     def __init__(self, clients: list = None, feda3i_warmup_rounds: int = None):
         super().__init__(clients=clients)
         self.name = "feda3i"
@@ -284,14 +285,19 @@ class FedA3I(FedAvg):
 
     def region(self, labels):
         """
-        Unchanged FedA3I code: https://github.com/wnn2000/FedAAAI/blob/main/code/utils/utils.py#L56
+        Minor modified FedA3I code: https://github.com/wnn2000/FedAAAI/blob/main/code/utils/utils.py#L56
+        Modification: Not only "pass" bg-only patches, but also fg-only patches.
         """
         labels = labels.cpu().numpy().astype("float")
         sdm = np.zeros_like(labels).astype("float")
         region_mask = np.zeros_like(labels).astype("float")
         # print(labels.dtype, sdm.dtype, region_mask.dtype)
         for i in range(labels.shape[0]):
-            if labels[i].sum() < 1:
+            if labels[i].sum() < 1 or len(np.unique(labels[i])) < 2:
+                # pass region mask computation if processed patch is just bg (labels[i].sum() < 1) or just fg (len(np.unique(labels[i])) < 2)
+                print(
+                    f"Only one label found in current patch {i}: {np.unique(labels[i])}"
+                )
                 pass
             else:
                 pos_dis = distrans(labels[i])
