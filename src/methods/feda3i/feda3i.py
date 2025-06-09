@@ -254,28 +254,35 @@ class FedA3I(FedAvg):
                         region_mask = torch.from_numpy(
                             self.region(one_hot_labels[:, (c + 1)].unsqueeze(1))
                         ).cuda()
+                        # only continue if at least one bg pixel exists
                         assert (region_mask == 0).any()
-                        loss_n = loss[:, c].unsqueeze(1)
-                        assert region_mask.shape == loss_n.shape
-                        loss_n_in = (loss_n * (region_mask == 1).float()).view(
-                            loss_n.shape[0], -1
-                        ).sum(1) / (region_mask == 1).float().view(
-                            loss_n.shape[0], -1
-                        ).sum(
-                            1
-                        )
-                        loss_n_out = (loss_n * (region_mask == 2).float()).view(
-                            loss_n.shape[0], -1
-                        ).sum(1) / (region_mask == 2).float().view(
-                            loss_n.shape[0], -1
-                        ).sum(
-                            1
-                        )
-                        assert (
-                            loss_n_in.shape[0] == loss_n_out.shape[0] == images.shape[0]
-                        )
-                        loss_feature[:, c * 2] = loss_n_in
-                        loss_feature[:, c * 2 + 1] = loss_n_out
+
+                        # only compute loss_n_in and loss_n_out if region_mask has some non-zero values, i.e. if region_mask contains some boundaries
+                        if (region_mask != 0).any():
+                            loss_n = loss[:, c].unsqueeze(1)
+                            assert region_mask.shape == loss_n.shape
+
+                            loss_n_in = (loss_n * (region_mask == 1).float()).view(
+                                loss_n.shape[0], -1
+                            ).sum(1) / (region_mask == 1).float().view(
+                                loss_n.shape[0], -1
+                            ).sum(
+                                1
+                            )
+                            loss_n_out = (loss_n * (region_mask == 2).float()).view(
+                                loss_n.shape[0], -1
+                            ).sum(1) / (region_mask == 2).float().view(
+                                loss_n.shape[0], -1
+                            ).sum(
+                                1
+                            )
+                            assert (
+                                loss_n_in.shape[0] == loss_n_out.shape[0] == images.shape[0]
+                            )
+                            loss_feature[:, c * 2] = loss_n_in
+                            loss_feature[:, c * 2 + 1] = loss_n_out
+                        else:
+                            print(f"Computed region_mask only contains {torch.unique(region_mask)} values and therefore now boundaries!")
 
                 if i == 0:
                     loss_whole_n = loss_feature.cpu().numpy()
@@ -313,7 +320,11 @@ class FedA3I(FedAvg):
                 assert dis > 0, f"{dis} is not bigger than 0"
                 region_mask[i][(labels[i] == 0) & (sdm[i] <= dis)] = 2
                 region_mask[i][(labels[i] == 1) & (sdm[i] >= -dis)] = 1
-
+        
+        if region_mask.sum() > 0:
+            print(f"Valid region_mask computed in def region() with {np.unique(region_mask)} !")
+        else:
+            print(f"Invalid region_mask with {np.unique(region_mask)} !")
         return region_mask
 
 
