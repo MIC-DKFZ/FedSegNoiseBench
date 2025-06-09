@@ -1,4 +1,5 @@
 .venv/
+.venv-laptop/
 *.log
 log.txt
 *.pyc
