@@ -223,9 +223,8 @@ class FedA3I(FedAvg):
                     high_res_outputs, high_res_labels = outputs[0], labels[0]
 
                     # num_classes: count of fg classes + bg class
-                    num_classes = int(high_res_labels.max()) + 1
-                    # get labels as one-hot encoded labels
-                    # one_hot_labels to shape: [b, (d), h, w, c]
+                    num_classes = high_res_outputs.shape[1]
+                    # get labels as one-hot encoded labels to shape: [b, (d), h, w, c]
                     one_hot_labels = F.one_hot(
                         high_res_labels.squeeze(1).long(), num_classes=num_classes
                     )
@@ -238,6 +237,9 @@ class FedA3I(FedAvg):
                         raise ValueError(
                             f"Unexpected shape of one_hot_labels: {one_hot_labels.shape}"
                         )
+                    
+                    assert high_res_outputs.shape == one_hot_labels.shape, \
+                        f"Shape mismatch: output shape {high_res_outputs.shape} vs target shape {one_hot_labels.shape}"
                     loss = criterion(
                         high_res_outputs, one_hot_labels
                     )  # [b, c, (d), h, w]
