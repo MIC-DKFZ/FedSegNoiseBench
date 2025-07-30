@@ -118,8 +118,6 @@ class FedDM(FedAvg):
             )
         )
         peer_model_nearst = nnunet_trainer_w_new_weights_nearst.network.eval()
-        for p in peer_model_nearst.parameters():
-            p.requires_grad = False
         # get farthest peer model and set weights
         peer_model_farthest_statedict = self.clients_peers[next(iter(peer_models))][
             "farthest"
@@ -132,8 +130,6 @@ class FedDM(FedAvg):
             )
         )
         peer_model_farthest = nnunet_trainer_w_new_weights_farthest.network.eval()
-        for p in peer_model_farthest.parameters():
-            p.requires_grad = False
 
         # define pixel selection ratio
         p = 1 - (self.ratio * epoch / self.stop_epoch)
@@ -209,6 +205,8 @@ class FedDM(FedAvg):
         _, _ = self.assign_model_weights_to_trainer(
             client_idx=farthest_idx, new_statedict=actual_statedict_farthest
         )
+        peer_model_nearst.train()
+        peer_model_farthest.train()
         # del nnunet_trainer_w_new_weights_nearst
         # del actual_statedict_nearst
         # del nnunet_trainer_w_new_weights_farthest
@@ -312,7 +310,7 @@ class FedDM(FedAvg):
         log_p: Tensor = (probs + self.eps).log()
 
         # Step 2: Compute class-wise focal losses
-        total_loss = torch.tensor(0.0, device=probs.device, dtype=probs.dtype)
+        total_loss = None # torch.tensor(0.0, device=probs.device, dtype=probs.dtype)
         total_pixels = torch.tensor(0.0, device=probs.device, dtype=probs.dtype)
 
 
@@ -333,8 +331,10 @@ class FedDM(FedAvg):
                     clean_mask[:, class_idx - 1, ...] == 2
                 )
 
-            class_loss = -weight * mask_c * log_p_c
-            total_loss += class_loss[idx_mask].sum()
+            # class_loss = -weight * mask_c * log_p_c
+            # total_loss += class_loss[idx_mask].sum()
+            term = (-weight * mask_c * log_p_c)[idx_mask].sum()
+            total_loss = term if total_loss is None else (total_loss + term)
             total_pixels += idx_mask.sum()
 
         final_loss = total_loss / (total_pixels + self.eps)
@@ -461,7 +461,8 @@ class FedDM(FedAvg):
         log_p2 = (torch.softmax(logits2, dim=1) + self.eps).log()
 
         # Output: per-foreground-class triage map
-        clean_mask_fg = torch.zeros((B, F, H, W))
+        # clean_mask_fg = torch.zeros((B, F, H, W))
+        clean_mask_fg = torch.zeros((B, F, H, W), dtype=torch.float32, device=logits.device)
 
         for b in range(B):
             for k in range(F):  # iterate foreground classes (channel k+1 in logits/labels)
