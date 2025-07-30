@@ -189,14 +189,14 @@ class FedDM(FedAvg):
             # softmax model predictions
             pred_probs: Tensor = F.softmax(self.sm_temp * output[0], dim=1)
 
-            # check if all tensors used for loss calculation require grad
-            print(f"pred_probs: {pred_probs.requires_grad=}, grad_fn: {pred_probs.grad_fn=}")
-            print(f"onehot_highres_targets: {onehot_highres_targets.requires_grad=}, grad_fn: {onehot_highres_targets.grad_fn=}")
-            print(f"clean_mask: {clean_mask.requires_grad=}, grad_fn: {clean_mask.grad_fn=}")
+            # # check if all tensors used for loss calculation require grad
+            # print(f"pred_probs: {pred_probs.requires_grad=}, grad_fn: {pred_probs.grad_fn=}")
+            # print(f"onehot_highres_targets: {onehot_highres_targets.requires_grad=}, grad_fn: {onehot_highres_targets.grad_fn=}")
+            # print(f"clean_mask: {clean_mask.requires_grad=}, grad_fn: {clean_mask.grad_fn=}")
 
             # label correction and loss computation
             loss1 = self.Focal_Cross_Entropy(
-                pred_probs, onehot_highres_targets, clean_mask
+                probs=pred_probs, target=onehot_highres_targets, clean_mask=clean_mask
             )
             losses = [loss1]
             loss = reduce(add, losses)
@@ -245,6 +245,12 @@ class FedDM(FedAvg):
     def Focal_Cross_Entropy(self, probs, target, clean_mask, alpha=0.25, gamma=2.0):
         """
         Correct ground_trough seg mask and compute multi-class focal loss.
+        Ambiguous pixels in clean_mask are corrected to dominant foreground class in clean_mask.
+
+        Input:
+        - probs: #TODO
+        - target: ground-truth mask including bg
+        - clean_mask: ambiguity mask with px_val=1 indicating certain fg, and px_val=2 indicating ambiuous fg; determined via peer models
 
         Notes:
         - Uncertain fg pixels are always set to bg
@@ -259,38 +265,48 @@ class FedDM(FedAvg):
             _, F, _, _, _ = clean_mask.shape
         else:
             raise ValueError("Target must be 4D or 5D tensor.")
+        
+        ########################################################
+        # LABEL CORRECTION: START
+        ########################################################
 
+        # FOR MULTI-CLASS
+        
         # Step 1: Apply correction to target where label is uncertain (==2)
         # set uncertain pixels to dominant fg class
-        # for b in range(B):
-        #     # find dominant fg class
-        #     counts = [(clean_mask[b, f] == 1).sum().item() for f in range(F)]
-        #     if sum(counts) == 0:
-        #         # no certain fg -> skip adjustment entirely
-        #         continue
-        #     dominant_class_idx = counts.index(max(counts)) + 1  # +1 because class indices in target
-        #     # set uncertain pixels to dominant class
-        #     for class_idx in range(1, C):
-        #         # set dominant class
-        #         target[b, dominant_class_idx, ...][
-        #             clean_mask[b, class_idx - 1, ...] == 2
-        #         ] = 1
-        #         # clear other classes
-        #         target[b, class_idx, ...][
-        #             clean_mask[b, class_idx - 1, ...] == 2
-        #         ] = 0
-        #         # ensure that background is also cleared
-        #         target[b, 0, ...][
-        #             clean_mask[b, class_idx - 1, ...] == 2
-        #         ] = 0
-        # set uncertain pixels to background
-        for class_idx in range(1, C):  # Skip background at index 0
-            target[:, 0, ...][
-                clean_mask[:, class_idx - 1, ...] == 2
-            ] = 1  # set background
-            target[:, class_idx, ...][
-                clean_mask[:, class_idx - 1, ...] == 2
-            ] = 0  # clear class
+        for b in range(B):
+            ambiguity_mask = (clean_mask[b] == 2).any(dim=0)  # shape: HxW or DxHxW
+
+            if ambiguity_mask.sum().item() == 0:
+                continue
+
+            # Get per-foreground-class counts of "certain" (==1) pixels
+            counts = [(clean_mask[b, f] == 1).sum().item() for f in range(F)]
+            if sum(counts) == 0:
+                continue
+
+            dominant_class_idx = counts.index(max(counts)) + 1  # +1 to account for background in `target`
+
+            # Clear all classes (incl. bg) at ambiguous pixels
+            target[b, :, ...][..., ambiguity_mask] = 0
+
+            # Set dominant foreground class at those pixels
+            target[b, dominant_class_idx, ...][..., ambiguity_mask] = 1
+
+
+        # # FOR BINARY:
+        # # set uncertain pixels to background
+        # for class_idx in range(1, C):  # Skip background at index 0
+        #     target[:, 0, ...][
+        #         clean_mask[:, class_idx - 1, ...] == 2
+        #     ] = 1  # set background
+        #     target[:, class_idx, ...][
+        #         clean_mask[:, class_idx - 1, ...] == 2
+        #     ] = 0  # clear class
+
+        ########################################################
+        # LABEL CORRECTION: END
+        ########################################################
 
         mask: Tensor = cast(Tensor, target.type(torch.float32))
         log_p: Tensor = (probs + self.eps).log()
@@ -324,90 +340,184 @@ class FedDM(FedAvg):
         final_loss = total_loss / (total_pixels + self.eps)
         return final_loss
 
-    def pixel_selection_by_Peers(self, logits, logits1, logits2, labels, p=0):
+    # def pixel_selection_by_Peers(self, logits, logits1, logits2, labels, p=0):
+    #     """
+    #     Original: https://github.com/CityU-AIM-Group/FedDM/blob/main/main.py#L356
+
+    #     Inputs:
+    #     - labels and all logits are in the shape of B, C, H, W w/ C = bg + #fg_classes
+    #     """
+    #     # extract the background and (multi-channel) foreground masks
+    #     bg_mask = labels[:, 0, ...]  # B, H, W
+    #     fg_mask = labels[:, 1:, ...]  # B, #fg_classes, H, W
+
+    #     # softmax to get probabilities for each class
+    #     pred = torch.softmax(logits, dim=1)  # B, C, H, W
+    #     pred1 = torch.softmax(logits1, dim=1)  # B, C, H, W
+    #     pred2 = torch.softmax(logits2, dim=1)  # B, C, H, W
+
+    #     # log the preds
+    #     log_p: Tensor = (pred + self.eps).log()  # B, C, H, W
+    #     log_p1: Tensor = (pred1 + self.eps).log()  # B, C, H, W
+    #     log_p2: Tensor = (pred2 + self.eps).log()  # B, C, H, W
+
+    #     clean_mask = torch.zeros_like(fg_mask)  # B, #fg_classes, H, W
+
+    #     # iterate over each batch element
+    #     for b in range(fg_mask.size(0)):
+    #         # iterate over each fg class
+    #         for class_idx in range(fg_mask.size(1)):
+    #             # Calculate the class-wise loss
+    #             loss = (
+    #                 -fg_mask[b, class_idx, ...] * log_p[b, (class_idx + 1), ...]
+    #             )  # H, W
+    #             loss1 = (
+    #                 -fg_mask[b, class_idx, ...] * log_p1[b, (class_idx + 1), ...]
+    #             )  # H, W
+    #             loss2 = (
+    #                 -fg_mask[b, class_idx, ...] * log_p2[b, (class_idx + 1), ...]
+    #             )  # H, W
+    #             # Flatten the losses
+    #             loss_flat = loss.flatten()  # H*W
+    #             loss1_flat = loss1.flatten()  # H*W
+    #             loss2_flat = loss2.flatten()  # H*W
+    #             # Select the number of pixels to keep based on p
+    #             fg_num_selected = (
+    #                 (fg_mask[b, class_idx, ...].sum() * p).type(torch.int).item()
+    #             )
+    #             threshold = fg_num_selected  # + bg_mask[b].sum()
+
+    #             # Apply selection for each peer model (logits, logits1, logits2)
+    #             if fg_num_selected > 5:
+    #                 value_fg, _ = torch.topk(
+    #                     loss_flat, threshold, largest=False, sorted=True
+    #                 )
+    #                 thresh_fg = value_fg[-1]
+    #                 value_fg1, _ = torch.topk(
+    #                     loss1_flat, threshold, largest=False, sorted=True
+    #                 )
+    #                 thresh_fg1 = value_fg1[-1]
+    #                 value_fg2, _ = torch.topk(
+    #                     loss2_flat, threshold, largest=False, sorted=True
+    #                 )
+    #                 thresh_fg2 = value_fg2[-1]
+
+    #                 clean_mask_ = loss <= thresh_fg
+    #                 clean_mask1_ = loss1 <= thresh_fg1
+    #                 clean_mask2_ = loss2 <= thresh_fg2
+
+    #                 # pixels w/ low loss for current model and distal model are clean
+    #                 clean_mask[b, class_idx, ...][(clean_mask_ & clean_mask2_)] = 1.0
+    #                 # pixels w/ disagreement between current model and proximal model are uncertain
+    #                 clean_mask[b, class_idx, ...][
+    #                     (clean_mask_ | clean_mask1_) ^ (clean_mask_ & clean_mask1_)
+    #                 ] = 2
+    #             else:
+    #                 # if label is in gt smaller than 5 pixels, pixels are clean
+    #                 clean_mask[b, class_idx, ...] = 1.0
+
+    #     # Ensure background pixels are preserved
+    #     clean_mask_final = clean_mask * fg_mask + bg_mask.unsqueeze(
+    #         1
+    #     )  # B, num_classes, H, W
+
+    #     # self.plot_it(clean_mask_final, 5, 2)
+
+    #     return clean_mask_final
+
+    def pixel_selection_by_Peers(
+        self,
+        logits:  Tensor,   # [B, C, H, W], C = 1 (bg) + F (fg classes)
+        logits1: Tensor,   # peer 1
+        logits2: Tensor,   # peer 2
+        labels:  Tensor,   # one-hot [B, C, H, W]
+        p: float = 0.0,    # fraction of class pixels to keep as "selected"
+        min_fg_keep: int = 5,  # safeguard: if floor(p*|class|) <= this, mark all class pixels as clean
+    ) -> Tensor:
         """
-        Original: https://github.com/CityU-AIM-Group/FedDM/blob/main/main.py#L356
-
-        Inputs:
-        - labels and all logits are in the shape of B, C, H, W w/ C = bg + #fg_classes
+        Returns:
+            clean_mask_fg: [B, F, H, W] float32 in {0., 1., 2.}
+            For each foreground class channel k (0..F-1 corresponds to class id k+1):
+                - 1.0 on pixels considered "clean" for that class (main ∧ peer2).
+                - 2.0 on pixels considered "uncertain" for that class (main ⊕ peer1).
+                - 0.0 otherwise.
+            Background pixels are 0.0 in all F channels.
         """
-        # extract the background and (multi-channel) foreground masks
-        bg_mask = labels[:, 0, ...]  # B, H, W
-        fg_mask = labels[:, 1:, ...]  # B, #fg_classes, H, W
+        assert logits.shape == labels.shape, "logits and labels must have identical shapes [B, C, H, W]"
+        B, C, H, W = logits.shape
+        assert C >= 2, "Need at least background + one foreground class"
+        F = C - 1
 
-        # softmax to get probabilities for each class
-        pred = torch.softmax(logits, dim=1)  # B, C, H, W
-        pred1 = torch.softmax(logits1, dim=1)  # B, C, H, W
-        pred2 = torch.softmax(logits2, dim=1)  # B, C, H, W
+        device = logits.device
+        dtype  = torch.float32
 
-        # log the preds
-        log_p: Tensor = (pred + self.eps).log()  # B, C, H, W
-        log_p1: Tensor = (pred1 + self.eps).log()  # B, C, H, W
-        log_p2: Tensor = (pred2 + self.eps).log()  # B, C, H, W
+        # Extract masks
+        bg_mask  = labels[:, 0, ...].bool()    # [B, H, W]
+        fg_masks = labels[:, 1:, ...].bool()   # [B, F, H, W]; one-hot per class
 
-        clean_mask = torch.zeros_like(fg_mask)  # B, #fg_classes, H, W
+        # Softmax -> log probs
+        log_p  = (torch.softmax(logits,  dim=1) + self.eps).log()   # [B, C, H, W]
+        log_p1 = (torch.softmax(logits1, dim=1) + self.eps).log()
+        log_p2 = (torch.softmax(logits2, dim=1) + self.eps).log()
 
-        # iterate over each batch
-        for b in range(fg_mask.size(0)):
-            # iterate over each fg class
-            for class_idx in range(fg_mask.size(1)):
-                # Calculate the class-wise loss
-                loss = (
-                    -fg_mask[b, class_idx, ...] * log_p[b, (class_idx + 1), ...]
-                )  # H, W
-                loss1 = (
-                    -fg_mask[b, class_idx, ...] * log_p1[b, (class_idx + 1), ...]
-                )  # H, W
-                loss2 = (
-                    -fg_mask[b, class_idx, ...] * log_p2[b, (class_idx + 1), ...]
-                )  # H, W
-                # Flatten the losses
-                loss_flat = loss.flatten()  # H*W
-                loss1_flat = loss1.flatten()  # H*W
-                loss2_flat = loss2.flatten()  # H*W
-                # Select the number of pixels to keep based on p
-                fg_num_selected = (
-                    (fg_mask[b, class_idx, ...].sum() * p).type(torch.int).item()
-                )
-                threshold = fg_num_selected  # + bg_mask[b].sum()
+        # Output: per-foreground-class triage map
+        clean_mask_fg = torch.zeros((B, F, H, W))
 
-                # Apply selection for each peer model (logits, logits1, logits2)
-                if fg_num_selected > 5:
-                    value_fg, _ = torch.topk(
-                        loss_flat, threshold, largest=False, sorted=True
-                    )
-                    thresh_fg = value_fg[-1]
-                    value_fg1, _ = torch.topk(
-                        loss1_flat, threshold, largest=False, sorted=True
-                    )
-                    thresh_fg1 = value_fg1[-1]
-                    value_fg2, _ = torch.topk(
-                        loss2_flat, threshold, largest=False, sorted=True
-                    )
-                    thresh_fg2 = value_fg2[-1]
+        for b in range(B):
+            for k in range(F):  # iterate foreground classes (channel k+1 in logits/labels)
+                fg_idx = fg_masks[b, k]  # [H, W] bool for class (k+1)
+                fg_count = int(fg_idx.sum().item())
+                if fg_count == 0:
+                    # No pixels of this class in this image -> remain zeros
+                    continue
 
-                    clean_mask_ = loss <= thresh_fg
-                    clean_mask1_ = loss1 <= thresh_fg1
-                    clean_mask2_ = loss2 <= thresh_fg2
+                # Number to keep
+                fg_num_selected = int(fg_count * p)
 
-                    # pixels w/ low loss for current model and distal model are clean
-                    clean_mask[b, class_idx, ...][(clean_mask_ & clean_mask2_)] = 1.0
-                    # pixels w/ disagreement between current model and proximal model are uncertain
-                    clean_mask[b, class_idx, ...][
-                        (clean_mask_ | clean_mask1_) ^ (clean_mask_ & clean_mask1_)
-                    ] = 2
-                else:
-                    # if label is in gt smaller than 5 pixels, pixels are clean
-                    clean_mask[b, class_idx, ...] = 1.0
+                if fg_num_selected <= min_fg_keep:
+                    # Safeguard: if too small, mark all class-k pixels as clean (=1)
+                    cm_tmp = torch.zeros((H, W), dtype=dtype, device=device)
+                    cm_tmp[fg_idx] = 1.0
+                    clean_mask_fg[b, k] = cm_tmp
+                    continue
 
-        # Ensure background pixels are preserved
-        clean_mask_final = clean_mask * fg_mask + bg_mask.unsqueeze(
-            1
-        )  # B, num_classes, H, W
+                # Collect class-only NLL vectors (no contamination from other classes/bg)
+                # Current class is channel (k+1) because channel 0 is background.
+                losses  = (-log_p [b, k+1])[fg_idx]   # [fg_count]
+                losses1 = (-log_p1[b, k+1])[fg_idx]
+                losses2 = (-log_p2[b, k+1])[fg_idx]
 
-        # self.plot_it(clean_mask_final, 5, 2)
+                # Guard k_keep ∈ [1, fg_count]
+                k_keep = max(1, min(fg_num_selected, fg_count))
 
-        return clean_mask_final
+                # Thresholds from topk on class-only vectors
+                val,  _ = torch.topk(losses,  k_keep, largest=False, sorted=True)
+                thr     = val[-1]
+                val1, _ = torch.topk(losses1, k_keep, largest=False, sorted=True)
+                thr1    = val1[-1]
+                val2, _ = torch.topk(losses2, k_keep, largest=False, sorted=True)
+                thr2    = val2[-1]
+
+                sel  = (losses  <= thr)   # main selected
+                sel1 = (losses1 <= thr1)  # peer1 selected (proximal)
+                sel2 = (losses2 <= thr2)  # peer2 selected (distal)
+
+                # Build per-image, per-class triage grid
+                cm_tmp = torch.zeros((H, W), device=self.device)
+
+                # Map 1D selections back into 2D at fg_idx
+                status = torch.zeros_like(losses, device=self.device)
+                # Set uncertain (main ⊕ peer1) -- no overwrite of clean since xor is false if sel&sel1
+                status[sel ^ sel1] = 2.0
+                # Set clean (main ∧ peer2)
+                status[sel & sel2] = 1.0
+
+                cm_tmp[fg_idx] = status
+                clean_mask_fg[b, k] = cm_tmp
+
+        # Note: We intentionally DO NOT write background into every foreground channel.
+        # Background pixels remain 0.0 across all F channels.
+        return clean_mask_fg
 
     def plot_it(self, tensor, batch_to_plot, channels, save_path="clean_mask_plot.png"):
         fig, axs = plt.subplots(
