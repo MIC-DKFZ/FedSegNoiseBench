@@ -243,7 +243,7 @@ class FedDM(FedAvg):
     def Focal_Cross_Entropy(self, probs, target, clean_mask, alpha=0.25, gamma=2.0):
         """
         Correct ground_trough seg mask and compute multi-class focal loss.
-        Ambiguous pixels in clean_mask are corrected to dominant foreground class in clean_mask.
+        Ambiguous pixels in clean_mask are corrected to smallest foreground class in clean_mask.
 
         Input:
         - probs: #TODO
@@ -271,7 +271,7 @@ class FedDM(FedAvg):
         # FOR MULTI-CLASS
         
         # Step 1: Apply correction to target where label is uncertain (==2)
-        # set uncertain pixels to dominant fg class
+        # set uncertain pixels to smallest fg class
         for b in range(B):
             ambiguity_mask = (clean_mask[b] == 2).any(dim=0)  # shape: HxW or DxHxW
 
@@ -283,13 +283,13 @@ class FedDM(FedAvg):
             if sum(counts) == 0:
                 continue
 
-            dominant_class_idx = counts.index(max(counts)) + 1  # +1 to account for background in `target`
+            smallest_class_idx = counts.index(min(counts)) + 1  # +1 to account for background in `target`
 
             # Clear all classes (incl. bg) at ambiguous pixels
             target[b, :, ...][..., ambiguity_mask] = 0
 
-            # Set dominant foreground class at those pixels
-            target[b, dominant_class_idx, ...][..., ambiguity_mask] = 1
+            # Set smallest foreground class at those pixels
+            target[b, smallest_class_idx, ...][..., ambiguity_mask] = 1
 
 
         # # FOR BINARY:
