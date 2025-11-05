@@ -18,7 +18,11 @@ class Orchestrator:
         if fl_args["strategy"].lower() == "fedavg":
             self.fl_strategy = FedAvg(self.clients)
         elif fl_args["strategy"].lower() == "feda3i":
-            self.fl_strategy = FedA3I(self.clients, fl_args["feda3i_warmup_rounds"])
+            self.fl_strategy = FedA3I(
+                self.clients,
+                int(fl_args["feda3i_warmup_rounds_frac"] * self.num_rounds), 
+                fl_args["feda3i_interw"]
+            )
         elif fl_args["strategy"].lower() == "feddm":
             self.fl_strategy = FedDM(self.clients)
         else:

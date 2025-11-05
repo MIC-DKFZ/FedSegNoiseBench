@@ -59,8 +59,13 @@ def main(args):
         fl_args={
             "num_rounds": args.num_rounds,
             "strategy": args.noise_mitigation_method,
-            "feda3i_warmup_rounds": (
-                args.feda3i_warmup_rounds
+            "feda3i_warmup_rounds_frac": (
+                args.feda3i_warmup_rounds_frac
+                if args.noise_mitigation_method.lower() == "feda3i"
+                else None
+            ),
+            "feda3i_interw": (
+                args.feda3i_interw
                 if args.noise_mitigation_method.lower() == "feda3i"
                 else None
             ),
@@ -139,18 +144,25 @@ if __name__ == "__main__":
         help="Number of local epochs to run on each client per fl round.",
     )
 
-    # method arguments
+    ##### method arguments
     parser.add_argument(
         "--noise_mitigation_method",
         type=str,
         default="FedAvg",
         help="Method to mitigate segmentation label noise: FedA3I, FedDM, None for vanilla FedAvg FL training.",
     )
+    # FedA3I
     parser.add_argument(
-        "--feda3i_warmup_rounds",
-        type=int,
-        default=5,
+        "--feda3i_warmup_rounds_frac",
+        type=float,
+        default=0.1,
         help="Number of warmup rounds for FedA3I.",
+    )
+    parser.add_argument(
+        "--feda3i_interw",
+        type=float,
+        default=0.5,
+        help="Interpolation weight between expand and shrink clients for quality-based aggregation.",
     )
 
     # other arguments

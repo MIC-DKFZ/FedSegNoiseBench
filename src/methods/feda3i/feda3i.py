@@ -18,17 +18,23 @@ class FedA3I(FedAvg):
     FedA3I: Annotation Quality-Aware Aggregation for Federated Medical Image Segmentation against Heterogeneous Annotation Noise
     Nannen Wu et al., 2024, AAAI
     https://arxiv.org/abs/2312.12838
+
+    Args:
+        clients (list): List of FL clients.
+        feda3i_warmup_rounds (int): Number of warmup rounds before starting quality-based aggregation.
+        feda3i_interw (float): Interpolation weight between expand and shrink clients for quality-based aggregation.
     """
 
-    def __init__(self, clients: list = None, feda3i_warmup_rounds: int = None):
+    def __init__(self, clients: list = None, feda3i_warmup_rounds: int = None, feda3i_interw: float = None):
         super().__init__(clients=clients)
         self.name = "feda3i"
         self.feda3i_warmup_rounds = feda3i_warmup_rounds
-        self.feda3i_interw = 0.5
+        self.feda3i_interw = feda3i_interw
         self.quality_agg_weights = None
         self.alpha_weight = 1.0
         self.alpha_power = 1.0
         self.alpha_bias = 0.0
+        logging.info(f"FedA3I initialized with warmup rounds {self.feda3i_warmup_rounds} and interw {self.feda3i_interw}!")
 
     def feda3i_compute_quality_agg_weights(self):
         """
@@ -304,7 +310,7 @@ class FedA3I(FedAvg):
         for i in range(labels.shape[0]):
             if labels[i].sum() < 1 or len(np.unique(labels[i])) < 2:
                 # pass region mask computation if processed patch is just bg (labels[i].sum() < 1) or just fg (len(np.unique(labels[i])) < 2)
-                print(
+                logging.debug(
                     f"Only one label found in current patch {i}: {np.unique(labels[i])}"
                 )
                 pass
@@ -322,9 +328,9 @@ class FedA3I(FedAvg):
                 region_mask[i][(labels[i] == 1) & (sdm[i] >= -dis)] = 1
         
         if region_mask.sum() > 0:
-            print(f"Valid region_mask computed in def region() with {np.unique(region_mask)} !")
+            logging.debug(f"Valid region_mask computed in def region() with {np.unique(region_mask)} !")
         else:
-            print(f"Invalid region_mask with {np.unique(region_mask)} !")
+            logging.info(f"Invalid region_mask with {np.unique(region_mask)} !")
         return region_mask
 
 
