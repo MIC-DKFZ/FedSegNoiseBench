@@ -24,12 +24,12 @@ class FedDM(FedAvg):
     """
 
     def __init__(
-            self, 
-            clients: list = None, 
-            feddm_gamma_hgd_smoothing: float = None,
-            feddm_ratio_cac_pixelselection: float = None,
-            feddm_cac_label_correction: str = None,
-        ):
+        self,
+        clients: list = None,
+        feddm_gamma_hgd_smoothing: float = None,
+        feddm_ratio_cac_pixelselection: float = None,
+        feddm_cac_label_correction: str = None,
+    ):
         super().__init__(clients=clients)
 
         self.name = "feddm"
@@ -116,6 +116,9 @@ class FedDM(FedAvg):
         Original: https://github.com/CityU-AIM-Group/FedDM/blob/main/main.py#L207
         Adapted to work with nnUNetv2 and as nnUNetv2's def train_step().
         """
+        # determine whether processed images are 2d or 3d
+        is_3d = len(batch["data"].shape) == 5  # B, C, H, W, D
+
         # get nearest peer model and set weights
         peer_model_nearst_statedict = self.clients_peers[next(iter(peer_models))][
             "nearest"
@@ -159,7 +162,7 @@ class FedDM(FedAvg):
         )
         onehot_highres_targets = (
             onehot_highres_targets_.permute(0, 3, 1, 2)
-            if onehot_highres_targets_.ndim == 4
+            if not is_3d
             else onehot_highres_targets_.permute(0, 4, 1, 2, 3)
         )
         onehot_highres_targets = onehot_highres_targets.to(self.device)
@@ -190,6 +193,7 @@ class FedDM(FedAvg):
                 pred_logits2[0].detach(),
                 onehot_highres_targets,
                 p=p,
+                is_3d=is_3d,
             )
 
             # softmax model predictions
@@ -202,7 +206,7 @@ class FedDM(FedAvg):
 
             # label correction and loss computation
             loss1 = self.Focal_Cross_Entropy(
-                probs=pred_probs, target=onehot_highres_targets, clean_mask=clean_mask
+                probs=pred_probs, target=onehot_highres_targets, clean_mask=clean_mask, is_3d=is_3d
             )
             losses = [loss1]
             loss = reduce(add, losses)
@@ -250,7 +254,7 @@ class FedDM(FedAvg):
 
         return client_nnunet_trainer, current_client_model_weights
 
-    def Focal_Cross_Entropy(self, probs, target, clean_mask, alpha=0.25, gamma=2.0):
+    def Focal_Cross_Entropy(self, probs, target, clean_mask, alpha=0.25, gamma=2.0, is_3d=False):
         """
         Correct ground_trough seg mask and compute multi-class focal loss.
         Ambiguous pixels in clean_mask are corrected to smallest foreground class in clean_mask.
@@ -258,28 +262,31 @@ class FedDM(FedAvg):
         Input:
         - probs: #TODO
         - target: ground-truth mask including bg
-        - clean_mask: ambiguity mask with px_val=1 indicating certain fg, and px_val=2 indicating ambiuous fg; determined via peer models
+        - clean_mask: ambiguity mask with px_val=1 indicating certain fg, and px_val=2 indicating ambiguous fg; determined via peer models
+        - alpha: focal loss alpha
+        - gamma: focal loss gamma
+        - is_3d: whether the input is 3D
 
         Notes:
         - Uncertain fg pixels are always set to bg
         """
         # Clone target to avoid in-place modification issues
         target = target.clone()
-        if target.ndim == 4:
+        if not is_3d and target.ndim == 4:
             B, C, H, W = target.shape  # C = num_classes
             _, F, _, _ = clean_mask.shape  # F = num foreground classes (C - 1)
-        elif target.ndim == 5:
-            B, C, D, H, W = target.shape
+        elif is_3d and target.ndim == 5:
+            B, C, H, W, D = target.shape
             _, F, _, _, _ = clean_mask.shape
         else:
             raise ValueError("Target must be 4D or 5D tensor.")
-        
+
         ########################################################
         # LABEL CORRECTION: START
         ########################################################
 
         # FOR MULTI-CLASS
-        
+
         # Step 1: Apply correction to target where label is uncertain (==2)
         # set uncertain pixels to smallest/largest fg class (dependent on self.cac_label_correction)
         for b in range(B):
@@ -306,7 +313,6 @@ class FedDM(FedAvg):
             # Set smallest foreground class at those pixels
             target[b, labelcorrection_class_idx, ...][..., ambiguity_mask] = 1
 
-
         # # FOR BINARY:
         # # set uncertain pixels to background
         # for class_idx in range(1, C):  # Skip background at index 0
@@ -325,9 +331,8 @@ class FedDM(FedAvg):
         log_p: Tensor = (probs + self.eps).log()
 
         # Step 2: Compute class-wise focal losses
-        total_loss = None # torch.tensor(0.0, device=probs.device, dtype=probs.dtype)
+        total_loss = None  # torch.tensor(0.0, device=probs.device, dtype=probs.dtype)
         total_pixels = torch.tensor(0.0, device=probs.device, dtype=probs.dtype)
-
 
         for class_idx in range(C):
             probs_c = probs[:, class_idx, ...]
@@ -442,12 +447,13 @@ class FedDM(FedAvg):
 
     def pixel_selection_by_Peers(
         self,
-        logits:  Tensor,   # [B, C, H, W], C = 1 (bg) + F (fg classes)
-        logits1: Tensor,   # peer 1
-        logits2: Tensor,   # peer 2
-        labels:  Tensor,   # one-hot [B, C, H, W]
-        p: float = 0.0,    # fraction of class pixels to keep as "selected"
+        logits: Tensor,  # [B, C, H, W], C = 1 (bg) + F (fg classes)
+        logits1: Tensor,  # peer 1
+        logits2: Tensor,  # peer 2
+        labels: Tensor,  # one-hot [B, C, H, W]
+        p: float = 0.0,  # fraction of class pixels to keep as "selected"
         min_fg_keep: int = 5,  # safeguard: if floor(p*|class|) <= this, mark all class pixels as clean
+        is_3d: bool = False,
     ) -> Tensor:
         """
         Returns:
@@ -458,29 +464,40 @@ class FedDM(FedAvg):
                 - 0.0 otherwise.
             Background pixels are 0.0 in all F channels.
         """
-        assert logits.shape == labels.shape, "logits and labels must have identical shapes [B, C, H, W]"
-        B, C, H, W = logits.shape
+        assert (
+            logits.shape == labels.shape
+        ), "logits and labels must have identical shapes [B, C, H, W] or [B, C, H, W, D]"
+
+        if is_3d:
+            B, C, H, W, D = logits.shape
+        else:
+            B, C, H, W = logits.shape
         assert C >= 2, "Need at least background + one foreground class"
         F = C - 1
 
         device = logits.device
-        dtype  = torch.float32
+        dtype = torch.float32
 
         # Extract masks
-        bg_mask  = labels[:, 0, ...].bool()    # [B, H, W]
-        fg_masks = labels[:, 1:, ...].bool()   # [B, F, H, W]; one-hot per class
+        bg_mask = labels[:, 0, ...].bool()  # [B, H, W]
+        fg_masks = labels[:, 1:, ...].bool()  # [B, F, H, W]; one-hot per class
 
         # Softmax -> log probs
-        log_p  = (torch.softmax(logits,  dim=1) + self.eps).log()   # [B, C, H, W]
+        log_p = (torch.softmax(logits, dim=1) + self.eps).log()  # [B, C, H, W]
         log_p1 = (torch.softmax(logits1, dim=1) + self.eps).log()
         log_p2 = (torch.softmax(logits2, dim=1) + self.eps).log()
 
         # Output: per-foreground-class triage map
         # clean_mask_fg = torch.zeros((B, F, H, W))
-        clean_mask_fg = torch.zeros((B, F, H, W), dtype=torch.float32, device=logits.device)
+        clean_mask_fg = (
+            torch.zeros((B, F, H, W, D), dtype=torch.float32, device=logits.device)
+            if is_3d
+            else torch.zeros((B, F, H, W), dtype=torch.float32, device=logits.device)
+        )
 
         for b in range(B):
-            for k in range(F):  # iterate foreground classes (channel k+1 in logits/labels)
+            # iterate foreground classes (channel k+1 in logits/labels)
+            for k in range(F):
                 fg_idx = fg_masks[b, k]  # [H, W] bool for class (k+1)
                 fg_count = int(fg_idx.sum().item())
                 if fg_count == 0:
@@ -492,34 +509,40 @@ class FedDM(FedAvg):
 
                 if fg_num_selected <= min_fg_keep:
                     # Safeguard: if too small, mark all class-k pixels as clean (=1)
-                    cm_tmp = torch.zeros((H, W), dtype=dtype, device=device)
+                    if is_3d:
+                        cm_tmp = torch.zeros((H, W, D), device=self.device)
+                    else:
+                        cm_tmp = torch.zeros((H, W), device=self.device)
                     cm_tmp[fg_idx] = 1.0
                     clean_mask_fg[b, k] = cm_tmp
                     continue
 
                 # Collect class-only NLL vectors (no contamination from other classes/bg)
                 # Current class is channel (k+1) because channel 0 is background.
-                losses  = (-log_p [b, k+1])[fg_idx]   # [fg_count]
-                losses1 = (-log_p1[b, k+1])[fg_idx]
-                losses2 = (-log_p2[b, k+1])[fg_idx]
+                losses = (-log_p[b, k + 1])[fg_idx]  # [fg_count]
+                losses1 = (-log_p1[b, k + 1])[fg_idx]
+                losses2 = (-log_p2[b, k + 1])[fg_idx]
 
                 # Guard k_keep ∈ [1, fg_count]
                 k_keep = max(1, min(fg_num_selected, fg_count))
 
                 # Thresholds from topk on class-only vectors
-                val,  _ = torch.topk(losses,  k_keep, largest=False, sorted=True)
-                thr     = val[-1]
+                val, _ = torch.topk(losses, k_keep, largest=False, sorted=True)
+                thr = val[-1]
                 val1, _ = torch.topk(losses1, k_keep, largest=False, sorted=True)
-                thr1    = val1[-1]
+                thr1 = val1[-1]
                 val2, _ = torch.topk(losses2, k_keep, largest=False, sorted=True)
-                thr2    = val2[-1]
+                thr2 = val2[-1]
 
-                sel  = (losses  <= thr)   # main selected
-                sel1 = (losses1 <= thr1)  # peer1 selected (proximal)
-                sel2 = (losses2 <= thr2)  # peer2 selected (distal)
+                sel = losses <= thr  # main selected
+                sel1 = losses1 <= thr1  # peer1 selected (proximal)
+                sel2 = losses2 <= thr2  # peer2 selected (distal)
 
                 # Build per-image, per-class triage grid
-                cm_tmp = torch.zeros((H, W), device=self.device)
+                if is_3d:
+                    cm_tmp = torch.zeros((H, W, D), device=self.device)
+                else:
+                    cm_tmp = torch.zeros((H, W), device=self.device)
 
                 # Map 1D selections back into 2D at fg_idx
                 status = torch.zeros_like(losses, device=self.device)
