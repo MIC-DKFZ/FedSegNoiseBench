@@ -69,6 +69,21 @@ def main(args):
                 if args.noise_mitigation_method.lower() == "feda3i"
                 else None
             ),
+            "feddm_gamma_hgd_smoothing": (
+                args.feddm_gamma_hgd_smoothing
+                if args.noise_mitigation_method.lower() == "feddm"
+                else None
+            ),
+            "feddm_ratio_cac_pixelselection": (
+                args.feddm_ratio_cac_pixelselection
+                if args.noise_mitigation_method.lower() == "feddm"
+                else None
+            ),
+            "feddm_cac_label_correction": (
+                args.feddm_cac_label_correction
+                if args.noise_mitigation_method.lower() == "feddm"
+                else None
+            ),
         },
     )
 
@@ -163,6 +178,25 @@ if __name__ == "__main__":
         type=float,
         default=0.5,
         help="Interpolation weight between expand and shrink clients for quality-based aggregation.",
+    )
+    # FedDM
+    parser.add_argument(
+        "--feddm_gamma_hgd_smoothing",
+        type=float,
+        default=0.99,
+        help="Smoothing parameter gamma for HDG in FedDM.",
+    )
+    parser.add_argument(
+        "--feddm_ratio_cac_pixelselection",
+        type=float,
+        default=0.6,
+        help="Ratio for class-agnostic pixel selection in FedDM.",
+    )
+    parser.add_argument(
+        "--feddm_cac_label_correction",
+        type=str,
+        default="largest",
+        help="Label correction strategy for class-agnostic correction in FedDM: 'smallest' or 'largest'.",
     )
 
     # other arguments

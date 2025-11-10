@@ -20,11 +20,16 @@ class Orchestrator:
         elif fl_args["strategy"].lower() == "feda3i":
             self.fl_strategy = FedA3I(
                 self.clients,
-                int(fl_args["feda3i_warmup_rounds_frac"] * self.num_rounds), 
-                fl_args["feda3i_interw"]
+                int(fl_args["feda3i_warmup_rounds_frac"] * self.num_rounds),
+                fl_args["feda3i_interw"],
             )
         elif fl_args["strategy"].lower() == "feddm":
-            self.fl_strategy = FedDM(self.clients)
+            self.fl_strategy = FedDM(
+                self.clients,
+                fl_args["feddm_gamma_hgd_smoothing"],
+                fl_args["feddm_ratio_cac_pixelselection"],
+                fl_args["feddm_cac_label_correction"],
+            )
         else:
             raise NotImplementedError(
                 f"Federated learning strategy {fl_args['strategy']} not implemented!"
@@ -107,7 +112,7 @@ class Orchestrator:
                 very_last_fl_predict_round=True,
                 only_run_validation=True,
                 fl_round=self.num_rounds,
-                fl_strategy=self.fl_strategy
+                fl_strategy=self.fl_strategy,
             )
 
         return self.server_model_weights
@@ -132,7 +137,7 @@ class Orchestrator:
                 client_checkpoints
             )
         elif strategy == "feddm":
-             self.server_model_weights = self.fl_strategy.feddm_central_steps(
+            self.server_model_weights = self.fl_strategy.feddm_central_steps(
                 client_checkpoints, self.server_model_weights
             )
         else:

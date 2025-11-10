@@ -23,7 +23,13 @@ class FedDM(FedAvg):
     https://ieeexplore.ieee.org/stamp/stamp.jsp?arnumber=10013742&tag=1
     """
 
-    def __init__(self, clients: list = None):
+    def __init__(
+            self, 
+            clients: list = None, 
+            feddm_gamma_hgd_smoothing: float = None,
+            feddm_ratio_cac_pixelselection: float = None,
+            feddm_cac_label_correction: str = None,
+        ):
         super().__init__(clients=clients)
 
         self.name = "feddm"
@@ -72,11 +78,15 @@ class FedDM(FedAvg):
 
         # some other hparams
         self.sm_temp = 1.0  # softmax temperature
-        self.ratio = 0.6  # ratio for pixel selection
+        self.ratio = feddm_ratio_cac_pixelselection  # ratio for pixel selection
         # feddm stop epoch ~= 1/4 of total training epochs
-        # self.stop_epoch = self.clients[0].model.nnunet_trainer.num_peochs // 4
-        self.stop_epoch = 50
+        self.stop_epoch = self.clients[0].fl_args["num_rounds"] // 4
+        # self.stop_epoch = 50
         self.eps = 1e-6
+        self.cac_label_correction = feddm_cac_label_correction
+
+        # HDG parameters
+        self.gamma_hgd_smoothing = feddm_gamma_hgd_smoothing
 
         self.clients_peers = {
             id: {x: {"id": None, "model": None} for x in ["nearest", "farthest"]}
@@ -271,7 +281,7 @@ class FedDM(FedAvg):
         # FOR MULTI-CLASS
         
         # Step 1: Apply correction to target where label is uncertain (==2)
-        # set uncertain pixels to smallest fg class
+        # set uncertain pixels to smallest/largest fg class (dependent on self.cac_label_correction)
         for b in range(B):
             ambiguity_mask = (clean_mask[b] == 2).any(dim=0)  # shape: HxW or DxHxW
 
@@ -283,13 +293,18 @@ class FedDM(FedAvg):
             if sum(counts) == 0:
                 continue
 
-            smallest_class_idx = counts.index(min(counts)) + 1  # +1 to account for background in `target`
+            # Determine label correction class index
+            # +1 to account for background in `target`
+            if self.cac_label_correction == "smallest":
+                labelcorrection_class_idx = counts.index(min(counts)) + 1
+            elif self.cac_label_correction == "largest":
+                labelcorrection_class_idx = counts.index(max(counts)) + 1
 
             # Clear all classes (incl. bg) at ambiguous pixels
             target[b, :, ...][..., ambiguity_mask] = 0
 
             # Set smallest foreground class at those pixels
-            target[b, smallest_class_idx, ...][..., ambiguity_mask] = 1
+            target[b, labelcorrection_class_idx, ...][..., ambiguity_mask] = 1
 
 
         # # FOR BINARY:
@@ -817,7 +832,7 @@ class FedDM(FedAvg):
                         raise NotImplementedError("No implementation for ONE client!")
 
                 # update grad_history
-                gamma = 0.99
+                gamma = self.gamma_hgd_smoothing
                 self.grad_history[key] = (
                     gamma * self.grad_history[key] + (1 - gamma) * grad_new
                 )
