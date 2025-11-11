@@ -51,7 +51,7 @@ class Client:
         )
 
         # other
-        self.current_epoch = 0
+        self.current_epoch = fl_args.get("start_epoch", 0)
 
     def fed_round(
         self,
@@ -127,17 +127,25 @@ class Client:
         self, server_model_weights: dict = {}, checkpoint_name: str = None
     ):
         """
-        Takes the server model weights and updates the client model with them by writing it as the current hceckpoint.
+        Takes the server model weights and updates the client model with them by writing it as the current checkpoint.
         """
         if not checkpoint_name:
             self.model.current_model_weights = server_model_weights
         elif checkpoint_name:
             # load "checkpoint_final.pth" from client results directory
             client_checkpoint = torch.load(
-                os.path.join(self.results_dir, "checkpoint_final.pth")
+                os.path.join(self.results_dir, "checkpoint_final.pth"),
+                weights_only=False,
             )
             # update this checkpoint's model weights with provided server model weights
-            client_checkpoint["model_state_dict"] = server_model_weights
+            if "model_state_dict" in client_checkpoint:
+                client_checkpoint["model_state_dict"] = server_model_weights
+            elif "network_weights" in client_checkpoint:
+                client_checkpoint["network_weights"] = server_model_weights
+            else:
+                raise ValueError(
+                    "Loaded client checkpoint does not contain model weights! Therefore cannot update with server model weights."
+                )
             # write torch checkpoint to clients directory
             torch.save(
                 client_checkpoint, os.path.join(self.results_dir, checkpoint_name)

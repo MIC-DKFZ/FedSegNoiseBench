@@ -12,10 +12,12 @@ class nnUNetv2_fed:
         fold: int = None,
         plan: str = None,
         trainer: str = None,
+        save_every: int = 50,
+        continue_training: bool = False,
         clean_validation_dataset: str = None,
         experiment_id: str = None,
         noisy_train_folder: str = None,
-        noise_ratio: float = None
+        noise_ratio: float = None,
     ):
         # set input args
         self.dataset_id = dataset_id
@@ -23,6 +25,7 @@ class nnUNetv2_fed:
         self.fold = fold
         self.plan = plan
         self.trainer = trainer
+        self.save_every = save_every
         self.clean_validation_folder = (
             os.path.join(
                 os.getenv("nnUNet_preprocessed"),
@@ -47,7 +50,7 @@ class nnUNetv2_fed:
         # initate model
         self.current_model_weights = None
         self.nnunet_trainer = None
-        self.run(initialize_fed_training=True)
+        self.run(initialize_fed_training=True, continue_training=continue_training)
 
     def run(
         self,
@@ -77,6 +80,7 @@ class nnUNetv2_fed:
             disable_checkpointing=False,
             val_with_best=False,
             device=torch.device("cuda"),
+            save_every=self.save_every,
             clean_validation_folder=self.clean_validation_folder,
             initialize_fed_training=initialize_fed_training,
             num_epochs=num_epochs,
@@ -89,5 +93,5 @@ class nnUNetv2_fed:
             fl_strategy=fl_strategy,
             feddm_client_peers=feddm_client_peers,
             noisy_train_folder=self.noisy_train_folder,
-            noise_ratio=self.noise_ratio
+            noise_ratio=self.noise_ratio,
         )

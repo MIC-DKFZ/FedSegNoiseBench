@@ -13,6 +13,21 @@ print(f"{sys.path=}")
 
 from orchestrator import Orchestrator
 from client import Client
+import json
+
+
+def cli_args_to_file(args, experiment_id: str):
+    """Log all CLI arguments to a JSON file in the results folder."""
+
+    results_dir = os.getenv("nnUNet_results") or os.getcwd()
+    os.makedirs(results_dir, exist_ok=True)
+
+    args_file = os.path.join(results_dir, f"ExperimentArgs_{experiment_id}.json")
+    args_dict = vars(args).copy()
+
+    # Ensure JSON serializable: fall back to string representation for unknown types
+    with open(args_file, "w") as f:
+        json.dump(args_dict, f, indent=2, default=str)
 
 
 def main(args):
@@ -21,6 +36,9 @@ def main(args):
 
     # # set up logging
     # setup_logging(args, experiment_id)
+
+    # log all cli args to file
+    cli_args_to_file(args, experiment_id)
 
     # setup clients
     clients = [
@@ -32,6 +50,7 @@ def main(args):
                 "fold": args.fold,
                 "plan": args.plan,
                 "trainer": args.trainer,
+                "save_every": args.save_every,
                 "clean_validation_dataset": (
                     args.clean_validation_dataset.split()[i]
                     if args.clean_validation_dataset
@@ -108,6 +127,11 @@ def check_cli_args(args):
             and args.clean_validation_dataset is not None
         ), "Arguments --noisy_train_folder and --clean_validation_dataset must be provided together or not at all"
 
+    # save_every should be positive and larger than num_local_epochs
+    assert (
+        args.save_every > 0 and args.save_every >= args.num_local_epochs
+    ), "--save_every must be positive and larger than or equal to --num_local_epochs"
+
 
 if __name__ == "__main__":
     # take CLI arguments
@@ -137,6 +161,12 @@ if __name__ == "__main__":
         type=str,
         default="nnUNetTrainer",
         help="Trainer of nnU-Net to use.",
+    )
+    parser.add_argument(
+        "--save_every",
+        type=int,
+        default=50,
+        help="Save model checkpoint every n epochs during local training on clients.",
     )
 
     # FL arguments
@@ -170,32 +200,32 @@ if __name__ == "__main__":
     parser.add_argument(
         "--feda3i_warmup_rounds_frac",
         type=float,
-        default=0.1,
+        default=None,  # 0.1,
         help="Number of warmup rounds for FedA3I.",
     )
     parser.add_argument(
         "--feda3i_interw",
         type=float,
-        default=0.5,
+        default=None,  # 0.5,
         help="Interpolation weight between expand and shrink clients for quality-based aggregation.",
     )
     # FedDM
     parser.add_argument(
         "--feddm_gamma_hgd_smoothing",
         type=float,
-        default=0.99,
+        default=None,  # 0.99,
         help="Smoothing parameter gamma for HDG in FedDM.",
     )
     parser.add_argument(
         "--feddm_ratio_cac_pixelselection",
         type=float,
-        default=0.6,
+        default=None,  # 0.6,
         help="Ratio for class-agnostic pixel selection in FedDM.",
     )
     parser.add_argument(
         "--feddm_cac_label_correction",
         type=str,
-        default="largest",
+        default=None,  # "largest",
         help="Label correction strategy for class-agnostic correction in FedDM: 'smallest' or 'largest'.",
     )
 

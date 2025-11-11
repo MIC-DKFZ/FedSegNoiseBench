@@ -13,6 +13,8 @@ class Orchestrator:
         self.clients = clients
         self.num_rounds = fl_args["num_rounds"]
         self.server_model_weights = None
+        # start FL round set for continuing experiments
+        self.start_fl_round = fl_args.get("start_fl_round", 0)
 
         # set FL strategy
         if fl_args["strategy"].lower() == "fedavg":
