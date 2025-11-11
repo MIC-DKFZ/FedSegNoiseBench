@@ -51,6 +51,7 @@ def main(args):
                 "plan": args.plan,
                 "trainer": args.trainer,
                 "save_every": args.save_every,
+                "num_gpus": args.num_gpus,
                 "clean_validation_dataset": (
                     args.clean_validation_dataset.split()[i]
                     if args.clean_validation_dataset
@@ -167,6 +168,12 @@ if __name__ == "__main__":
         type=int,
         default=50,
         help="Save model checkpoint every n epochs during local training on clients.",
+    )
+    parser.add_argument(
+        "--num_gpus",
+        type=int,
+        default=1,
+        help="Number of GPUs to use for local training on each client.",
     )
 
     # FL arguments

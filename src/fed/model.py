@@ -13,6 +13,7 @@ class nnUNetv2_fed:
         plan: str = None,
         trainer: str = None,
         save_every: int = 50,
+        num_gpus: int = 1,
         continue_training: bool = False,
         clean_validation_dataset: str = None,
         experiment_id: str = None,
@@ -50,10 +51,11 @@ class nnUNetv2_fed:
         # initate model
         self.current_model_weights = None
         self.nnunet_trainer = None
-        self.run(initialize_fed_training=True, continue_training=continue_training)
+        self.run(initialize_fed_training=True, continue_training=continue_training, num_gpus=num_gpus)
 
     def run(
         self,
+        num_gpus: int = 1,
         initialize_fed_training: bool = False,
         continue_training: bool = False,
         num_epochs: int = 1000,
@@ -73,7 +75,7 @@ class nnUNetv2_fed:
             trainer_class_name=self.trainer,
             plans_identifier=self.plan,
             pretrained_weights=None,
-            num_gpus=1,
+            num_gpus=num_gpus,
             export_validation_probabilities=False,
             continue_training=continue_training,
             only_run_validation=only_run_validation,
