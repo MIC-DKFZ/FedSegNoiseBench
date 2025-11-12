@@ -310,7 +310,7 @@ class FedDM(FedAvg):
             # Clear all classes (incl. bg) at ambiguous pixels
             target[b, :, ...][..., ambiguity_mask] = 0
 
-            # Set smallest foreground class at those pixels
+            # Set smallest/largest foreground class at those pixels
             target[b, labelcorrection_class_idx, ...][..., ambiguity_mask] = 1
 
         # # FOR BINARY:
@@ -333,6 +333,8 @@ class FedDM(FedAvg):
         # Step 2: Compute class-wise focal losses
         total_loss = None  # torch.tensor(0.0, device=probs.device, dtype=probs.dtype)
         total_pixels = torch.tensor(0.0, device=probs.device, dtype=probs.dtype)
+        idx_mask = torch.zeros_like(mask, device=probs.device, dtype=torch.bool)
+        loss_c = torch.zeros_like(probs, device=probs.device, dtype=probs.dtype)
 
         for class_idx in range(C):
             probs_c = probs[:, class_idx, ...]
@@ -342,22 +344,20 @@ class FedDM(FedAvg):
             # Weighting for focal loss
             if class_idx == 0:  # background
                 weight = (1 - alpha) * torch.pow(1 - probs_c, gamma)
-                idx_mask = torch.ones_like(
-                    probs_c, dtype=torch.bool
-                )  # apply to all pixels
             else:  # foreground
                 weight = alpha * torch.pow(1 - probs_c, gamma)
-                idx_mask = (clean_mask[:, class_idx - 1, ...] == 1) | (
+                idx_mask[:, class_idx, ...] = (clean_mask[:, class_idx - 1, ...] == 1) | (
                     clean_mask[:, class_idx - 1, ...] == 2
                 )
+            # compute class-wise loss
+            loss_c[:, class_idx, ...] = -weight * mask_c * log_p_c
 
-            # class_loss = -weight * mask_c * log_p_c
-            # total_loss += class_loss[idx_mask].sum()
-            term = (-weight * mask_c * log_p_c)[idx_mask].sum()
-            total_loss = term if total_loss is None else (total_loss + term)
-            total_pixels += idx_mask.sum()
+        # determine idx_mask for bg class, i.e. set pixels in bg's idx_mask to True is False in all fg classes
+        fg_idx_mask_sum = idx_mask[:, 1:, ...].sum(dim=1)
+        idx_mask[:, 0, ...] = fg_idx_mask_sum == 0
 
-        final_loss = total_loss / (total_pixels + self.eps)
+        # mask total_loss with idx_mask
+        final_loss = loss_c[idx_mask].sum() / (idx_mask.sum() + self.eps)
         return final_loss
 
     # def pixel_selection_by_Peers(self, logits, logits1, logits2, labels, p=0):
