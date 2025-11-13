@@ -115,6 +115,12 @@ class Client:
                 very_last_fl_predict_round=very_last_fl_predict_round,
                 only_run_validation=only_run_validation,
             )
+
+        # IOP-FL: compute personalized model after local training
+        if fl_strategy.name == "iopfl" and not very_last_fl_predict_round:
+            fl_strategy.compute_trajectory(self.model.current_model_weights, self.client_id)
+
+        # update current epoch
         self.current_epoch = target_num_epochs
 
         # log time

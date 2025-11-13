@@ -79,6 +79,7 @@ def main(args):
         fl_args={
             "num_rounds": args.num_rounds,
             "strategy": args.noise_mitigation_method,
+            # FedA3I
             "feda3i_warmup_rounds_frac": (
                 args.feda3i_warmup_rounds_frac
                 if args.noise_mitigation_method.lower() == "feda3i"
@@ -89,6 +90,7 @@ def main(args):
                 if args.noise_mitigation_method.lower() == "feda3i"
                 else None
             ),
+            # FedDM
             "feddm_gamma_hgd_smoothing": (
                 args.feddm_gamma_hgd_smoothing
                 if args.noise_mitigation_method.lower() == "feddm"
@@ -102,6 +104,12 @@ def main(args):
             "feddm_cac_label_correction": (
                 args.feddm_cac_label_correction
                 if args.noise_mitigation_method.lower() == "feddm"
+                else None
+            ),
+            # IOP-FL
+            "iopfl_alpha": (
+                args.iopfl_alpha
+                if args.noise_mitigation_method.lower() == "iopfl"
                 else None
             ),
         },
@@ -234,6 +242,13 @@ if __name__ == "__main__":
         type=str,
         default=None,  # "largest",
         help="Label correction strategy for class-agnostic correction in FedDM: 'smallest' or 'largest'.",
+    )
+    # IOP-FL
+    parser.add_argument(
+        "--iopfl_alpha",
+        type=float,
+        default=None,  # 0.9,
+        help="Weight for incorporation of model history in trajectory for IOP-FL.",
     )
 
     # other arguments

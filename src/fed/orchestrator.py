@@ -6,6 +6,7 @@ from client import Client
 from methods.fedavg.fedavg import FedAvg
 from methods.feda3i.feda3i import FedA3I
 from methods.feddm.feddm import FedDM
+from methods.iopfl.iopfl import IOPFL
 
 
 class Orchestrator:
@@ -32,6 +33,8 @@ class Orchestrator:
                 fl_args["feddm_ratio_cac_pixelselection"],
                 fl_args["feddm_cac_label_correction"],
             )
+        elif fl_args["strategy"].lower() == "iopfl":
+            self.fl_strategy = IOPFL(self.clients, fl_args["iopfl_alpha"])
         else:
             raise NotImplementedError(
                 f"Federated learning strategy {fl_args['strategy']} not implemented!"
@@ -97,7 +100,12 @@ class Orchestrator:
                     "Collaborative Annotation Calibration and Hierarchical Gradient De-Conflicting!"
                 )
                 # compute server_model_weights via FedDM
-                self.aggregate(strategy=self.fl_strategy.name)
+                self.aggregate(strategy=self.fl_strategy.name)            
+            # IOP-FL
+            if self.fl_strategy.name == "iopfl":
+                logging.info("Aggregating model weights with FedAvg strategy for IOP-FL!")
+                # compute server_model_weights via FedAvg
+                self.aggregate(strategy="fedavg")
             else:
                 raise NotImplementedError(
                     f"Federated learning strategy {self.fl_strategy.name} not implemented!"
@@ -155,5 +163,12 @@ class Orchestrator:
             for client in self.clients:
                 client.update_model(self.server_model_weights)
         elif checkpoint_name == "server_checkpoint_final.pth":
-            for client in self.clients:
-                client.update_model(self.server_model_weights, checkpoint_name)
+            if self.fl_strategy.name == "iopfl":
+                for client in self.clients:
+                    client.update_model(
+                        self.fl_strategy.trajectory[client.client_id], 
+                        checkpoint_name
+                    )
+            else:
+                for client in self.clients:
+                    client.update_model(self.server_model_weights, checkpoint_name)
