@@ -102,7 +102,7 @@ class Orchestrator:
                 # compute server_model_weights via FedDM
                 self.aggregate(strategy=self.fl_strategy.name)            
             # IOP-FL
-            if self.fl_strategy.name == "iopfl":
+            elif self.fl_strategy.name == "iopfl":
                 logging.info("Aggregating model weights with FedAvg strategy for IOP-FL!")
                 # compute server_model_weights via FedAvg
                 self.aggregate(strategy="fedavg")
