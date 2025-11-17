@@ -123,7 +123,7 @@ def get_experiment_args(exp_id: str):
         len(set(last_epochs)) == 1
     ), "All clients must have the same last epoch to restart the experiment!"
     start_epoch = last_epochs[0]
-    start_fl_round = start_epoch // num_local_epochs
+    start_fl_round = start_epoch // num_local_epochs - 1
 
     # return all extracted args
     return (
