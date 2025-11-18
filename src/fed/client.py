@@ -70,15 +70,21 @@ class Client:
         target_num_epochs = self.current_epoch + self.fl_args["num_local_epochs"]
 
         # run local training
-        last_fl_round = (
-            abs(
-                target_num_epochs
-                - (self.fl_args["num_rounds"] * self.fl_args["num_local_epochs"])
+        
+        # determine if this is the last FL round (assumes fl_round is 0-indexed)
+        total_rounds = int(self.fl_args.get("num_rounds", 0))
+        if total_rounds > 0:
+            last_fl_round = (fl_round == total_rounds - 1)
+        else:
+            # fallback: epoch-based check if num_rounds not provided
+            total_epochs = int(self.fl_args.get("num_rounds", 0)) * int(
+            self.fl_args.get("num_local_epochs", 0)
             )
-            == 0
-        )
+            last_fl_round = target_num_epochs >= total_epochs
         logging.info(
-            f"{target_num_epochs=} ; {self.fl_args['num_rounds']=} ; {self.fl_args['num_local_epochs']=} ==> Setting {last_fl_round}"
+            f"fl_round={fl_round}; total_rounds={total_rounds}; "
+            f"num_local_epochs={self.fl_args.get('num_local_epochs')}; "
+            f"target_num_epochs={target_num_epochs} => last_fl_round={last_fl_round}"
         )
 
         # run client's local training
