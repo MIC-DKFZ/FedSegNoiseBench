@@ -99,6 +99,7 @@ def get_experiment_args(exp_id: str):
         "feddm_gamma_hgd_smoothing",
         "feddm_ratio_cac_pixelselection",
         "feddm_cac_label_correction",
+        "iopfl_alpha",
     ]
     (
         configuration,
@@ -115,6 +116,7 @@ def get_experiment_args(exp_id: str):
         feddm_gamma_hgd_smoothing,
         feddm_ratio_cac_pixelselection,
         feddm_cac_label_correction,
+        iopfl_alpha,
     ) = [exp_cli_args.get(k) for k in keys]
 
     # get last checkpoint epoch to continue training from there
@@ -145,6 +147,7 @@ def get_experiment_args(exp_id: str):
         feddm_gamma_hgd_smoothing,
         feddm_ratio_cac_pixelselection,
         feddm_cac_label_correction,
+        iopfl_alpha,
         start_epoch,
         start_fl_round,
     )
@@ -172,6 +175,7 @@ def main(args):
         feddm_gamma_hgd_smoothing,
         feddm_ratio_cac_pixelselection,
         feddm_cac_label_correction,
+        iopfl_alpha,
         start_epoch,
         start_fl_round,
     ) = get_experiment_args(args.exp_id)
@@ -234,6 +238,11 @@ def main(args):
             "feddm_cac_label_correction": (
                 feddm_cac_label_correction
                 if noise_mitigation_method.lower() == "feddm"
+                else None
+            ),
+            "iopfl_alpha": (
+                iopfl_alpha
+                if noise_mitigation_method.lower() == "iopfl"
                 else None
             ),
         },
