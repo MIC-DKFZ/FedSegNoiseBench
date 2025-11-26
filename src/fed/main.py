@@ -106,6 +106,11 @@ def main(args):
                 if args.noise_mitigation_method.lower() == "feddm"
                 else None
             ),
+            "feddm_loss": (
+                args.feddm_loss
+                if args.noise_mitigation_method.lower() == "feddm"
+                else None
+            ),
             # IOP-FL
             "iopfl_alpha": (
                 args.iopfl_alpha
@@ -242,6 +247,12 @@ if __name__ == "__main__":
         type=str,
         default=None,  # "largest",
         help="Label correction strategy for class-agnostic correction in FedDM: 'smallest' or 'largest'.",
+    )
+    parser.add_argument(
+        "--feddm_loss",
+        type=str,
+        default=None,   # feddm_focal_loss
+        help="Loss function to use in FedDM: 'feddm_nnunets_loss' or 'feddm_focal_loss' (theirs).",
     )
     # IOP-FL
     parser.add_argument(

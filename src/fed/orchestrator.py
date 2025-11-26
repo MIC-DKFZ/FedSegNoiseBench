@@ -32,6 +32,7 @@ class Orchestrator:
                 fl_args["feddm_gamma_hgd_smoothing"],
                 fl_args["feddm_ratio_cac_pixelselection"],
                 fl_args["feddm_cac_label_correction"],
+                fl_args["feddm_loss"]
             )
         elif fl_args["strategy"].lower() == "iopfl":
             self.fl_strategy = IOPFL(self.clients, fl_args["iopfl_alpha"])

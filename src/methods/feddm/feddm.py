@@ -1,4 +1,5 @@
 import copy
+import datetime
 from functools import reduce
 from operator import add
 from typing import Any, Tuple, Optional, cast
@@ -29,6 +30,7 @@ class FedDM(FedAvg):
         feddm_gamma_hgd_smoothing: float = None,
         feddm_ratio_cac_pixelselection: float = None,
         feddm_cac_label_correction: str = None,
+        feddm_loss: str = None,
     ):
         super().__init__(clients=clients)
 
@@ -81,9 +83,11 @@ class FedDM(FedAvg):
         self.ratio = feddm_ratio_cac_pixelselection  # ratio for pixel selection
         # feddm stop epoch ~= 1/4 of total training epochs
         self.stop_epoch = self.clients[0].fl_args["num_rounds"] // 4
+        assert self.stop_epoch > 0, "FedDM stop_epoch must be > 0!"
         # self.stop_epoch = 50
         self.eps = 1e-6
         self.cac_label_correction = feddm_cac_label_correction
+        self.feddm_loss = feddm_loss
 
         # HDG parameters
         self.gamma_hgd_smoothing = feddm_gamma_hgd_smoothing
@@ -109,6 +113,7 @@ class FedDM(FedAvg):
         net: Any,
         batch: Any,
         epoch: int,
+        loss_fn: Any = None,
         optimizer: Any = None,
         peer_models=None,
     ) -> Tuple[Tensor, Tensor, Optional[Tensor], Optional[Tensor], Optional[Tensor]]:
@@ -131,6 +136,7 @@ class FedDM(FedAvg):
             )
         )
         peer_model_nearst = nnunet_trainer_w_new_weights_nearst.network.eval()
+        peer_model_nearst.to("cpu")
         # get farthest peer model and set weights
         peer_model_farthest_statedict = self.clients_peers[next(iter(peer_models))][
             "farthest"
@@ -143,6 +149,7 @@ class FedDM(FedAvg):
             )
         )
         peer_model_farthest = nnunet_trainer_w_new_weights_farthest.network.eval()
+        peer_model_farthest.to("cpu")
 
         # define pixel selection ratio
         p = 1 - (self.ratio * epoch / self.stop_epoch)
@@ -153,20 +160,22 @@ class FedDM(FedAvg):
         data = batch["data"]
         target = batch["target"]
         data = data.to(self.device, non_blocking=True)
-        # if isinstance(target, list):
-        #     target = [i.to(self.device, non_blocking=True) for i in target]
-        # else:
-        #     target = target.to(self.device, non_blocking=True)
-        onehot_highres_targets_ = F.one_hot(
-            target[0].squeeze(1).long(), num_classes=self.n_classes
-        )
-        onehot_highres_targets = (
-            onehot_highres_targets_.permute(0, 3, 1, 2)
-            if not is_3d
-            else onehot_highres_targets_.permute(0, 4, 1, 2, 3)
-        )
-        onehot_highres_targets = onehot_highres_targets.to(self.device)
 
+        # one-hot encode target (on all resolution levels)
+        onehot_highres_targets = []
+        for t in target:
+            onehot_highres_target_ = F.one_hot(
+                t.squeeze(1).long(), num_classes=self.n_classes
+            )
+            onehot_highres_target = (
+                onehot_highres_target_.permute(0, 3, 1, 2)
+                if not is_3d
+                else onehot_highres_target_.permute(0, 4, 1, 2, 3)
+            )
+            onehot_highres_targets.append(onehot_highres_target.to(self.device))
+        print(f"One-hot encoded target's computed: {datetime.datetime.now()}")
+
+        # prepare for training step
         optimizer.zero_grad(set_to_none=True)
         net.train()
         # Autocast can be annoying
@@ -180,37 +189,85 @@ class FedDM(FedAvg):
         ):
             # output are logits, NOT softmax-ed outputs
             output = net(data)
+        print(f"Model prediction computed: {datetime.datetime.now()}")
 
-            # just logits, not softmax-ed outputs
-            with torch.no_grad():
-                pred_logits1 = peer_model_nearst(data)
-                pred_logits2 = peer_model_farthest(data)
+        # just logits, not softmax-ed outputs
+        # prediction of both peer models on GPU
+        with torch.no_grad(), torch.autocast(self.device.type, enabled=False):
+            peer_model_nearst.to(self.device)
+            peer_model_nearst = peer_model_nearst.float()
+            pred_logits1 = peer_model_nearst(data.float())
+            pred_logits1 = [
+                logit.detach().to("cpu") for logit in pred_logits1
+            ]  # Move each tensor to CPU after prediction
+            peer_model_nearst.to("cpu")
 
-            # Local-CAC to obtain corrected mask
+            peer_model_farthest.to(self.device)
+            peer_model_farthest = peer_model_farthest.float()
+            pred_logits2 = peer_model_farthest(data.float())
+            pred_logits2 = [
+                logit.detach().to("cpu") for logit in pred_logits2
+            ]  # Move each tensor to CPU after prediction
+            peer_model_farthest.to("cpu")
+        print(f"Peer models predictions computed: {datetime.datetime.now()}")
+
+        # Local-CAC to obtain corrected mask (on all resolution levels)
+        clean_masks = []
+        for i in range(len(onehot_highres_targets)):
             clean_mask = self.pixel_selection_by_Peers(
-                output[0].detach(),
-                pred_logits1[0].detach(),
-                pred_logits2[0].detach(),
-                onehot_highres_targets,
+                output[i].detach().to("cpu"),
+                pred_logits1[i].detach(),
+                pred_logits2[i].detach(),
+                onehot_highres_targets[i].detach().to("cpu"),
                 p=p,
                 is_3d=is_3d,
+                device=torch.device("cpu"),
             )
+            clean_masks.append(clean_mask)
+        print(f"Ambigous (clean) masks computed: {datetime.datetime.now()}")
 
-            # softmax model predictions
-            pred_probs: Tensor = F.softmax(self.sm_temp * output[0], dim=1)
+        # softmax each output (all resolution levels)
+        pred_probs = [F.softmax(self.sm_temp * out, dim=1) for out in output]
 
-            # # check if all tensors used for loss calculation require grad
-            # print(f"pred_probs: {pred_probs.requires_grad=}, grad_fn: {pred_probs.grad_fn=}")
-            # print(f"onehot_highres_targets: {onehot_highres_targets.requires_grad=}, grad_fn: {onehot_highres_targets.grad_fn=}")
-            # print(f"clean_mask: {clean_mask.requires_grad=}, grad_fn: {clean_mask.grad_fn=}")
+        # # check if all tensors used for loss calculation require grad
+        # print(f"pred_probs: {pred_probs.requires_grad=}, grad_fn: {pred_probs.grad_fn=}")
+        # print(f"onehot_highres_targets: {onehot_highres_targets.requires_grad=}, grad_fn: {onehot_highres_targets.grad_fn=}")
+        # print(f"clean_mask: {clean_mask.requires_grad=}, grad_fn: {clean_mask.grad_fn=}")
 
-            # label correction and loss computation
+        # label correction (on all resolution levels)
+        corrected_targets = []
+        for i in range(len(onehot_highres_targets)):
+            corrected_target = self.label_correction(
+                target=onehot_highres_targets[i], clean_mask=clean_masks[i], is_3d=is_3d
+            )
+            corrected_targets.append(corrected_target)
+        print(f"Ground-truth labels corrected: {datetime.datetime.now()}")
+
+        # loss computation
+        if self.feddm_loss == "feddm_focal_loss":
+            # their loss implementation
             loss1 = self.Focal_Cross_Entropy(
-                probs=pred_probs, target=onehot_highres_targets, clean_mask=clean_mask, is_3d=is_3d
+                probs=pred_probs,
+                target=corrected_targets,
+                clean_mask=clean_mask,
+                is_3d=is_3d,
             )
             losses = [loss1]
             loss = reduce(add, losses)
             assert loss.shape == (), loss.shape
+        if self.feddm_loss == "feddm_nnunets_loss":
+            # Autocast can be annoying
+            # If the device_type is 'cpu' then it's slow as heck and needs to be disabled.
+            # If the device_type is 'mps' then it will complain that mps is not implemented, even if enabled=False is set. Whyyyyyyy. (this is why we don't make use of enabled=False)
+            # So autocast will only be active if we have a cuda device.
+            with (
+                autocast(self.device.type, enabled=True)
+                if self.device.type == "cuda"
+                else dummy_context()
+            ):
+                # take loss configured in nnunet_trainer
+                loss = loss_fn(output, corrected_targets)
+        print(f"Loss computed: {datetime.datetime.now()}")
 
         # Not sure whether necessary, but reassign correct weigths to peer models
         _, _ = self.assign_model_weights_to_trainer(
@@ -233,6 +290,7 @@ class FedDM(FedAvg):
             torch.nn.utils.clip_grad_norm_(net.parameters(), 12)
             optimizer.step()
             torch.cuda.empty_cache()
+        print(datetime.datetime.now())
 
         return {"loss": loss.detach().cpu().numpy()}
 
@@ -254,24 +312,19 @@ class FedDM(FedAvg):
 
         return client_nnunet_trainer, current_client_model_weights
 
-    def Focal_Cross_Entropy(self, probs, target, clean_mask, alpha=0.25, gamma=2.0, is_3d=False):
+    def label_correction(self, target, clean_mask, is_3d=False):
         """
-        Correct ground_trough seg mask and compute multi-class focal loss.
-        Ambiguous pixels in clean_mask are corrected to smallest foreground class in clean_mask.
+        Multi-class label correction.
+        Ambiguous pixels in clean_mask are corrected to biggest/smallest fg class depending on self.cac_label_correction.
 
         Input:
-        - probs: #TODO
         - target: ground-truth mask including bg
         - clean_mask: ambiguity mask with px_val=1 indicating certain fg, and px_val=2 indicating ambiguous fg; determined via peer models
-        - alpha: focal loss alpha
-        - gamma: focal loss gamma
         - is_3d: whether the input is 3D
-
-        Notes:
-        - Uncertain fg pixels are always set to bg
         """
-        # Clone target to avoid in-place modification issues
+        # clone target to avoid in-place modification issues
         target = target.clone()
+        # handle 2D and 3D cases
         if not is_3d and target.ndim == 4:
             B, C, H, W = target.shape  # C = num_classes
             _, F, _, _ = clean_mask.shape  # F = num foreground classes (C - 1)
@@ -281,13 +334,7 @@ class FedDM(FedAvg):
         else:
             raise ValueError("Target must be 4D or 5D tensor.")
 
-        ########################################################
-        # LABEL CORRECTION: START
-        ########################################################
-
-        # FOR MULTI-CLASS
-
-        # Step 1: Apply correction to target where label is uncertain (==2)
+        # Apply correction to target where label is uncertain (==2)
         # set uncertain pixels to smallest/largest fg class (dependent on self.cac_label_correction)
         for b in range(B):
             ambiguity_mask = (clean_mask[b] == 2).any(dim=0)  # shape: HxW or DxHxW
@@ -313,24 +360,41 @@ class FedDM(FedAvg):
             # Set smallest/largest foreground class at those pixels
             target[b, labelcorrection_class_idx, ...][..., ambiguity_mask] = 1
 
-        # # FOR BINARY:
-        # # set uncertain pixels to background
-        # for class_idx in range(1, C):  # Skip background at index 0
-        #     target[:, 0, ...][
-        #         clean_mask[:, class_idx - 1, ...] == 2
-        #     ] = 1  # set background
-        #     target[:, class_idx, ...][
-        #         clean_mask[:, class_idx - 1, ...] == 2
-        #     ] = 0  # clear class
+        return target
 
-        ########################################################
-        # LABEL CORRECTION: END
-        ########################################################
+    def Focal_Cross_Entropy(
+        self, probs, target, clean_mask, alpha=0.25, gamma=2.0, is_3d=False
+    ):
+        """
+        Focal Cross-Entropy Loss with pixel selection via clean_mask.
+
+        Input:
+        - probs: softmax-ed model predictions
+        - target: ground-truth mask including bg
+        - clean_mask: ambiguity mask with px_val=1 indicating certain fg, and px_val=2 indicating ambiguous fg; determined via peer models
+        - alpha: focal loss alpha
+        - gamma: focal loss gamma
+        - is_3d: whether the input is 3D
+
+        Notes:
+        - Uncertain fg pixels are always set to bg
+        """
+        # clone target to avoid in-place modification issues
+        target = target.clone()
+        # handle 2D and 3D cases
+        if not is_3d and target.ndim == 4:
+            B, C, H, W = target.shape  # C = num_classes
+            _, F, _, _ = clean_mask.shape  # F = num foreground classes (C - 1)
+        elif is_3d and target.ndim == 5:
+            B, C, H, W, D = target.shape
+            _, F, _, _, _ = clean_mask.shape
+        else:
+            raise ValueError("Target must be 4D or 5D tensor.")
 
         mask: Tensor = cast(Tensor, target.type(torch.float32))
         log_p: Tensor = (probs + self.eps).log()
 
-        # Step 2: Compute class-wise focal losses
+        # compute class-wise focal losses
         total_loss = None  # torch.tensor(0.0, device=probs.device, dtype=probs.dtype)
         total_pixels = torch.tensor(0.0, device=probs.device, dtype=probs.dtype)
         idx_mask = torch.zeros_like(mask, device=probs.device, dtype=torch.bool)
@@ -342,13 +406,15 @@ class FedDM(FedAvg):
             mask_c = mask[:, class_idx, ...]
 
             # Weighting for focal loss
-            if class_idx == 0:  # background
+            # background
+            if class_idx == 0:
                 weight = (1 - alpha) * torch.pow(1 - probs_c, gamma)
-            else:  # foreground
+            # foreground
+            else:
                 weight = alpha * torch.pow(1 - probs_c, gamma)
-                idx_mask[:, class_idx, ...] = (clean_mask[:, class_idx - 1, ...] == 1) | (
-                    clean_mask[:, class_idx - 1, ...] == 2
-                )
+                idx_mask[:, class_idx, ...] = (
+                    clean_mask[:, class_idx - 1, ...] == 1
+                ) | (clean_mask[:, class_idx - 1, ...] == 2)
             # compute class-wise loss
             loss_c[:, class_idx, ...] = -weight * mask_c * log_p_c
 
@@ -454,6 +520,7 @@ class FedDM(FedAvg):
         p: float = 0.0,  # fraction of class pixels to keep as "selected"
         min_fg_keep: int = 5,  # safeguard: if floor(p*|class|) <= this, mark all class pixels as clean
         is_3d: bool = False,
+        device: torch.device = None,
     ) -> Tensor:
         """
         Returns:
@@ -510,9 +577,9 @@ class FedDM(FedAvg):
                 if fg_num_selected <= min_fg_keep:
                     # Safeguard: if too small, mark all class-k pixels as clean (=1)
                     if is_3d:
-                        cm_tmp = torch.zeros((H, W, D), device=self.device)
+                        cm_tmp = torch.zeros((H, W, D), device=device)
                     else:
-                        cm_tmp = torch.zeros((H, W), device=self.device)
+                        cm_tmp = torch.zeros((H, W), device=device)
                     cm_tmp[fg_idx] = 1.0
                     clean_mask_fg[b, k] = cm_tmp
                     continue
@@ -540,18 +607,18 @@ class FedDM(FedAvg):
 
                 # Build per-image, per-class triage grid
                 if is_3d:
-                    cm_tmp = torch.zeros((H, W, D), device=self.device)
+                    cm_tmp = torch.zeros((H, W, D), device=device)
                 else:
-                    cm_tmp = torch.zeros((H, W), device=self.device)
+                    cm_tmp = torch.zeros((H, W), device=device)
 
                 # Map 1D selections back into 2D at fg_idx
-                status = torch.zeros_like(losses, device=self.device)
+                status = torch.zeros_like(losses, device=device)
                 # Set uncertain (main ⊕ peer1) -- no overwrite of clean since xor is false if sel&sel1
                 status[sel ^ sel1] = 2.0
                 # Set clean (main ∧ peer2)
                 status[sel & sel2] = 1.0
 
-                cm_tmp[fg_idx] = status
+                cm_tmp[fg_idx] = status.to(cm_tmp.dtype)
                 clean_mask_fg[b, k] = cm_tmp
 
         # Note: We intentionally DO NOT write background into every foreground channel.
