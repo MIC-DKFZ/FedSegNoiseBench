@@ -289,7 +289,6 @@ class FedDM(FedAvg):
             torch.nn.utils.clip_grad_norm_(net.parameters(), 12)
             optimizer.step()
             torch.cuda.empty_cache()
-        print(datetime.datetime.now())
 
         return {"loss": loss.detach().cpu().numpy()}
 
