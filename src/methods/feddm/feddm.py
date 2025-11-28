@@ -172,12 +172,15 @@ class FedDM(FedAvg):
                 if not is_3d
                 else onehot_highres_target_.permute(0, 4, 1, 2, 3)
             )
-            onehot_highres_targets.append(onehot_highres_target.to(self.device))
-        print(f"One-hot encoded target's computed: {datetime.datetime.now()}")
+            onehot_highres_targets.append(onehot_highres_target)
 
         # prepare for training step
         optimizer.zero_grad(set_to_none=True)
         net.train()
+        # set net to self.device if net's device is cpu
+        if next(net.parameters()).device.type == "cpu":
+            net.to(self.device)
+
         # Autocast can be annoying
         # If the device_type is 'cpu' then it's slow as heck and needs to be disabled.
         # If the device_type is 'mps' then it will complain that mps is not implemented, even if enabled=False is set. Whyyyyyyy. (this is why we don't make use of enabled=False)
@@ -189,27 +192,21 @@ class FedDM(FedAvg):
         ):
             # output are logits, NOT softmax-ed outputs
             output = net(data)
-        print(f"Model prediction computed: {datetime.datetime.now()}")
 
-        # just logits, not softmax-ed outputs
-        # prediction of both peer models on GPU
-        with torch.no_grad(), torch.autocast(self.device.type, enabled=False):
-            peer_model_nearst.to(self.device)
-            peer_model_nearst = peer_model_nearst.float()
-            pred_logits1 = peer_model_nearst(data.float())
-            pred_logits1 = [
-                logit.detach().to("cpu") for logit in pred_logits1
-            ]  # Move each tensor to CPU after prediction
-            peer_model_nearst.to("cpu")
+            # prediction of both peer models on GPU
+            # just logits, not softmax-ed outputs
+            with torch.no_grad():
+                peer_model_nearst.to(self.device)
+                pred_logits1 = peer_model_nearst(data)
+                # move each tensor to CPU after prediction
+                pred_logits1 = [logit.detach().to("cpu") for logit in pred_logits1]
+                peer_model_nearst.to("cpu")
 
-            peer_model_farthest.to(self.device)
-            peer_model_farthest = peer_model_farthest.float()
-            pred_logits2 = peer_model_farthest(data.float())
-            pred_logits2 = [
-                logit.detach().to("cpu") for logit in pred_logits2
-            ]  # Move each tensor to CPU after prediction
-            peer_model_farthest.to("cpu")
-        print(f"Peer models predictions computed: {datetime.datetime.now()}")
+                peer_model_farthest.to(self.device)
+                pred_logits2 = peer_model_farthest(data)
+                # move each tensor to CPU after prediction
+                pred_logits2 = [logit.detach().to("cpu") for logit in pred_logits2]
+                peer_model_farthest.to("cpu")
 
         # Local-CAC to obtain corrected mask (on all resolution levels)
         clean_masks = []
@@ -224,7 +221,6 @@ class FedDM(FedAvg):
                 device=torch.device("cpu"),
             )
             clean_masks.append(clean_mask)
-        print(f"Ambigous (clean) masks computed: {datetime.datetime.now()}")
 
         # softmax each output (all resolution levels)
         pred_probs = [F.softmax(self.sm_temp * out, dim=1) for out in output]
@@ -240,8 +236,12 @@ class FedDM(FedAvg):
             corrected_target = self.label_correction(
                 target=onehot_highres_targets[i], clean_mask=clean_masks[i], is_3d=is_3d
             )
+            corrected_target = (
+                corrected_target.to(self.device)
+                if corrected_target.device.type == "cpu"
+                else corrected_target
+            )
             corrected_targets.append(corrected_target)
-        print(f"Ground-truth labels corrected: {datetime.datetime.now()}")
 
         # loss computation
         if self.feddm_loss == "feddm_focal_loss":
@@ -267,7 +267,6 @@ class FedDM(FedAvg):
             ):
                 # take loss configured in nnunet_trainer
                 loss = loss_fn(output, corrected_targets)
-        print(f"Loss computed: {datetime.datetime.now()}")
 
         # Not sure whether necessary, but reassign correct weigths to peer models
         _, _ = self.assign_model_weights_to_trainer(
@@ -689,8 +688,10 @@ class FedDM(FedAvg):
                     client_idx=client_idx, new_statedict=client_checkpoint
                 )
             )
-            # get nnunet_trainer of current client
+            # get nnunet_trainer of current client, set to eval mode, ensure on self.device
             model = client_nnunet_trainer.network
+            if next(model.parameters()).device.type == "cpu":
+                model.to(self.device)
 
             model.eval()
             with torch.no_grad():
@@ -699,6 +700,7 @@ class FedDM(FedAvg):
                     gauss_noise_ = self.gauss_noise[
                         i * self.batch_size : (i + 1) * self.batch_size
                     ]
+
                     out_ = model(gauss_noise_)
                     out = torch.softmax(out_[0], dim=1)
                     self.embeddings[client_idx][
