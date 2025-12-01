@@ -172,7 +172,6 @@ class FedDM(FedAvg):
         Original: https://github.com/CityU-AIM-Group/FedDM/blob/main/main.py#L207
         Adapted to work with nnUNetv2 and as nnUNetv2's def train_step().
         """
-        print(f"Start FedDM train step: \t {datetime.datetime.now()}")
         # determine whether processed images are 2d or 3d
         is_3d = len(batch["data"].shape) == 5  # B, C, H, W, D
 
@@ -185,7 +184,6 @@ class FedDM(FedAvg):
         data = batch["data"]
         target = batch["target"]
         data = data.to(self.device, non_blocking=True)
-        print(f"Got data and models: \t {datetime.datetime.now()}")
 
         # one-hot encode target (on all resolution levels)
         onehot_highres_targets = []
@@ -199,7 +197,6 @@ class FedDM(FedAvg):
                 else onehot_highres_target_.permute(0, 4, 1, 2, 3)
             )
             onehot_highres_targets.append(onehot_highres_target)
-        print(f"One-hot encoded targets: \t {datetime.datetime.now()}")
 
         # prepare for training step
         optimizer.zero_grad(set_to_none=True)
@@ -207,7 +204,6 @@ class FedDM(FedAvg):
         # set net to self.device if net's device is cpu
         if next(net.parameters()).device.type == "cpu":
             net.to(self.device)
-        print(f"Prep-ed model and optimizer: \t {datetime.datetime.now()}")
 
         # Autocast can be annoying
         # If the device_type is 'cpu' then it's slow as heck and needs to be disabled.
@@ -220,7 +216,6 @@ class FedDM(FedAvg):
         ):
             # output are logits, NOT softmax-ed outputs
             output = net(data)
-            print(f"Model forward pass done: \t {datetime.datetime.now()}")
 
             # prediction of both peer models on GPU
             # just logits, not softmax-ed outputs
@@ -236,7 +231,6 @@ class FedDM(FedAvg):
                 # move each tensor to CPU after prediction
                 pred_logits2 = [logit.detach().to("cpu") for logit in pred_logits2]
                 self.peer_model_farthest.to("cpu")
-            print(f"Peer model predictions done: \t {datetime.datetime.now()}")
 
         # Local-CAC to obtain corrected mask (on all resolution levels)
         clean_masks = []
@@ -251,7 +245,6 @@ class FedDM(FedAvg):
                 device=torch.device("cpu"),
             )
             clean_masks.append(clean_mask)
-        print(f"Local-CAC done: \t {datetime.datetime.now()}")
 
         # softmax each output (all resolution levels)
         pred_probs = [F.softmax(self.sm_temp * out, dim=1) for out in output]
@@ -268,7 +261,6 @@ class FedDM(FedAvg):
                 else corrected_target
             )
             corrected_targets.append(corrected_target)
-        print(f"Label correction done: \t {datetime.datetime.now()}")
 
         # loss computation
         if self.feddm_loss == "feddm_focal_loss":
@@ -298,7 +290,6 @@ class FedDM(FedAvg):
             raise NotImplementedError(
                 f"FedDM loss {self.feddm_loss} not implemented!"
             )
-        print(f"Loss computation done: \t {datetime.datetime.now()}")
 
         # Backward
         assert loss.requires_grad, "Loss does not require grad!"
@@ -307,7 +298,6 @@ class FedDM(FedAvg):
             torch.nn.utils.clip_grad_norm_(net.parameters(), 12)
             optimizer.step()
             torch.cuda.empty_cache()
-        print(f"Backpropagation done: \t {datetime.datetime.now()}")
 
         return {"loss": loss.detach().cpu().numpy()}
     
