@@ -99,6 +99,7 @@ def get_experiment_args(exp_id: str):
         "feddm_gamma_hgd_smoothing",
         "feddm_ratio_cac_pixelselection",
         "feddm_cac_label_correction",
+        "feddm_loss"
         "iopfl_alpha",
     ]
     (
@@ -116,6 +117,7 @@ def get_experiment_args(exp_id: str):
         feddm_gamma_hgd_smoothing,
         feddm_ratio_cac_pixelselection,
         feddm_cac_label_correction,
+        feddm_loss,
         iopfl_alpha,
     ) = [exp_cli_args.get(k) for k in keys]
 
@@ -147,6 +149,7 @@ def get_experiment_args(exp_id: str):
         feddm_gamma_hgd_smoothing,
         feddm_ratio_cac_pixelselection,
         feddm_cac_label_correction,
+        feddm_loss,
         iopfl_alpha,
         start_epoch,
         start_fl_round,
@@ -175,6 +178,7 @@ def main(args):
         feddm_gamma_hgd_smoothing,
         feddm_ratio_cac_pixelselection,
         feddm_cac_label_correction,
+        feddm_loss,
         iopfl_alpha,
         start_epoch,
         start_fl_round,
@@ -237,6 +241,11 @@ def main(args):
             ),
             "feddm_cac_label_correction": (
                 feddm_cac_label_correction
+                if noise_mitigation_method.lower() == "feddm"
+                else None
+            ),
+            "feddm_loss": (
+                feddm_loss
                 if noise_mitigation_method.lower() == "feddm"
                 else None
             ),
