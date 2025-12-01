@@ -92,10 +92,18 @@ class FedDM(FedAvg):
         # HDG parameters
         self.gamma_hgd_smoothing = feddm_gamma_hgd_smoothing
 
+        # peer model handling
         self.clients_peers = {
             id: {x: {"id": None, "model": None} for x in ["nearest", "farthest"]}
             for id in range(len(clients))
         }
+        # nearst and fartherst peer models set to None as they are then set per current client via set_peer_models()
+        self.peer_model_nearst = None
+        self.actual_statedict_nearst = None
+        self.nearest_idx = None
+        self.peer_model_farthest = None
+        self.actual_statedict_farthest = None
+        self.farthest_idx = None
 
     def initialize_grad_len(self, model, address_key_dict, grad_history):
         """
@@ -107,23 +115,14 @@ class FedDM(FedAvg):
             dims = model[address_key_dict[add][0]].shape
             grad_len[add] += dims.numel()
         return grad_len
-
-    def do_trainstep_peer(
+    
+    def set_peer_models(
         self,
-        net: Any,
-        batch: Any,
-        epoch: int,
-        loss_fn: Any = None,
-        optimizer: Any = None,
-        peer_models=None,
-    ) -> Tuple[Tensor, Tensor, Optional[Tensor], Optional[Tensor], Optional[Tensor]]:
+        peer_models: None):
         """
-        Original: https://github.com/CityU-AIM-Group/FedDM/blob/main/main.py#L207
-        Adapted to work with nnUNetv2 and as nnUNetv2's def train_step().
+        Set peer models (nearest and farthest) for each client.
         """
-        # determine whether processed images are 2d or 3d
-        is_3d = len(batch["data"].shape) == 5  # B, C, H, W, D
-
+        print(f"Start FedDM set peer models: \t {datetime.datetime.now()}")
         # get nearest peer model and set weights
         peer_model_nearst_statedict = self.clients_peers[next(iter(peer_models))][
             "nearest"
@@ -150,6 +149,32 @@ class FedDM(FedAvg):
         )
         peer_model_farthest = nnunet_trainer_w_new_weights_farthest.network.eval()
         peer_model_farthest.to("cpu")
+        print(f"Set peer models: \t {datetime.datetime.now()}")
+        print(f"Nearest peer model: Client {nearest_idx}, Farthest peer model: Client {farthest_idx}")
+
+        # set to class variables
+        self.peer_model_nearst = peer_model_nearst
+        self.actual_statedict_nearst = actual_statedict_nearst
+        self.nearest_idx = nearest_idx
+        self.peer_model_farthest = peer_model_farthest
+        self.actual_statedict_farthest = actual_statedict_farthest
+        self.farthest_idx = farthest_idx
+
+    def do_trainstep_peer(
+        self,
+        net: Any,
+        batch: Any,
+        epoch: int,
+        loss_fn: Any = None,
+        optimizer: Any = None,
+    ) -> Tuple[Tensor, Tensor, Optional[Tensor], Optional[Tensor], Optional[Tensor]]:
+        """
+        Original: https://github.com/CityU-AIM-Group/FedDM/blob/main/main.py#L207
+        Adapted to work with nnUNetv2 and as nnUNetv2's def train_step().
+        """
+        print(f"Start FedDM train step: \t {datetime.datetime.now()}")
+        # determine whether processed images are 2d or 3d
+        is_3d = len(batch["data"].shape) == 5  # B, C, H, W, D
 
         # define pixel selection ratio
         p = 1 - (self.ratio * epoch / self.stop_epoch)
@@ -160,6 +185,7 @@ class FedDM(FedAvg):
         data = batch["data"]
         target = batch["target"]
         data = data.to(self.device, non_blocking=True)
+        print(f"Got data and models: \t {datetime.datetime.now()}")
 
         # one-hot encode target (on all resolution levels)
         onehot_highres_targets = []
@@ -173,6 +199,7 @@ class FedDM(FedAvg):
                 else onehot_highres_target_.permute(0, 4, 1, 2, 3)
             )
             onehot_highres_targets.append(onehot_highres_target)
+        print(f"One-hot encoded targets: \t {datetime.datetime.now()}")
 
         # prepare for training step
         optimizer.zero_grad(set_to_none=True)
@@ -180,6 +207,7 @@ class FedDM(FedAvg):
         # set net to self.device if net's device is cpu
         if next(net.parameters()).device.type == "cpu":
             net.to(self.device)
+        print(f"Prep-ed model and optimizer: \t {datetime.datetime.now()}")
 
         # Autocast can be annoying
         # If the device_type is 'cpu' then it's slow as heck and needs to be disabled.
@@ -192,21 +220,23 @@ class FedDM(FedAvg):
         ):
             # output are logits, NOT softmax-ed outputs
             output = net(data)
+            print(f"Model forward pass done: \t {datetime.datetime.now()}")
 
             # prediction of both peer models on GPU
             # just logits, not softmax-ed outputs
             with torch.no_grad():
-                peer_model_nearst.to(self.device)
-                pred_logits1 = peer_model_nearst(data)
+                self.peer_model_nearst.to(self.device)
+                pred_logits1 = self.peer_model_nearst(data)
                 # move each tensor to CPU after prediction
                 pred_logits1 = [logit.detach().to("cpu") for logit in pred_logits1]
-                peer_model_nearst.to("cpu")
+                self.peer_model_nearst.to("cpu")
 
-                peer_model_farthest.to(self.device)
-                pred_logits2 = peer_model_farthest(data)
+                self.peer_model_farthest.to(self.device)
+                pred_logits2 = self.peer_model_farthest(data)
                 # move each tensor to CPU after prediction
                 pred_logits2 = [logit.detach().to("cpu") for logit in pred_logits2]
-                peer_model_farthest.to("cpu")
+                self.peer_model_farthest.to("cpu")
+            print(f"Peer model predictions done: \t {datetime.datetime.now()}")
 
         # Local-CAC to obtain corrected mask (on all resolution levels)
         clean_masks = []
@@ -221,14 +251,10 @@ class FedDM(FedAvg):
                 device=torch.device("cpu"),
             )
             clean_masks.append(clean_mask)
+        print(f"Local-CAC done: \t {datetime.datetime.now()}")
 
         # softmax each output (all resolution levels)
         pred_probs = [F.softmax(self.sm_temp * out, dim=1) for out in output]
-
-        # # check if all tensors used for loss calculation require grad
-        # print(f"pred_probs: {pred_probs.requires_grad=}, grad_fn: {pred_probs.grad_fn=}")
-        # print(f"onehot_highres_targets: {onehot_highres_targets.requires_grad=}, grad_fn: {onehot_highres_targets.grad_fn=}")
-        # print(f"clean_mask: {clean_mask.requires_grad=}, grad_fn: {clean_mask.grad_fn=}")
 
         # label correction (on all resolution levels)
         corrected_targets = []
@@ -242,6 +268,7 @@ class FedDM(FedAvg):
                 else corrected_target
             )
             corrected_targets.append(corrected_target)
+        print(f"Label correction done: \t {datetime.datetime.now()}")
 
         # loss computation
         if self.feddm_loss == "feddm_focal_loss":
@@ -255,7 +282,7 @@ class FedDM(FedAvg):
             losses = [loss1]
             loss = reduce(add, losses)
             assert loss.shape == (), loss.shape
-        if self.feddm_loss == "feddm_nnunets_loss":
+        elif self.feddm_loss == "feddm_nnunets_loss":
             # Autocast can be annoying
             # If the device_type is 'cpu' then it's slow as heck and needs to be disabled.
             # If the device_type is 'mps' then it will complain that mps is not implemented, even if enabled=False is set. Whyyyyyyy. (this is why we don't make use of enabled=False)
@@ -267,20 +294,11 @@ class FedDM(FedAvg):
             ):
                 # take loss configured in nnunet_trainer
                 loss = loss_fn(output, corrected_targets)
-
-        # Not sure whether necessary, but reassign correct weigths to peer models
-        _, _ = self.assign_model_weights_to_trainer(
-            client_idx=nearest_idx, new_statedict=actual_statedict_nearst
-        )
-        _, _ = self.assign_model_weights_to_trainer(
-            client_idx=farthest_idx, new_statedict=actual_statedict_farthest
-        )
-        peer_model_nearst.train()
-        peer_model_farthest.train()
-        # del nnunet_trainer_w_new_weights_nearst
-        # del actual_statedict_nearst
-        # del nnunet_trainer_w_new_weights_farthest
-        # del actual_statedict_farthest
+        else:
+            raise NotImplementedError(
+                f"FedDM loss {self.feddm_loss} not implemented!"
+            )
+        print(f"Loss computation done: \t {datetime.datetime.now()}")
 
         # Backward
         assert loss.requires_grad, "Loss does not require grad!"
@@ -289,8 +307,37 @@ class FedDM(FedAvg):
             torch.nn.utils.clip_grad_norm_(net.parameters(), 12)
             optimizer.step()
             torch.cuda.empty_cache()
+        print(f"Backpropagation done: \t {datetime.datetime.now()}")
 
         return {"loss": loss.detach().cpu().numpy()}
+    
+    def unset_peer_models(
+        self,
+    ):
+        """
+        Reassign correct weights to peer models and unset peer models to be None for 
+        FedDM epoch of next client.
+        """
+        print(f"Start FedDM unset peer models: \t {datetime.datetime.now()}")
+        # Not sure whether necessary, but reassign correct weigths to peer models
+        _, _ = self.assign_model_weights_to_trainer(
+            client_idx=self.nearest_idx, new_statedict=self.actual_statedict_nearst
+        )
+        _, _ = self.assign_model_weights_to_trainer(
+            client_idx=self.farthest_idx, new_statedict=self.actual_statedict_farthest
+        )
+        self.peer_model_nearst.train()
+        self.peer_model_farthest.train()
+
+        # unset peer models of current client
+        self.peer_model_nearst = None
+        self.actual_statedict_nearst = None
+        self.nearest_idx = None
+        self.peer_model_farthest = None
+        self.actual_statedict_farthest = None
+        self.farthest_idx = None
+
+        print(f"Unset peer models done: \t {datetime.datetime.now()}")
 
     def assign_model_weights_to_trainer(
         self, client_idx: int = None, new_statedict: dict = None
