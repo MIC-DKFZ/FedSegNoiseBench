@@ -99,7 +99,7 @@ def get_experiment_args(exp_id: str):
         "feddm_gamma_hgd_smoothing",
         "feddm_ratio_cac_pixelselection",
         "feddm_cac_label_correction",
-        "feddm_loss"
+        "feddm_loss",
         "iopfl_alpha",
     ]
     (
