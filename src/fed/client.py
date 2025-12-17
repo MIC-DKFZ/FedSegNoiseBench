@@ -4,6 +4,7 @@ import json
 import logging
 import time
 import torch
+import numpy as np
 
 from model import nnUNetv2_fed
 
@@ -69,16 +70,14 @@ class Client:
         # set target number of epochs of current fl round
         target_num_epochs = self.current_epoch + self.fl_args["num_local_epochs"]
 
-        # run local training
-        
         # determine if this is the last FL round (assumes fl_round is 0-indexed)
         total_rounds = int(self.fl_args.get("num_rounds", 0))
         if total_rounds > 0:
-            last_fl_round = (fl_round == total_rounds - 1)
+            last_fl_round = fl_round == total_rounds - 1
         else:
             # fallback: epoch-based check if num_rounds not provided
             total_epochs = int(self.fl_args.get("num_rounds", 0)) * int(
-            self.fl_args.get("num_local_epochs", 0)
+                self.fl_args.get("num_local_epochs", 0)
             )
             last_fl_round = target_num_epochs >= total_epochs
         logging.info(
@@ -110,10 +109,65 @@ class Client:
                 fl_strategy=fl_strategy,
                 feddm_client_peers=feddm_client_peers,
             )
+        if fl_strategy.name == "fedcorr":
+            # FedCorr's pre-processing round
+            if fl_round < fl_strategy.fedcorr_preproc_rounds:
+                # normal local training epoch w/ mixup augmentations and loss + prox term
+                # TODO: implement mixup augmentations
+                self.model.run(
+                    initialize_fed_training=False,
+                    num_epochs=target_num_epochs,
+                    current_epoch=self.current_epoch,
+                    epochs_per_round=self.fl_args["num_local_epochs"],
+                    last_fl_round=last_fl_round,
+                    very_last_fl_predict_round=very_last_fl_predict_round,
+                    only_run_validation=only_run_validation,
+                    fl_strategy=fl_strategy,
+                    fl_client_id=self.client_id,
+                    is_fedcorr_noisyclient=(
+                        self.client_id in fl_strategy.noisy_clients
+                    ),
+                    is_fedcorr_preproc_stage=True,
+                )
+
+                # LID computation
+                local_output, local_output_highres, loss = fl_strategy.get_output_seg(
+                    self.model.nnunet_trainer
+                )
+                LID_local = list(fl_strategy.lid_term_batched(local_output_highres))
+                fl_strategy.set_lid(LID_local, self.client_id)
+                fl_strategy.set_loss(loss, self.client_id)
+                print(
+                    f"Client {self.client_id} LID_local: {fl_strategy.LID_client[self.client_id]}"
+                )
+
+            # FedCorr's fine-tuning round
+            elif fl_round < (
+                fl_strategy.fedcorr_preproc_rounds + fl_strategy.fedcorr_finetune_rounds
+            ):
+                logging.info(
+                    f"FedCorr fine-tuning round at FL round {fl_round} on client {self.client_id}!"
+                )
+
+            elif fl_round < (
+                fl_strategy.fedcorr_preproc_rounds + fl_strategy.fedcorr_finetune_rounds
+            ):
+                logging.info(
+                    f"FedCorr full-training round at FL round {fl_round} on client {self.client_id}!"
+                )
+                # normal local training epoch
+                self.model.run(
+                    initialize_fed_training=False,
+                    num_epochs=target_num_epochs,
+                    current_epoch=self.current_epoch,
+                    epochs_per_round=self.fl_args["num_local_epochs"],
+                    last_fl_round=last_fl_round,
+                    very_last_fl_predict_round=very_last_fl_predict_round,
+                    only_run_validation=only_run_validation,
+                )
         else:
             self.model.run(
                 initialize_fed_training=False,
-                # continue_training=True,
                 num_epochs=target_num_epochs,
                 current_epoch=self.current_epoch,
                 epochs_per_round=self.fl_args["num_local_epochs"],
@@ -124,7 +178,9 @@ class Client:
 
         # IOP-FL: compute personalized model after local training
         if fl_strategy.name == "iopfl" and not very_last_fl_predict_round:
-            fl_strategy.compute_trajectory(self.model.current_model_weights, self.client_id)
+            fl_strategy.compute_trajectory(
+                self.model.current_model_weights, self.client_id
+            )
 
         # update current epoch
         self.current_epoch = target_num_epochs

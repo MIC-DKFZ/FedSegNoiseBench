@@ -51,7 +51,11 @@ class nnUNetv2_fed:
         # initate model
         self.current_model_weights = None
         self.nnunet_trainer = None
-        self.run(initialize_fed_training=True, continue_training=continue_training, num_gpus=num_gpus)
+        self.run(
+            initialize_fed_training=True,
+            continue_training=continue_training,
+            num_gpus=num_gpus,
+        )
 
     def run(
         self,
@@ -65,7 +69,10 @@ class nnUNetv2_fed:
         very_last_fl_predict_round: bool = False,
         only_run_validation: bool = False,
         fl_strategy=None,
+        fl_client_id: int = None,
         feddm_client_peers: list = None,
+        is_fedcorr_noisyclient: bool = False,
+        is_fedcorr_preproc_stage: bool = False,
     ):
         self.current_model_weights, self.nnunet_trainer = run_training(
             nnunet_trainer=self.nnunet_trainer,
@@ -93,7 +100,10 @@ class nnUNetv2_fed:
             very_last_fl_predict_round=very_last_fl_predict_round,
             experiment_id=self.experiment_id,
             fl_strategy=fl_strategy,
+            fl_client_id=fl_client_id,
             feddm_client_peers=feddm_client_peers,
             noisy_train_folder=self.noisy_train_folder,
             noise_ratio=self.noise_ratio,
+            is_fedcorr_noisyclient=is_fedcorr_noisyclient,
+            is_fedcorr_preproc_stage=is_fedcorr_preproc_stage,
         )

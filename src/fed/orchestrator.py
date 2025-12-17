@@ -7,6 +7,7 @@ from methods.fedavg.fedavg import FedAvg
 from methods.feda3i.feda3i import FedA3I
 from methods.feddm.feddm import FedDM
 from methods.iopfl.iopfl import IOPFL
+from methods.fedcorr.fedcorr import FedCorr
 
 
 class Orchestrator:
@@ -32,10 +33,19 @@ class Orchestrator:
                 fl_args["feddm_gamma_hgd_smoothing"],
                 fl_args["feddm_ratio_cac_pixelselection"],
                 fl_args["feddm_cac_label_correction"],
-                fl_args["feddm_loss"]
+                fl_args["feddm_loss"],
             )
         elif fl_args["strategy"].lower() == "iopfl":
             self.fl_strategy = IOPFL(self.clients, fl_args["iopfl_alpha"])
+        elif fl_args["strategy"].lower() == "fedcorr":
+            self.fl_strategy = FedCorr(
+                self.clients,
+                self.num_rounds,
+                fl_args["fedcorr_preproc_rounds_frac"],
+                fl_args["fedcorr_relabel_ratio"],
+                fl_args["fedcorr_relabel_confidence_thres"],
+                fl_args["fedcorr_proxterm_beta"],
+            )
         else:
             raise NotImplementedError(
                 f"Federated learning strategy {fl_args['strategy']} not implemented!"
@@ -51,7 +61,7 @@ class Orchestrator:
             logging.info(f"Start FL round {i}!")
 
             # distribute current orchestrator model to clients
-            self.update_clients()
+            self.update_clients(fl_round)
 
             orchestrator_end_time = time.time()
             logging.info(
@@ -101,12 +111,29 @@ class Orchestrator:
                     "Collaborative Annotation Calibration and Hierarchical Gradient De-Conflicting!"
                 )
                 # compute server_model_weights via FedDM
-                self.aggregate(strategy=self.fl_strategy.name)            
+                self.aggregate(strategy=self.fl_strategy.name)
+
             # IOP-FL
             elif self.fl_strategy.name == "iopfl":
-                logging.info("Aggregating model weights with FedAvg strategy for IOP-FL!")
+                logging.info(
+                    "Aggregating model weights with FedAvg strategy for IOP-FL!"
+                )
                 # compute server_model_weights via FedAvg
                 self.aggregate(strategy="fedavg")
+
+            # FedCorr
+            elif self.fl_strategy.name == "fedcorr":
+                # compute server_model_weights via FedAvg
+                logging.info(
+                    "Aggregating model weights with FedAvg strategy for FedCorr!"
+                )
+                self.aggregate(strategy="fedavg")
+                # FedCorr's pre-processing round
+                if fl_round < self.fl_strategy.fedcorr_preproc_rounds:
+                    # identify noisy clients and noisy samples
+                    self.fl_strategy.preproc_central_steps(fl_round)
+                # TODO: implement FedCorr's fine-tuning and full-training rounds
+
             else:
                 raise NotImplementedError(
                     f"Federated learning strategy {self.fl_strategy.name} not implemented!"
@@ -156,10 +183,12 @@ class Orchestrator:
                 f"Federated learning strategy {strategy} not implemented!"
             )
 
-    def update_clients(self, checkpoint_name: str = None):
+    def update_clients(self, fl_round: int = None, checkpoint_name: str = None):
         """
         Update clients with current server model weights.
+        And if self.fl_strategy is FedCorr, also global_fl_model_weights is FedCorr.
         """
+        # update clients with current server model weights
         if not checkpoint_name:
             for client in self.clients:
                 client.update_model(self.server_model_weights)
@@ -167,9 +196,18 @@ class Orchestrator:
             if self.fl_strategy.name == "iopfl":
                 for client in self.clients:
                     client.update_model(
-                        self.fl_strategy.trajectory[client.client_id], 
-                        checkpoint_name
+                        self.fl_strategy.trajectory[client.client_id], checkpoint_name
                     )
             else:
                 for client in self.clients:
                     client.update_model(self.server_model_weights, checkpoint_name)
+
+        # if FedCorr and FedCorr's pre-processing stage, also update global_fl_model_weights
+        if self.fl_strategy.name == "fedcorr":
+            if (
+                fl_round is not None
+                and fl_round < self.fl_strategy.fedcorr_preproc_rounds
+            ):
+                self.fl_strategy.global_fl_model_weights = copy.deepcopy(
+                    self.server_model_weights
+                )

@@ -117,6 +117,27 @@ def main(args):
                 if args.noise_mitigation_method.lower() == "iopfl"
                 else None
             ),
+            # FedCorr
+            "fedcorr_preproc_rounds_frac": (
+                args.fedcorr_preproc_rounds_frac
+                if args.noise_mitigation_method.lower() == "fedcorr"
+                else None
+            ),
+            "fedcorr_relabel_ratio": (
+                args.fedcorr_relabel_ratio
+                if args.noise_mitigation_method.lower() == "fedcorr"
+                else None
+            ),
+            "fedcorr_relabel_confidence_thres": (
+                args.fedcorr_relabel_confidence_thres
+                if args.noise_mitigation_method.lower() == "fedcorr"
+                else None
+            ),
+            "fedcorr_proxterm_beta": (
+                args.fedcorr_proxterm_beta
+                if args.noise_mitigation_method.lower() == "fedcorr"
+                else None
+            ),
         },
     )
 
@@ -251,7 +272,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--feddm_loss",
         type=str,
-        default=None,   # feddm_focal_loss
+        default=None,  # feddm_focal_loss
         help="Loss function to use in FedDM: 'feddm_nnunets_loss' or 'feddm_focal_loss' (theirs).",
     )
     # IOP-FL
@@ -260,6 +281,31 @@ if __name__ == "__main__":
         type=float,
         default=None,  # 0.9,
         help="Weight for incorporation of model history in trajectory for IOP-FL.",
+    )
+    # FedCorr
+    parser.add_argument(
+        "--fedcorr_preproc_rounds_frac",
+        type=float,
+        default=None,  # 0.05
+        help="Fraction of rounds for preprocessing stage in FedCorr.",
+    )
+    parser.add_argument(
+        "--fedcorr_relabel_ratio",
+        type=float,
+        default=None,  # 0.5
+        help="Ratio of most noisy samples that are relabeled in FedCorr.",
+    )
+    parser.add_argument(
+        "--fedcorr_relabel_confidence_thres",
+        type=float,
+        default=None,  # 0.5
+        help="Confidence threshold for relabeling in FedCorr.",
+    )
+    parser.add_argument(
+        "--fedcorr_proxterm_beta",
+        type=float,
+        default=None,  # 5.0
+        help="Beta parameter for proximal term in FedCorr.",
     )
 
     # other arguments
