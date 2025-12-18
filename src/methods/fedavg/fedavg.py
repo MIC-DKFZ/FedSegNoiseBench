@@ -33,10 +33,15 @@ class FedAvg:
         _client_checkpoints = copy.deepcopy(client_checkpoints)
 
         # for sample-weighted averaging, get number of all samples of all clients
-        num_samples_all_clients = self.get_num_datasamples_client()
+        num_samples_all_clients_list = [
+            self.get_num_datasamples_client(client_id)
+            for client_id in _client_checkpoints.keys()
+        ]
+        num_samples_all_clients = sum(num_samples_all_clients_list)
 
         # initialize _server_model_weights with model weights of first client
-        _server_model_weights = _client_checkpoints[0]
+        first_key = list(_client_checkpoints.keys())[0]
+        _server_model_weights = _client_checkpoints[first_key]
         # get addresses of keys
         keys = list(_server_model_weights.keys())
         address_key_dict = {}
@@ -50,7 +55,7 @@ class FedAvg:
         # perform the fedavg
         for a in address_key_dict.keys():
             for client_id, client_model_weights in _client_checkpoints.items():
-                if client_id == "0":
+                if client_id == first_key:
                     # network weights of client_id="0" are already in _server_model_weights
                     # we still need to weight client 0's model params with it's dataset size
                     _server_model_weights[address_key_dict[a][0]] = (
