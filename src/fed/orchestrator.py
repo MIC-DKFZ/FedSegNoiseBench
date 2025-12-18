@@ -219,6 +219,9 @@ class Orchestrator:
                     c_id: client_checkpoints[c_id]
                     for c_id in self.fl_strategy.clean_clients
                 }
+                logging.info(
+                    f"FedCorr fine-tuning stage: aggregating model weights from {len(self.fl_strategy.clean_clients)} clean clients {self.fl_strategy.clean_clients}!"
+                )
                 self.server_model_weights = self.fl_strategy.fed_avg(
                     clean_client_checkpoints
                 )
