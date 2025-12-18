@@ -73,6 +73,8 @@ class nnUNetv2_fed:
         feddm_client_peers: list = None,
         is_fedcorr_noisyclient: bool = False,
         is_fedcorr_preproc_stage: bool = False,
+        is_fedcorr_finetune_stage: bool = False,
+        is_fedcorr_fulltrain_stage: bool = False,
     ):
         self.current_model_weights, self.nnunet_trainer = run_training(
             nnunet_trainer=self.nnunet_trainer,
@@ -106,4 +108,6 @@ class nnUNetv2_fed:
             noise_ratio=self.noise_ratio,
             is_fedcorr_noisyclient=is_fedcorr_noisyclient,
             is_fedcorr_preproc_stage=is_fedcorr_preproc_stage,
+            is_fedcorr_finetune_stage=is_fedcorr_finetune_stage,
+            is_fedcorr_fulltrain_stage=is_fedcorr_fulltrain_stage,
         )

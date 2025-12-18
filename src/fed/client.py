@@ -87,6 +87,9 @@ class Client:
         )
 
         # run client's local training
+        ##########################################
+        # FedDM
+        ##########################################
         if fl_strategy.name == "feddm" and fl_round > 0:
             # # don't give feddm_client_peers incl. models to nnUNet
             feddm_client_peers = {
@@ -109,6 +112,9 @@ class Client:
                 fl_strategy=fl_strategy,
                 feddm_client_peers=feddm_client_peers,
             )
+        ##########################################
+        # FedCorr
+        ##########################################
         if fl_strategy.name == "fedcorr":
             # FedCorr's pre-processing round
             if fl_round < fl_strategy.fedcorr_preproc_rounds:
@@ -130,7 +136,7 @@ class Client:
                     is_fedcorr_preproc_stage=True,
                 )
 
-                # LID computation
+                # LID  and noise level computation
                 local_output, local_output_highres, loss = fl_strategy.get_output_seg(
                     self.model.nnunet_trainer
                 )
@@ -148,10 +154,30 @@ class Client:
                 logging.info(
                     f"FedCorr fine-tuning round at FL round {fl_round} on client {self.client_id}!"
                 )
+                # normal local training epoch, w/o prox term, but noisy clients correct noisy samples
+                self.model.run(
+                    initialize_fed_training=False,
+                    num_epochs=target_num_epochs,
+                    current_epoch=self.current_epoch,
+                    epochs_per_round=self.fl_args["num_local_epochs"],
+                    last_fl_round=last_fl_round,
+                    very_last_fl_predict_round=very_last_fl_predict_round,
+                    only_run_validation=only_run_validation,
+                    fl_strategy=fl_strategy,
+                    fl_client_id=self.client_id,
+                    is_fedcorr_noisyclient=(
+                        self.client_id in fl_strategy.noisy_clients
+                    ),
+                    is_fedcorr_finetune_stage=True,
+                )
+                # noise level computation
+                _, _, loss = fl_strategy.get_output_seg(self.model.nnunet_trainer)
+                fl_strategy.set_loss(loss, self.client_id)
 
-            elif fl_round < (
-                fl_strategy.fedcorr_preproc_rounds + fl_strategy.fedcorr_finetune_rounds
-            ):
+            # elif fl_round < (
+            #     fl_strategy.fedcorr_preproc_rounds + fl_strategy.fedcorr_finetune_rounds + fl_strategy.fedcorr_fulltrain_rounds
+            # ):
+            else:
                 logging.info(
                     f"FedCorr full-training round at FL round {fl_round} on client {self.client_id}!"
                 )
@@ -164,7 +190,21 @@ class Client:
                     last_fl_round=last_fl_round,
                     very_last_fl_predict_round=very_last_fl_predict_round,
                     only_run_validation=only_run_validation,
+                    fl_strategy=fl_strategy,
+                    fl_client_id=self.client_id,
+                    is_fedcorr_noisyclient=(
+                        self.client_id in fl_strategy.noisy_clients
+                    ),
+                    is_fedcorr_fulltrain_stage=True,
                 )
+            # else:
+            #     raise ValueError(
+            #         f"FedCorr FL round {fl_round} exceeds total pre-processing, fine-tuning, and full-training rounds!"
+            #     )
+
+        ##########################################
+        # all other FL strategies
+        ##########################################
         else:
             self.model.run(
                 initialize_fed_training=False,

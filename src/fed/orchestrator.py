@@ -123,17 +123,52 @@ class Orchestrator:
 
             # FedCorr
             elif self.fl_strategy.name == "fedcorr":
-                # compute server_model_weights via FedAvg
-                logging.info(
-                    "Aggregating model weights with FedAvg strategy for FedCorr!"
-                )
-                self.aggregate(strategy="fedavg")
-                # FedCorr's pre-processing round
+                # Aggregation
+                # do normal FedAvg aggregation in FedCorr's pre-processing and full-training rounds
+                if (fl_round < self.fl_strategy.fedcorr_preproc_rounds) or (
+                    fl_round
+                    >= self.fl_strategy.fedcorr_preproc_rounds
+                    + self.fl_strategy.fedcorr_finetune_rounds
+                ):
+                    # compute server_model_weights via FedAvg
+                    logging.info(
+                        "Aggregating model weights with FedAvg strategy for FedCorr!"
+                    )
+                    self.aggregate(strategy="fedavg")
+                # do FedCorr's adapted FedAvg aggregation in fine-tuning rounds
+                else:
+                    logging.info(
+                        "Aggregating model weights with FedCorr's adapted FedAvg strategy for fine-tuning stage!"
+                    )
+                    self.aggregate(strategy="fedcorr")
+
+                # Further central steps for FedCorr
+
+                # FedCorr's pre-processing round: do noisy client identification
                 if fl_round < self.fl_strategy.fedcorr_preproc_rounds:
                     # identify noisy clients and noisy samples
-                    self.fl_strategy.preproc_central_steps(fl_round)
-                # TODO: implement FedCorr's fine-tuning and full-training rounds
+                    self.fl_strategy.central_noisy_client_identification(fl_round)
 
+                # FedCorr's pre-processing or fine-tuning: do noise level estimation
+                if (fl_round < self.fl_strategy.fedcorr_preproc_rounds) or (
+                    fl_round
+                    < self.fl_strategy.fedcorr_preproc_rounds
+                    + self.fl_strategy.fedcorr_finetune_rounds
+                ):
+                    self.fl_strategy.central_noise_level_estimation(fl_round)
+
+                # FedCorr's last fine-tuning round: set global model weights for full-training stage
+                if fl_round == (
+                    self.fl_strategy.fedcorr_preproc_rounds
+                    + self.fl_strategy.fedcorr_finetune_rounds
+                    - 1
+                ):
+                    logging.info(
+                        "FedCorr fine-tuning stage finished: Set global model weights for full-training stage!"
+                    )
+                    self.fl_strategy.global_fl_model_weights = copy.deepcopy(
+                        self.server_model_weights
+                    )
             else:
                 raise NotImplementedError(
                     f"Federated learning strategy {self.fl_strategy.name} not implemented!"
@@ -178,6 +213,15 @@ class Orchestrator:
             self.server_model_weights = self.fl_strategy.feddm_central_steps(
                 client_checkpoints, self.server_model_weights
             )
+        elif strategy == "fedcorr":
+            if len(self.fl_strategy.clean_clients) > 0:
+                clean_client_checkpoints = {
+                    c_id: client_checkpoints[c_id]
+                    for c_id in self.fl_strategy.clean_clients
+                }
+                self.server_model_weights = self.fl_strategy.fed_avg(
+                    clean_client_checkpoints
+                )
         else:
             raise NotImplementedError(
                 f"Federated learning strategy {strategy} not implemented!"

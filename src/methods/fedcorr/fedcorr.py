@@ -63,7 +63,12 @@ class FedCorr(FedAvg):
         self.global_fl_model_weights = None
 
         logging.info(
-            f"FedCorr initialized with preproc rounds frac {self.fedcorr_preproc_rounds}, relabel ratio {self.fedcorr_relabel_ratio}, and proxterm beta {self.fedcorr_proxterm_beta}!"
+            f"FedCorr initialized with preproc rounds frac {self.fedcorr_preproc_rounds}, \
+                finetune rounds {self.fedcorr_finetune_rounds}, \
+                fulltrain rounds {self.fedcorr_fulltrain_rounds}, \
+                relabel ratio {self.fedcorr_relabel_ratio}, \
+                relabel confidence thres {self.fedcorr_relabel_confidence_thres}, \
+                and proxterm beta {self.fedcorr_proxterm_beta}!"
         )
 
     def _compute_stage_rounds(self, num_rounds: int):
@@ -327,12 +332,84 @@ class FedCorr(FedAvg):
                 f"Client {c_id} estimated noisy level: {self.clients_estimated_noisy_level[c_id]:.4f}"
             )
 
+    def central_noisy_client_identification(self, fl_round: int, seed: int = 42):
+        """
+        Centralized steps for FedCorr's pre-processing stage.
+        Identification of noisy clients via GMM on client's LID scores.
+        For each noisy client, identification of noisy samples via per-sample loss value including label correction.
+
+        Args:
+            fl_round (int): Current federated learning round.
+        """
+        logging.info(
+            f"FedCorr central steps at FL round {fl_round}: Identifying noisy clients!"
+        )
+        # identify noisy clients via GMM on client's LID scores
+        lid_accumulative_values = np.array(
+            [self.LID_accumulative_client[c_id] for c_id in range(len(self.clients))]
+        ).reshape(-1, 1)
+        # fit two-component GMM
+        gmm_LID = GaussianMixture(n_components=2, random_state=seed).fit(
+            lid_accumulative_values
+        )
+        # predict client labels grouping them into two groups
+        labels_LID = gmm_LID.predict(lid_accumulative_values)
+        # client group with smaller mean LID is considered clean
+        clean_label = np.argsort(gmm_LID.means_[:, 0])[0]
+        # select noisy and clean clients
+        self.noisy_clients = np.where(labels_LID != clean_label)[0]
+        self.clean_clients = np.where(labels_LID == clean_label)[0]
+        logging.info(f"Identified noisy clients: {self.noisy_clients.tolist()}")
+        logging.info(f"Identified clean clients: {self.clean_clients.tolist()}")
+
+    def central_noise_level_estimation(self, fl_round: int, seed: int = 42):
+        """
+        Centralized steps for FedCorr's pre-processing stage.
+        For each noisy client, identification of noisy samples via per-sample loss value including label correction
+        Args:
+            fl_round (int): Current federated learning round.
+        """
+        logging.info(
+            f"FedCorr central steps at FL round {fl_round}: Identifying noisy samples!"
+        )
+
+        # for each noisy client:
+        # - estimate noise level via GMM on per-sample loss values
+        for c_id in self.noisy_clients:
+            logging.info(
+                f"Processing noisy client {c_id} for noisy sample identification..."
+            )
+            # get per-sample losses
+            per_sample_losses = np.array(
+                list(self.loss_accumulative_whole[c_id].values())
+            ).reshape(-1, 1)
+            # fit two-component GMM
+            gmm_loss = GaussianMixture(n_components=2, random_state=seed).fit(
+                per_sample_losses
+            )
+            # predict sample labels grouping them into two groups
+            labels_loss = gmm_loss.predict(per_sample_losses)
+            # sample group with smaller mean loss is considered clean
+            gmm_clean_label_loss = np.argsort(gmm_loss.means_[:, 0])[0]
+            # select noisy samples (or get their indices)
+            pred_n = np.where(labels_loss.flatten() != gmm_clean_label_loss)[0]
+            # compute estimated noisy level for this client
+            self.clients_estimated_noisy_level[c_id] = len(pred_n) / len(
+                per_sample_losses
+            )
+            logging.info(
+                f"Client {c_id} estimated noisy level: {self.clients_estimated_noisy_level[c_id]:.4f}"
+            )
+
     def label_correction(
         self,
         sample_idx: list,
+        data: torch.Tensor,
         output: torch.Tensor,
         target: torch.Tensor,
         client_id: int,
+        is_fedcorr_fulltrain_stage: bool = False,
+        fedcorr_global_network=None,
         topk: int = 1000,
     ):
         """
@@ -346,11 +423,19 @@ class FedCorr(FedAvg):
             output (torch.Tensor): Model outputs for the current batch.
             target (torch.Tensor): Ground truth targets for the current batch.
             client_id (int): ID of the client performing label correction.
+            is_fedcorr_fulltrain_stage (bool): Whether currently in FedCorr full-training stage.
+            fedcorr_global_network: Global model network for full-training stage (if needed).
             topk (int): Number of top probabilities to consider for confidence estimation.
 
         Returns:
             torch.Tensor: Corrected targets after label correction.
         """
+        # if is_fedcorr_fulltrain_stage is True, output has to be recomputed form global model state after finetuning
+        if is_fedcorr_fulltrain_stage and fedcorr_global_network is not None:
+            # predict via global model state
+            with torch.no_grad():
+                output = fedcorr_global_network(data)
+
         # get deep copies of target to avoid in-place modifications
         target_ = [t.clone() for t in target]
 
