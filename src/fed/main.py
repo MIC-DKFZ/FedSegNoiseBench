@@ -51,6 +51,7 @@ def main(args):
                 "plan": args.plan,
                 "trainer": args.trainer,
                 "save_every": args.save_every,
+                "oversample_foreground_percent": args.oversample_foreground_percent,
                 "num_gpus": args.num_gpus,
                 "clean_validation_dataset": (
                     args.clean_validation_dataset.split()[i]
@@ -208,6 +209,12 @@ if __name__ == "__main__":
         type=int,
         default=1,
         help="Number of GPUs to use for local training on each client.",
+    )
+    parser.add_argument(
+        "--oversample_foreground_percent",
+        type=float,
+        default=0.33,
+        help="Percentage of oversampling foreground during patch sampling in nnU-Net trainer.",
     )
 
     # FL arguments

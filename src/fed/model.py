@@ -13,6 +13,7 @@ class nnUNetv2_fed:
         plan: str = None,
         trainer: str = None,
         save_every: int = 50,
+        oversample_foreground_percent: float = 0.33,
         num_gpus: int = 1,
         continue_training: bool = False,
         clean_validation_dataset: str = None,
@@ -27,6 +28,7 @@ class nnUNetv2_fed:
         self.plan = plan
         self.trainer = trainer
         self.save_every = save_every
+        self.oversample_foreground_percent = oversample_foreground_percent
         self.clean_validation_folder = (
             os.path.join(
                 os.getenv("nnUNet_preprocessed"),
@@ -92,6 +94,7 @@ class nnUNetv2_fed:
             val_with_best=False,
             device=torch.device("cuda"),
             save_every=self.save_every,
+            oversample_foreground_percent=self.oversample_foreground_percent,
             clean_validation_folder=self.clean_validation_folder,
             initialize_fed_training=initialize_fed_training,
             num_epochs=num_epochs,
