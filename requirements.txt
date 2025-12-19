@@ -6,6 +6,7 @@ numpy
 pylidc
 opencv-python
 tifffile==2025.2.18
+h5py
 
 # Custom packages with custom index URL
 httpx

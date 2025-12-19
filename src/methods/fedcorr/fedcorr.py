@@ -200,7 +200,7 @@ class FedCorr(FedAvg):
 
         return output_whole, output_whole_highres, loss_whole
 
-    def lid_term_batched(self, X, k=20, batch_size=128, eps=1e-6):
+    def lid_term_batched(self, X, k=20, batch_size=64, eps=1e-6):
         """
         Compute Local Intrinsic Dimensionality (LID) for a batch of samples.
 
@@ -211,7 +211,7 @@ class FedCorr(FedAvg):
         Args:
             X: Input data as list of tensors or stacked tensor of shape (N, C, ..., H, W)
             k: Number of nearest neighbors to consider (default: 20)
-            batch_size: Batch size for distance computation (default: 128)
+            batch_size: Batch size for distance computation (default: 64)
             eps: Small epsilon value to avoid division by zero (default: 1e-6)
 
         Returns:
@@ -442,11 +442,12 @@ class FedCorr(FedAvg):
         # get current accumulated losses for this client and sample indices
         acc_losses_all = self.loss_accumulative_whole[client_id]
         loss = []
+        sentinel = -1e9  # very small so it ranks last after (-loss)
         for idx, key in enumerate(sample_idx):
             if key in acc_losses_all.keys():
                 loss.append(acc_losses_all[key])
             else:
-                loss.append(None)
+                loss.append(sentinel)
         loss = np.array(loss)
 
         # determine indices that need to be relabelled
