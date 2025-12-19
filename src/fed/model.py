@@ -1,5 +1,6 @@
 import os
 import torch
+import json
 
 from nnunetv2.run.run_training import run_training
 
@@ -14,6 +15,7 @@ class nnUNetv2_fed:
         trainer: str = None,
         save_every: int = 50,
         oversample_foreground_percent: float = 0.33,
+        class_sampling_probabilities: str = None,
         num_gpus: int = 1,
         continue_training: bool = False,
         clean_validation_dataset: str = None,
@@ -29,6 +31,11 @@ class nnUNetv2_fed:
         self.trainer = trainer
         self.save_every = save_every
         self.oversample_foreground_percent = oversample_foreground_percent
+        self.class_sampling_probabilities = (
+            json.loads(class_sampling_probabilities)
+            if class_sampling_probabilities
+            else None
+        )
         self.clean_validation_folder = (
             os.path.join(
                 os.getenv("nnUNet_preprocessed"),
@@ -95,6 +102,7 @@ class nnUNetv2_fed:
             device=torch.device("cuda"),
             save_every=self.save_every,
             oversample_foreground_percent=self.oversample_foreground_percent,
+            class_sampling_probabilities=self.class_sampling_probabilities,
             clean_validation_folder=self.clean_validation_folder,
             initialize_fed_training=initialize_fed_training,
             num_epochs=num_epochs,

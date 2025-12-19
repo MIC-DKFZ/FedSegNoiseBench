@@ -52,6 +52,7 @@ def main(args):
                 "trainer": args.trainer,
                 "save_every": args.save_every,
                 "oversample_foreground_percent": args.oversample_foreground_percent,
+                "class_sampling_probabilities": args.class_sampling_probabilities,
                 "num_gpus": args.num_gpus,
                 "clean_validation_dataset": (
                     args.clean_validation_dataset.split()[i]
@@ -215,6 +216,12 @@ if __name__ == "__main__":
         type=float,
         default=0.33,
         help="Percentage of oversampling foreground during patch sampling in nnU-Net trainer.",
+    )
+    parser.add_argument(
+        "--class_sampling_probabilities",
+        type=str,
+        default=None,
+        help="Class-specific oversampling probabilities for nnUNetTrainer_weightedClassSampling.",
     )
 
     # FL arguments
