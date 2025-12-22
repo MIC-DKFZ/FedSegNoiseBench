@@ -15,7 +15,7 @@ class nnUNetv2_fed:
         trainer: str = None,
         save_every: int = 50,
         oversample_foreground_percent: float = 0.33,
-        class_sampling_probabilities: str = None,
+        class_sampling_probabilities: dict = None,
         num_gpus: int = 1,
         continue_training: bool = False,
         clean_validation_dataset: str = None,
@@ -35,6 +35,9 @@ class nnUNetv2_fed:
             json.loads(class_sampling_probabilities)
             if class_sampling_probabilities
             else None
+        )
+        print(
+            f"Class sampling probabilities:{self.class_sampling_probabilities} ; {type(self.class_sampling_probabilities)=}"
         )
         self.clean_validation_folder = (
             os.path.join(
