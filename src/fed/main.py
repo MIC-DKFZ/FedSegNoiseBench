@@ -219,7 +219,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--class_sampling_probabilities",
-        type=json.loads,
+        type=str,
         default=None,
         help="Class-specific oversampling probabilities for nnUNetTrainer_weightedClassSampling.",
     )

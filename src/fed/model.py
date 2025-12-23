@@ -1,6 +1,6 @@
 import os
 import torch
-import json
+import ast
 
 from nnunetv2.run.run_training import run_training
 
@@ -15,7 +15,7 @@ class nnUNetv2_fed:
         trainer: str = None,
         save_every: int = 50,
         oversample_foreground_percent: float = 0.33,
-        class_sampling_probabilities: dict = None,
+        class_sampling_probabilities: str = None,
         num_gpus: int = 1,
         continue_training: bool = False,
         clean_validation_dataset: str = None,
@@ -31,8 +31,13 @@ class nnUNetv2_fed:
         self.trainer = trainer
         self.save_every = save_every
         self.oversample_foreground_percent = oversample_foreground_percent
+        # self.class_sampling_probabilities = (
+        #     json.loads(class_sampling_probabilities)
+        #     if class_sampling_probabilities
+        #     else None
+        # )
         self.class_sampling_probabilities = (
-            json.loads(class_sampling_probabilities)
+            ast.literal_eval(class_sampling_probabilities)
             if class_sampling_probabilities
             else None
         )
