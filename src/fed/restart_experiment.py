@@ -101,6 +101,10 @@ def get_experiment_args(exp_id: str):
         "feddm_cac_label_correction",
         "feddm_loss",
         "iopfl_alpha",
+        "fedcorr_preproc_rounds_frac",
+        "fedcorr_relabel_ratio",
+        "fedcorr_relabel_confidence_thres",
+        "fedcorr_proxterm_beta"
     ]
     (
         configuration,
@@ -119,6 +123,10 @@ def get_experiment_args(exp_id: str):
         feddm_cac_label_correction,
         feddm_loss,
         iopfl_alpha,
+        fedcorr_preproc_rounds_frac,
+        fedcorr_relabel_ratio,
+        fedcorr_relabel_confidence_thres,
+        fedcorr_proxterm_beta,
     ) = [exp_cli_args.get(k) for k in keys]
 
     # get last checkpoint epoch to continue training from there
@@ -151,6 +159,10 @@ def get_experiment_args(exp_id: str):
         feddm_cac_label_correction,
         feddm_loss,
         iopfl_alpha,
+        fedcorr_preproc_rounds_frac,
+        fedcorr_relabel_ratio,
+        fedcorr_relabel_confidence_thres,
+        fedcorr_proxterm_beta,
         start_epoch,
         start_fl_round,
     )
@@ -180,6 +192,10 @@ def main(args):
         feddm_cac_label_correction,
         feddm_loss,
         iopfl_alpha,
+        fedcorr_preproc_rounds_frac,
+        fedcorr_relabel_ratio,
+        fedcorr_relabel_confidence_thres,
+        fedcorr_proxterm_beta,
         start_epoch,
         start_fl_round,
     ) = get_experiment_args(args.exp_id)
@@ -252,6 +268,26 @@ def main(args):
             "iopfl_alpha": (
                 iopfl_alpha
                 if noise_mitigation_method.lower() == "iopfl"
+                else None
+            ),
+            "fedcorr_preproc_rounds_frac": (
+                fedcorr_preproc_rounds_frac
+                if noise_mitigation_method.lower() == "fedcorr"
+                else None
+            ),
+            "fedcorr_relabel_ratio": (
+                fedcorr_relabel_ratio
+                if noise_mitigation_method.lower() == "fedcorr"
+                else None
+            ),
+            "fedcorr_relabel_confidence_thres": (
+                fedcorr_relabel_confidence_thres
+                if noise_mitigation_method.lower() == "fedcorr"
+                else None
+            ),
+            "fedcorr_proxterm_beta": (
+                fedcorr_proxterm_beta
+                if noise_mitigation_method.lower() == "fedcorr"
                 else None
             ),
         },
