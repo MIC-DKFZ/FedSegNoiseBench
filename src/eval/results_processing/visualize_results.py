@@ -15,8 +15,8 @@ raw_dataset_col = "Data"
 noise_col = "Noise"
 metric_col = "Mean(D_val)"
 
-target_algos = ["FedAvg", "FedA3I", "IOP-FL"]
-target_datasets = ["LIDC", "RIGA", "Gleason", "MouseTumor", "MMIA"]
+target_algos = ["FedAvg", "FedA3I", "IOP-FL", "FedCorr"]
+target_datasets = ["LIDC", "RIGA", "Gleason", "MouseTumor", "MMIA", "MMIS"]
 noise_order = ["0", "roa(X)", "roc(X)", "100"]  # plotting order
 
 OUTPUT_DIR = Path("./visualizations")
@@ -68,6 +68,8 @@ def normalize_dataset(name: str) -> str:
         return "MouseTumor"
     if "mmia" in n:
         return "MMIA"
+    if "mmis" in n:
+        return "MMIS"
     return name  # fallback: raw
 
 df["Dataset_norm"] = df[raw_dataset_col].apply(normalize_dataset)
