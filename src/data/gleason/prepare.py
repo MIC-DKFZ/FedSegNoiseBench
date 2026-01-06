@@ -200,7 +200,7 @@ class Gleason_dataset_processor:
         #     5: 4,
         #     6: 5
         # }
-        # label mapping to begnin, gleason 1, 2, 3 from https://github.com/matjesg/deepflash2/blob/master/paper/challenge_data/preprocess_gleason.ipynb 
+        # label mapping to begnin, gleason 1, 2, 3 from https://github.com/matjesg/deepflash2/blob/master/paper/challenge_data/preprocess_gleason.ipynb
         label_value_mapping = {
             0: 0,
             1: 1,
@@ -224,7 +224,9 @@ class Gleason_dataset_processor:
         # define FL client's dataset_id to histopatho image slide mapping
         dataset_ids = self.dataset_ids.split(" ")
         _pathoimgslides_per_flclient = [
-            int(x) for x in self.pathoimgslides_per_flclient.split(",")
+            int(x.strip())
+            for x in self.pathoimgslides_per_flclient.split(",")
+            if x.strip()
         ]
         num_slides_per_flclient = len(_pathoimgslides_per_flclient) // len(dataset_ids)
         pathoimgslides_per_flclient = [
@@ -359,7 +361,7 @@ class Gleason_dataset_processor:
                         "background": 0,
                         "gleason_label1": 1,
                         "gleason_label2": 2,
-                        "gleason_label3": 3
+                        "gleason_label3": 3,
                     }
                 ),
                 "name": f"Gleason2019_flcient{idx}",
@@ -417,8 +419,9 @@ class Gleason_dataset_processor:
             print(f"Present labels in dataset {dataset_id}: {present_labels}")
 
             # Modify the first folds to ensure label presence
-            for i in range(2):
+            for i in range(4):
                 ensure_label_presence = False
+                print(f"Ensuring label presence in fold {i}...")
                 while not ensure_label_presence:
                     train_cases = set(splits[i]["train"])
                     val_cases = set(splits[i]["val"])
@@ -481,7 +484,7 @@ class Gleason_dataset_processor:
                 json.dump(splits, f, indent=4)
 
             print(
-                "Updated splits_final.json to ensure label presence in first 2 folds."
+                "Updated splits_final.json to ensure label presence in first 4 folds."
             )
 
 
@@ -562,8 +565,8 @@ if __name__ == "__main__":
     # Step1.1: Given STAPLE consensus masks to consensus masks
     # gleason_ds_processor.staple_to_consensus_masks()
 
-    # Step2: Generate nnUNet datasets with FL splits
-    gleason_ds_processor.to_nnUNet_raw_dataset()
+    # # Step2: Generate nnUNet datasets with FL splits
+    # gleason_ds_processor.to_nnUNet_raw_dataset()
 
     # Step3: Ensure presence of all labels in all dataset folds
-    # gleason_ds_processor.ensure_label_presence_in_folds()
+    gleason_ds_processor.ensure_label_presence_in_folds()
