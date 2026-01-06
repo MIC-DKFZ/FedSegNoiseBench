@@ -4,4 +4,4 @@
 log.txt
 *.pyc
 .vscode/
-visualizations/*
+results/*
