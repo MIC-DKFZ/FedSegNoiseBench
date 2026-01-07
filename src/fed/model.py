@@ -16,6 +16,7 @@ class nnUNetv2_fed:
         save_every: int = 50,
         oversample_foreground_percent: float = 0.33,
         class_sampling_probabilities: str = None,
+        batch_element_class_probabilities: str = None,
         num_gpus: int = 1,
         continue_training: bool = False,
         clean_validation_dataset: str = None,
@@ -31,11 +32,7 @@ class nnUNetv2_fed:
         self.trainer = trainer
         self.save_every = save_every
         self.oversample_foreground_percent = oversample_foreground_percent
-        # self.class_sampling_probabilities = (
-        #     json.loads(class_sampling_probabilities)
-        #     if class_sampling_probabilities
-        #     else None
-        # )
+        
         self.class_sampling_probabilities = (
             ast.literal_eval(class_sampling_probabilities)
             if class_sampling_probabilities
@@ -44,6 +41,15 @@ class nnUNetv2_fed:
         print(
             f"Class sampling probabilities:{self.class_sampling_probabilities} ; {type(self.class_sampling_probabilities)=}"
         )
+        self.batch_element_class_probabilities = (
+            ast.literal_eval(batch_element_class_probabilities)
+            if batch_element_class_probabilities
+            else None
+        )
+        print(
+            f"Batch element class probabilities:{self.batch_element_class_probabilities} ; {type(self.batch_element_class_probabilities)=}"
+        )
+
         self.clean_validation_folder = (
             os.path.join(
                 os.getenv("nnUNet_preprocessed"),
@@ -111,6 +117,7 @@ class nnUNetv2_fed:
             save_every=self.save_every,
             oversample_foreground_percent=self.oversample_foreground_percent,
             class_sampling_probabilities=self.class_sampling_probabilities,
+            batch_element_class_probabilities=self.batch_element_class_probabilities,
             clean_validation_folder=self.clean_validation_folder,
             initialize_fed_training=initialize_fed_training,
             num_epochs=num_epochs,

@@ -53,6 +53,7 @@ def main(args):
                 "save_every": args.save_every,
                 "oversample_foreground_percent": args.oversample_foreground_percent,
                 "class_sampling_probabilities": args.class_sampling_probabilities,
+                "batch_element_class_probabilities": args.batch_element_class_probabilities,
                 "num_gpus": args.num_gpus,
                 "clean_validation_dataset": (
                     args.clean_validation_dataset.split()[i]
@@ -222,6 +223,12 @@ if __name__ == "__main__":
         type=str,
         default=None,
         help="Class-specific oversampling probabilities for nnUNetTrainer_weightedClassSampling.",
+    )
+    parser.add_argument(
+        "--batch_element_class_probabilities",
+        type=str,
+        default=None,
+        help="Batch element-specific class sampling probabilities for nnUNetTrainer_batchElementClassSampling.",
     )
 
     # FL arguments
