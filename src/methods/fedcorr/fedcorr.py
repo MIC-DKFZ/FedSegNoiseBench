@@ -200,18 +200,17 @@ class FedCorr(FedAvg):
 
         return output_whole, output_whole_highres, loss_whole
 
-    def lid_term_batched(self, X, k=20, batch_size=64, eps=1e-6):
+    def lid_term_batched(self, X, k=20, batch_size=128, eps=1e-6):
         """
         Compute Local Intrinsic Dimensionality (LID) for a batch of samples.
 
-        Calculates LID scores by computing k-nearest neighbor distances in batches
-        to manage memory efficiently, then applies the LID formula to estimate
-        the intrinsic dimensionality of the data.
+        Memory-efficient version that computes only k-nearest neighbors instead
+        of the full distance matrix, reducing memory from O(N²) to O(N×k).
 
         Args:
             X: Input data as list of tensors or stacked tensor of shape (N, C, ..., H, W)
             k: Number of nearest neighbors to consider (default: 20)
-            batch_size: Batch size for distance computation (default: 64)
+            batch_size: Batch size for distance computation (default: 128)
             eps: Small epsilon value to avoid division by zero (default: 1e-6)
 
         Returns:
@@ -224,28 +223,36 @@ class FedCorr(FedAvg):
         N = X.size(0)
         X_flat = X.view(N, -1).cpu().numpy()
 
-        # allocate full distance matrix on CPU
-        distances = np.empty((N, N))
+        # Allocate only k-nearest neighbor distances instead of full N×N matrix
+        # This reduces memory from O(N²) to O(N×k)
+        k_distances = np.zeros((N, k))
 
-        # fill in pairwise distances row-wise in batches
+        # Compute k-nearest neighbors in batches to save memory
         for i in range(0, N, batch_size):
             print(
                 f"Computing distances for samples {i} to {min(i + batch_size, N)} / {N}"
             )
             X_i = X_flat[i : i + batch_size]
+            # Compute distances only for current batch
             d_block = cdist(X_i, X_flat, metric="euclidean")
-            distances[i : i + batch_size] = d_block
+            
+            # For each sample in batch, extract only k+1 nearest neighbors
+            for j, distances_row in enumerate(d_block):
+                # Get k+1 smallest distances (including self at 0)
+                k_nearest = np.partition(distances_row, k)[:k+1]
+                k_nearest_sorted = np.sort(k_nearest)
+                # Skip first (self with distance 0), keep next k
+                k_distances[i + j] = k_nearest_sorted[1:k+1]
 
-        # compute LID scores
-        f = lambda v: -k / (np.sum(np.log(v / (v[-1] + eps))) + eps)
-        sort_indices = np.apply_along_axis(np.argsort, axis=1, arr=distances)[
-            :, 1 : k + 1
-        ]
-        m, n = sort_indices.shape
-        row_idx = np.arange(m)[:, None]
-        col_idx = sort_indices
-        distances_ = distances[row_idx, col_idx]
-        lids = np.apply_along_axis(f, axis=1, arr=distances_)
+        # Compute LID scores from k-nearest neighbor distances
+        def compute_lid(v):
+            # v contains k nearest neighbor distances (sorted, excluding self)
+            # LID = -k / sum(log(v_i / v_k)) where v_k is the k-th neighbor
+            ratio = v / (v[-1] + eps)
+            log_sum = np.sum(np.log(ratio + eps))
+            return -k / (log_sum + eps)
+        
+        lids = np.apply_along_axis(compute_lid, axis=1, arr=k_distances)
         return lids
 
     def set_lid(self, lid_values, c_id: int):
