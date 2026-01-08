@@ -200,7 +200,7 @@ class FedCorr(FedAvg):
 
         return output_whole, output_whole_highres, loss_whole
 
-    def lid_term_batched(self, X, k=20, batch_size=128, eps=1e-6):
+    def lid_term_batched(self, X, k=20, batch_size=16, eps=1e-6):
         """
         Compute Local Intrinsic Dimensionality (LID) for a batch of samples.
 
