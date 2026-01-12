@@ -1,4 +1,8 @@
+import os
+import json
 import copy
+import ast
+from glob import glob
 from sklearn.mixture import GaussianMixture
 from tqdm import tqdm
 import logging
@@ -32,8 +36,11 @@ class FedCorr(FedAvg):
         fedcorr_relabel_ratio: float = None,
         fedcorr_relabel_confidence_thres: float = None,
         fedcorr_proxterm_beta: float = None,
+        fl_strategy_state: dict = None,
     ):
         super().__init__(clients=clients)
+        self.experiment_id = None  # to be set when saving state
+
         self.name = "fedcorr"
         self.fedcorr_preproc_rounds = int(fedcorr_preproc_rounds_frac * num_rounds)
         self.fedcorr_relabel_ratio = fedcorr_relabel_ratio
@@ -41,13 +48,83 @@ class FedCorr(FedAvg):
         self.fedcorr_proxterm_beta = fedcorr_proxterm_beta
 
         # variables for client and sample noise estimation
-        self.noisy_clients = []
-        self.clean_clients = []
-        self.LID_whole = {c_id: None for c_id in range(len(self.clients))}
-        self.LID_client = {c_id: None for c_id in range(len(self.clients))}
-        self.LID_accumulative_client = {c_id: 0.0 for c_id in range(len(self.clients))}
-        self.loss_whole = {c_id: None for c_id in range(len(self.clients))}
-        self.loss_accumulative_whole = {c_id: {} for c_id in range(len(self.clients))}
+        self.noisy_clients = (
+            []
+            if fl_strategy_state is None
+            else fl_strategy_state.get("noisy_clients", [])
+        )
+        self.clean_clients = (
+            []
+            if fl_strategy_state is None
+            else fl_strategy_state.get("clean_clients", [])
+        )
+        self.LID_whole = (
+            {c_id: None for c_id in range(len(self.clients))}
+            if fl_strategy_state is None
+            else fl_strategy_state.get("LID_whole", {})
+        )
+        self.LID_client = (
+            {c_id: None for c_id in range(len(self.clients))}
+            if fl_strategy_state is None
+            else fl_strategy_state.get("LID_client", {})
+        )
+        self.LID_accumulative_client = (
+            {c_id: 0.0 for c_id in range(len(self.clients))}
+            if fl_strategy_state is None
+            else fl_strategy_state.get("LID_accumulative_client", {})
+        )
+        self.loss_whole = (
+            {c_id: None for c_id in range(len(self.clients))}
+            if fl_strategy_state is None
+            else fl_strategy_state.get("loss_whole", {})
+        )
+        self.loss_accumulative_whole = (
+            {c_id: {} for c_id in range(len(self.clients))}
+            if fl_strategy_state is None
+            else fl_strategy_state.get("loss_accumulative_whole", {})
+        )
+        self.clients_estimated_noisy_level = (
+            {client.client_id: 0.0 for client in self.clients}
+            if fl_strategy_state is None
+            else fl_strategy_state.get("clients_estimated_noisy_level", {})
+        )
+        self.path_to_global_fl_model_weights = (
+            None
+            if fl_strategy_state is None
+            else fl_strategy_state.get("path_to_global_fl_model_weights", None)
+        )
+        # check if noisy and clean clients are lists
+        if not isinstance(self.noisy_clients, list):
+            self.noisy_clients = ast.literal_eval(self.noisy_clients.replace(" ", ", "))
+        if not isinstance(self.clean_clients, list):
+            self.clean_clients = ast.literal_eval(self.clean_clients.replace(" ", ", "))
+        # check if keys are strings, convert to int if needed
+        if fl_strategy_state is not None:
+            if isinstance(self.LID_whole.keys().__iter__().__next__(), str):
+                self.LID_whole = {int(k): v for k, v in self.LID_whole.items()}
+            if isinstance(self.LID_client.keys().__iter__().__next__(), str):
+                self.LID_client = {int(k): v for k, v in self.LID_client.items()}
+            if isinstance(
+                self.LID_accumulative_client.keys().__iter__().__next__(), str
+            ):
+                self.LID_accumulative_client = {
+                    int(k): v for k, v in self.LID_accumulative_client.items()
+                }
+            if isinstance(self.loss_whole.keys().__iter__().__next__(), str):
+                self.loss_whole = {int(k): v for k, v in self.loss_whole.items()}
+            if isinstance(
+                self.loss_accumulative_whole.keys().__iter__().__next__(), str
+            ):
+                self.loss_accumulative_whole = {
+                    int(k): v for k, v in self.loss_accumulative_whole.items()
+                }
+            if isinstance(
+                self.clients_estimated_noisy_level.keys().__iter__().__next__(), str
+            ):
+                self.clients_estimated_noisy_level = {
+                    int(k): v
+                    for k, v in self.clients_estimated_noisy_level.items()
+                }
 
         # compute number of fl_rounds for fine-tuning and full-training stages
         self.fedcorr_finetune_rounds, self.fedcorr_fulltrain_rounds = (
@@ -55,12 +132,14 @@ class FedCorr(FedAvg):
         )
 
         # initialize estimated noisy levels for clients
-        self.clients_estimated_noisy_level = {
-            client.client_id: 0.0 for client in self.clients
-        }
+        
 
         # global model weights for proximal term computation are set from orchestrator
-        self.global_fl_model_weights = None
+        self.global_fl_model_weights = (
+            None
+            if self.path_to_global_fl_model_weights is None
+            else torch.load(self.path_to_global_fl_model_weights)
+        )
 
         logging.info(
             f"FedCorr initialized with preproc rounds frac {self.fedcorr_preproc_rounds}, \
@@ -154,10 +233,9 @@ class FedCorr(FedAvg):
         output_whole = []
         loss_whole = {}
 
+        logging.info("Getting per-sample outputs and losses...")
         with torch.no_grad():
-            for batch_idx, batch in enumerate(
-                tqdm(loader, total=nnunet_trainer.num_iterations_per_epoch)
-            ):
+            for batch_idx, batch in enumerate(loader):
                 if batch_idx >= nnunet_trainer.num_iterations_per_epoch:
                     break
                 for batch_element_idx in range(len(batch["data"])):
@@ -216,6 +294,7 @@ class FedCorr(FedAvg):
         Returns:
             Array of LID scores for each sample
         """
+        logging.info("Computing LID scores in batched manner...")
         # X is list of tensors, each (1, C, (D), H, W)
         if isinstance(X, list):
             X = torch.stack(X, dim=0)  # (N, C, (D), H, W)
@@ -229,20 +308,20 @@ class FedCorr(FedAvg):
 
         # Compute k-nearest neighbors in batches to save memory
         for i in range(0, N, batch_size):
-            print(
+            logging.info(
                 f"Computing distances for samples {i} to {min(i + batch_size, N)} / {N}"
             )
             X_i = X_flat[i : i + batch_size]
             # Compute distances only for current batch
             d_block = cdist(X_i, X_flat, metric="euclidean")
-            
+
             # For each sample in batch, extract only k+1 nearest neighbors
             for j, distances_row in enumerate(d_block):
                 # Get k+1 smallest distances (including self at 0)
-                k_nearest = np.partition(distances_row, k)[:k+1]
+                k_nearest = np.partition(distances_row, k)[: k + 1]
                 k_nearest_sorted = np.sort(k_nearest)
                 # Skip first (self with distance 0), keep next k
-                k_distances[i + j] = k_nearest_sorted[1:k+1]
+                k_distances[i + j] = k_nearest_sorted[1 : k + 1]
 
         # Compute LID scores from k-nearest neighbor distances
         def compute_lid(v):
@@ -251,7 +330,7 @@ class FedCorr(FedAvg):
             ratio = v / (v[-1] + eps)
             log_sum = np.sum(np.log(ratio + eps))
             return -k / (log_sum + eps)
-        
+
         lids = np.apply_along_axis(compute_lid, axis=1, arr=k_distances)
         return lids
 
@@ -500,3 +579,63 @@ class FedCorr(FedAvg):
                     # replace target with argmaxed output
                     target_[res_lvl][idx] = argmaxed_nononehot_output
         return target_
+
+    def save_global_model_weights(self):
+        """
+        Save the global model weights to disk for potential restart, and set self.path_to_global_fl_model_weights.
+        """
+        if self.path_to_global_fl_model_weights is None:
+            exp_id_folder = self.clients[0].results_dir
+            self.path_to_global_fl_model_weights = os.path.join(
+                exp_id_folder, "fedcorr_global_fl_model_weights.pth"
+            )
+            torch.save(
+                self.global_fl_model_weights, self.path_to_global_fl_model_weights
+            )
+
+            # update state
+            logging.info(
+                f"Saved FedCorr global model weights to {self.path_to_global_fl_model_weights}!"
+            )
+            self.save_state(exp_id=self.experiment_id)
+
+    def save_state(self, exp_id: str):
+        """
+        Save the current state of FedCorr method to experiment's cli args file.
+        """
+        # compose fl_strategy_state dict
+        fl_strategy_state = {
+            "LID_whole": self.LID_whole,
+            "LID_client": self.LID_client,
+            "LID_accumulative_client": self.LID_accumulative_client,
+            "loss_whole": self.loss_whole,
+            "loss_accumulative_whole": self.loss_accumulative_whole,
+            "noisy_clients": self.noisy_clients,
+            "clean_clients": self.clean_clients,
+            "clients_estimated_noisy_level": self.clients_estimated_noisy_level,
+            "path_to_global_fl_model_weights": self.path_to_global_fl_model_weights,
+        }
+        self.experiment_id = exp_id
+
+        # save fl_strategy_state to experiment's cli args file
+        results_dir = os.getenv("nnUNet_results") or os.getcwd()
+        # strip from exp_id "DXXX_" prefix if exists
+        if exp_id.startswith("D") and "_" in exp_id:
+            exp_id = "_".join(exp_id.split("_")[1:])
+        args_file = os.path.join(results_dir, f"ExperimentArgs_{exp_id}.json")
+
+        # Read existing args if file exists, otherwise create empty dict
+        if os.path.exists(args_file):
+            with open(args_file, "r") as f:
+                args_data = json.load(f)
+        else:
+            args_data = {}
+
+        # Add fl_strategy_state to args data
+        args_data["fl_strategy_state"] = fl_strategy_state
+
+        # Write updated args data back to file
+        with open(args_file, "w") as f:
+            json.dump(args_data, f, indent=2, default=str)
+
+        logging.info(f"Saved FedCorr state to {args_file}")

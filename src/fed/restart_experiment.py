@@ -107,7 +107,8 @@ def get_experiment_args(exp_id: str):
         "fedcorr_preproc_rounds_frac",
         "fedcorr_relabel_ratio",
         "fedcorr_relabel_confidence_thres",
-        "fedcorr_proxterm_beta"
+        "fedcorr_proxterm_beta",
+        "fl_strategy_state",
     ]
     (
         configuration,
@@ -133,6 +134,7 @@ def get_experiment_args(exp_id: str):
         fedcorr_relabel_ratio,
         fedcorr_relabel_confidence_thres,
         fedcorr_proxterm_beta,
+        fl_strategy_state,
     ) = [exp_cli_args.get(k) for k in keys]
 
     # get last checkpoint epoch to continue training from there
@@ -174,6 +176,7 @@ def get_experiment_args(exp_id: str):
         fedcorr_proxterm_beta,
         start_epoch,
         start_fl_round,
+        fl_strategy_state,
     )
 
 
@@ -210,7 +213,13 @@ def main(args):
         fedcorr_proxterm_beta,
         start_epoch,
         start_fl_round,
+        fl_strategy_state,
     ) = get_experiment_args(args.exp_id)
+
+    print(f"Restarting experiment '{args.exp_id}' with the following args:")
+    print(
+        f"{dataset_ids=}\n{configuration=}\n{fold=}\n{plan=}\n{trainer=}\n{save_every=}\n{oversample_foreground_percent=}\n{class_sampling_probabilities=}\n{batch_element_class_probabilities=}\n{noise_ratio=}\n{num_clients=}\n{num_rounds=}\n{num_local_epochs=}\n{clean_validation_datasets=}\n{noisy_train_folders=}\n{noise_mitigation_method=}\n{feda3i_warmup_rounds_frac=}\n{feda3i_interw=}\n{feddm_gamma_hgd_smoothing=}\n{feddm_ratio_cac_pixelselection=}\n{feddm_cac_label_correction=}\n{feddm_loss=}\n{iopfl_alpha=}\n{fedcorr_preproc_rounds_frac=}\n{fedcorr_relabel_ratio=}\n{fedcorr_relabel_confidence_thres=}\n{fedcorr_proxterm_beta=}\n{start_epoch=}\n{start_fl_round=}\n"
+    )
 
     # setup clients
     clients = [
@@ -238,7 +247,7 @@ def main(args):
             },
             fl_args={
                 "num_local_epochs": num_local_epochs,
-                "num_rounds": num_rounds - start_fl_round,
+                "num_rounds": num_rounds,  #  - start_fl_round,
                 "start_epoch": start_epoch,
             },
         )
@@ -249,9 +258,10 @@ def main(args):
     orchestrator = Orchestrator(
         clients,
         fl_args={
-            "num_rounds": num_rounds - start_fl_round,
+            "num_rounds": num_rounds,  #  - start_fl_round,
             "start_fl_round": start_fl_round,
             "strategy": noise_mitigation_method,
+            # FedA3I
             "feda3i_warmup_rounds_frac": (
                 feda3i_warmup_rounds_frac
                 if noise_mitigation_method.lower() == "feda3i"
@@ -260,6 +270,7 @@ def main(args):
             "feda3i_interw": (
                 feda3i_interw if noise_mitigation_method.lower() == "feda3i" else None
             ),
+            # FedDM
             "feddm_gamma_hgd_smoothing": (
                 feddm_gamma_hgd_smoothing
                 if noise_mitigation_method.lower() == "feddm"
@@ -276,15 +287,13 @@ def main(args):
                 else None
             ),
             "feddm_loss": (
-                feddm_loss
-                if noise_mitigation_method.lower() == "feddm"
-                else None
+                feddm_loss if noise_mitigation_method.lower() == "feddm" else None
             ),
+            # IOP-FL
             "iopfl_alpha": (
-                iopfl_alpha
-                if noise_mitigation_method.lower() == "iopfl"
-                else None
+                iopfl_alpha if noise_mitigation_method.lower() == "iopfl" else None
             ),
+            # FedCorr
             "fedcorr_preproc_rounds_frac": (
                 fedcorr_preproc_rounds_frac
                 if noise_mitigation_method.lower() == "fedcorr"
@@ -302,6 +311,11 @@ def main(args):
             ),
             "fedcorr_proxterm_beta": (
                 fedcorr_proxterm_beta
+                if noise_mitigation_method.lower() == "fedcorr"
+                else None
+            ),
+            "fl_strategy_state": (
+                fl_strategy_state
                 if noise_mitigation_method.lower() == "fedcorr"
                 else None
             ),

@@ -8,6 +8,7 @@ from methods.feda3i.feda3i import FedA3I
 from methods.feddm.feddm import FedDM
 from methods.iopfl.iopfl import IOPFL
 from methods.fedcorr.fedcorr import FedCorr
+from methods.fedselect.fedselect import FedSelect
 
 
 class Orchestrator:
@@ -17,6 +18,9 @@ class Orchestrator:
         self.server_model_weights = None
         # start FL round set for continuing experiments
         self.start_fl_round = fl_args.get("start_fl_round", 0)
+        logging.info(
+            f"Orchestrator initialized for {self.num_rounds} FL rounds, starting from FL round {self.start_fl_round}!"
+        )
 
         # set FL strategy
         if fl_args["strategy"].lower() == "fedavg":
@@ -45,6 +49,18 @@ class Orchestrator:
                 fl_args["fedcorr_relabel_ratio"],
                 fl_args["fedcorr_relabel_confidence_thres"],
                 fl_args["fedcorr_proxterm_beta"],
+                fl_strategy_state=fl_args.get("fl_strategy_state", None),
+            )
+        elif fl_args["strategy"].lower() == "fedselect":
+            self.fl_strategy = FedSelect(
+                self.clients,
+                self.num_rounds,
+                fl_args.get("fedselect_warmup_rounds_frac", 0.1),
+                fl_args.get("fedselect_client_select_ratio", 0.4),
+                fl_args.get("fedselect_sample_select_ratio", 0.6),
+                fl_args.get("fedselect_meta_momentum", 0.9),
+                fl_args.get("fedselect_meta_lr", 1e-3),
+                fl_args.get("fedselect_reward_data_size", 1000),
             )
         else:
             raise NotImplementedError(
@@ -57,7 +73,7 @@ class Orchestrator:
         self.aggregate(strategy="fedavg")
 
         # iterate over fl rounds
-        for i, fl_round in enumerate(range(0, self.num_rounds)):
+        for i, fl_round in enumerate(range(self.start_fl_round, self.num_rounds)):
             logging.info(f"Start FL round {i}!")
 
             # distribute current orchestrator model to clients
@@ -169,6 +185,17 @@ class Orchestrator:
                     self.fl_strategy.global_fl_model_weights = copy.deepcopy(
                         self.server_model_weights
                     )
+
+                    # also save it to disk to have it availble for potential restart
+                    self.fl_strategy.save_global_model_weights()
+
+            # FedSelect
+            elif self.fl_strategy.name == "fedselect":
+                logging.info(
+                    "Aggregating model weights with FedSelect strategy!"
+                )
+                # FedSelect uses importance-weighted aggregation
+                self.aggregate(strategy=self.fl_strategy.name, fl_round=fl_round)
             else:
                 raise NotImplementedError(
                     f"Federated learning strategy {self.fl_strategy.name} not implemented!"
@@ -190,7 +217,7 @@ class Orchestrator:
 
         return self.server_model_weights
 
-    def aggregate(self, strategy: str = None):
+    def aggregate(self, strategy: str = None, fl_round: int = 0):
         """
         Aggregate model weights from clients.
         Output:
@@ -225,6 +252,10 @@ class Orchestrator:
                 self.server_model_weights = self.fl_strategy.fed_avg(
                     clean_client_checkpoints
                 )
+        elif strategy == "fedselect":
+            self.server_model_weights = self.fl_strategy.fedselect_aggregate(
+                client_checkpoints, fl_round
+            )
         else:
             raise NotImplementedError(
                 f"Federated learning strategy {strategy} not implemented!"

@@ -203,6 +203,22 @@ class Client:
             #     )
 
         ##########################################
+        # FedSelect
+        ##########################################
+        elif fl_strategy.name == "fedselect":
+            self.model.run(
+                initialize_fed_training=False,
+                num_epochs=target_num_epochs,
+                current_epoch=self.current_epoch,
+                epochs_per_round=self.fl_args["num_local_epochs"],
+                last_fl_round=last_fl_round,
+                very_last_fl_predict_round=very_last_fl_predict_round,
+                only_run_validation=only_run_validation,
+                fl_strategy=fl_strategy,
+                fl_client_id=self.client_id,
+            )
+
+        ##########################################
         # all other FL strategies
         ##########################################
         else:
@@ -224,6 +240,10 @@ class Client:
 
         # update current epoch
         self.current_epoch = target_num_epochs
+
+        # periodically save fl_strategy state
+        if fl_round % self.model.save_every == 0:
+            fl_strategy.save_state(exp_id=self.model_args["experiment_id"])
 
         # log time
         end_time = time.time()
