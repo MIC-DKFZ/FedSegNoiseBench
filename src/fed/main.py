@@ -328,6 +328,43 @@ if __name__ == "__main__":
         default=None,  # 5.0
         help="Beta parameter for proximal term in FedCorr.",
     )
+    # FedSelect
+    parser.add_argument(
+        "--fedselect_warmup_rounds_frac",
+        type=float,
+        default=0.1,
+        help="Fraction of rounds for warmup phase in FedSelect (default: 0.1).",
+    )
+    parser.add_argument(
+        "--fedselect_client_select_ratio",
+        type=float,
+        default=0.4,
+        help="Ratio of clients to select in each FedSelect round (default: 0.4).",
+    )
+    parser.add_argument(
+        "--fedselect_sample_select_ratio",
+        type=float,
+        default=0.6,
+        help="Ratio of samples to select per client in FedSelect (default: 0.6).",
+    )
+    parser.add_argument(
+        "--fedselect_meta_momentum",
+        type=float,
+        default=0.9,
+        help="Momentum for meta-margin computation in FedSelect (default: 0.9).",
+    )
+    parser.add_argument(
+        "--fedselect_meta_lr",
+        type=float,
+        default=1e-3,
+        help="Learning rate for VNet meta model in FedSelect (default: 1e-3).",
+    )
+    parser.add_argument(
+        "--fedselect_reward_data_size",
+        type=int,
+        default=1000,
+        help="Size of proxy validation/reward dataset in FedSelect (default: 1000).",
+    )
 
     # other arguments
     parser.add_argument(
