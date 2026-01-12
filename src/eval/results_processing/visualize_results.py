@@ -19,7 +19,7 @@ target_algos = ["FedAvg", "FedA3I", "IOP-FL", "FedCorr"]
 target_datasets = ["LIDC", "RIGA", "Gleason", "MouseTumor", "MMIA", "MMIS"]
 noise_order = ["0", "roa(X)", "roc(X)", "100"]  # plotting order
 
-OUTPUT_DIR = Path("./visualizations")
+OUTPUT_DIR = Path("./results")
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # -------------------------------------------------------------------
