@@ -57,7 +57,7 @@ def bootstrap_evaluate(
 
     # Compute metrics for all cases once
     all_case_metrics = {}
-    for ref_file, pred_file in zip(files_ref, files_pred):
+    for ref_file, pred_file in tqdm(zip(files_ref, files_pred), total=num_cases, desc="Computing metrics per sample..."):
         case_name = Path(pred_file).stem
         metrics = compute_metrics(ref_file, pred_file, rw, labels, ignore_label)
         all_case_metrics[case_name] = metrics
