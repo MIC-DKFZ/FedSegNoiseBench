@@ -132,6 +132,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--exp_id", type=str, help="Experiment ID of bootstrapped model."
     )
+    parser.add_argument(
+        "--force", action="store_true", help="Force re-evaluation even if results exist.", default=False
+    )
     args = parser.parse_args()
 
     # determine and define args
@@ -145,6 +148,11 @@ if __name__ == "__main__":
     ), f"No experiment folder found for exp_id {args.exp_id} in nnUNet_results!"
     
     for exp_folder in exp_folders:
+        # check if exp_folder already has bootstrap results
+        if os.path.exists(Path(exp_folder) / "validation" / "bootstrap_evaluation_results.json") and not args.force:
+            print(f"\nBootstrap results already exist for {exp_folder}. Skipping...")
+            continue
+
         print(f"\nEvaluating experiment folder: {exp_folder}")
         # get dataset_id
         dataset_id = os.path.basename(exp_folder).split("_")[0].strip("D")
