@@ -76,3 +76,6 @@ class FedAvg:
             # modifying the 0th keys is sufficient as the other keys point to the same data
 
         return _server_model_weights
+
+    def save_state(self, exp_id: str = None):
+        print(f"Saving state of {self.name} not implemented yet for FL strategy {self.name}!")
