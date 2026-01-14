@@ -139,37 +139,39 @@ if __name__ == "__main__":
     nnunet_preproc = Path(os.getenv("nnUNet_preprocessed"))
     
     # get exp folder
-    exp_folder = glob(str(nnunet_res / "*" / "*" / "*" / f"D*_{args.exp_id}"))[0]
+    exp_folders = glob(str(nnunet_res / "*" / "*" / "*" / f"D*_{args.exp_id}"))
     assert (
-        len(exp_folder) > 0
+        len(exp_folders) > 0
     ), f"No experiment folder found for exp_id {args.exp_id} in nnUNet_results!"
+    
+    for exp_folder in exp_folders:
+        print(f"\nEvaluating experiment folder: {exp_folder}")
+        # get dataset_id
+        dataset_id = os.path.basename(exp_folder).split("_")[0].strip("D")
 
-    # get dataset_id
-    dataset_id = os.path.basename(exp_folder).split("_")[0].strip("D")
+        # get preproc folder
+        preproc_folder = glob(str(nnunet_preproc / f"Dataset{dataset_id}_*"))[0]
+        assert (
+            len(preproc_folder) > 0
+        ), f"No preprocessed folder found for dataset_id {dataset_id} in nnUNet_preprocessed!"
 
-    # get preproc folder
-    preproc_folder = glob(str(nnunet_preproc / f"Dataset{dataset_id}_*"))[0]
-    assert (
-        len(preproc_folder) > 0
-    ), f"No preprocessed folder found for dataset_id {dataset_id} in nnUNet_preprocessed!"
-
-    # load dataset.json
-    dataset_json = json.load(open(Path(preproc_folder) / "dataset.json"))
+        # load dataset.json
+        dataset_json = json.load(open(Path(preproc_folder) / "dataset.json"))
 
 
-    # set args
-    folder_ref = Path(preproc_folder) / "gt_segmentations"
-    folder_pred = Path(exp_folder) / "validation"
-    labels = [int(l) for l in dataset_json["labels"].values() if int(l) != 0]  # exclude background
-    ignore_label = dataset_json["ignore_label"] if "ignore_label" in dataset_json else None
-    num_bootstrap_iterations = 1000
-    file_ending = dataset_json["file_ending"]
+        # set args
+        folder_ref = Path(preproc_folder) / "gt_segmentations"
+        folder_pred = Path(exp_folder) / "validation"
+        labels = [int(l) for l in dataset_json["labels"].values() if int(l) != 0]  # exclude background
+        ignore_label = dataset_json["ignore_label"] if "ignore_label" in dataset_json else None
+        num_bootstrap_iterations = 1000
+        file_ending = dataset_json["file_ending"]
 
-    bootstrap_evaluate(
-        folder_ref,
-        folder_pred,
-        labels=labels,
-        ignore_label=ignore_label,
-        num_bootstrap_iterations=num_bootstrap_iterations,
-        file_ending=file_ending,
-    )
+        bootstrap_evaluate(
+            folder_ref,
+            folder_pred,
+            labels=labels,
+            ignore_label=ignore_label,
+            num_bootstrap_iterations=num_bootstrap_iterations,
+            file_ending=file_ending,
+        )
