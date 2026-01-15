@@ -1,16 +1,20 @@
 import subprocess
 import pandas as pd
+from tqdm import tqdm
+import argparse
 
 
-def run_bootstrap_eval(experiment_id):
+def run_bootstrap_eval(experiment_id, force=False):
     """Run bootstrap_nnunet_eval.py for a given experiment_id."""
     cmd = [
         "python3",
         "./src/eval/results_processing/bootstrap_nnunet_eval.py",
         "--exp_id",
         experiment_id,
-        "--force",
     ]
+    if force:
+        cmd.append("--force")
+
     print(f"Running: {' '.join(cmd)}")
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
@@ -19,17 +23,26 @@ def run_bootstrap_eval(experiment_id):
         print(f"Completed experiment_id {experiment_id}")
 
 
-def main(df):
+def main(df, force=False):
     """Find experiment_ids and run bootstrap for each experiment."""
     # get experiment_ids of df for rows with ID set
     experiment_ids = df[df["ID"].notna()]["Experiment ID"].dropna().unique().tolist()
 
     print(f"Found {len(experiment_ids)} experiments")
-    for exp_id in experiment_ids:
-        run_bootstrap_eval(exp_id)
+    for exp_id in tqdm(experiment_ids, desc="Running bootstrap evaluations"):
+        run_bootstrap_eval(exp_id, force=force)
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Force re-evaluation even if results exist.",
+        default=False,
+    )
+    args = parser.parse_args()
+
     # google sheet details
     sheet_id = "1AP_KH1cVSDwgpI1n7qK_VZU0Vi19Wh8vKo4jYWkuIXg"
     gid = "332656109"  # use appropriate gid for the sheet tab (0 is usually the first)
@@ -38,4 +51,4 @@ if __name__ == "__main__":
     )
     gsheet_df = pd.read_csv(csv_url)
 
-    main(gsheet_df)
+    main(gsheet_df, force=args.force)
