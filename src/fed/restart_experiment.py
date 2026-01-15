@@ -1,7 +1,9 @@
 import os
+from pathlib import Path
 import sys
 import argparse
 import json
+from glob import glob
 
 import torch
 
@@ -25,7 +27,7 @@ def get_experiment_args(exp_id: str):
     Extract and return all relevant arguments needed to restart the experiment.
     """
     # get nnUNet_results path
-    nnunet_results_path = os.getenv("nnUNet_results")
+    nnunet_results_path = Path(os.getenv("nnUNet_results"))
 
     # find result folder ending with exp_id
     result_folders = [
@@ -52,15 +54,34 @@ def get_experiment_args(exp_id: str):
     if os.path.exists(exp_cli_args_file):
         exp_cli_args = json.loads(open(exp_cli_args_file, "r").read())
 
-    # load checkpoint_latest.pth from result folders to get args
-    checkpoints = [
-        torch.load(
-            os.path.join(folder, "checkpoint_latest.pth"),
-            map_location="cpu",
-            weights_only=False,
-        )
-        for folder in result_folders
-    ]
+    # load checkpoints from result folders to get args
+    # determine whether to load latest or latest_t-1 checkpoint
+    latest_checkpoints = glob(
+        str(nnunet_results_path / "*" / "*" / "*" / f"D*_{exp_id}" / "checkpoint_latest.pth")
+    )
+    latest_t_1_checkpoints = glob(
+        str(nnunet_results_path / "*" / "*" / "*" / f"D*_{exp_id}" / "checkpoint_latest_t-1.pth")
+    )
+    if len(latest_checkpoints) == len(latest_t_1_checkpoints):
+        checkpoints = [
+            torch.load(
+                os.path.join(folder, "checkpoint_latest.pth"),
+                map_location="cpu",
+                weights_only=False,
+            )
+            for folder in result_folders
+        ]
+    else:
+        # load for result folders where latest_t-1 exists the latest_t-1 checkpoint, else latest
+        checkpoints = []
+        for folder in result_folders:
+            if os.path.exists(os.path.join(folder, "checkpoint_latest_t-1.pth")):
+                ckpt_path = os.path.join(folder, "checkpoint_latest_t-1.pth")
+            else:
+                ckpt_path = os.path.join(folder, "checkpoint_latest.pth")
+            checkpoints.append(
+                torch.load(ckpt_path, map_location="cpu", weights_only=False)
+            )
 
     # get number of clients
     num_clients = len(checkpoints)
