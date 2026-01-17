@@ -62,8 +62,7 @@ def get_experiment_args(exp_id: str):
     latest_t_1_checkpoints = glob(
         str(nnunet_results_path / "*" / "*" / "*" / f"D*_{exp_id}" / "checkpoint_latest_t-1.pth")
     )
-    if len(latest_checkpoints) == len(latest_t_1_checkpoints):
-        checkpoints = [
+    checkpoints = [
             torch.load(
                 os.path.join(folder, "checkpoint_latest.pth"),
                 map_location="cpu",
@@ -71,17 +70,18 @@ def get_experiment_args(exp_id: str):
             )
             for folder in result_folders
         ]
-    else:
-        # load for result folders where latest_t-1 exists the latest_t-1 checkpoint, else latest
-        checkpoints = []
-        for folder in result_folders:
-            if os.path.exists(os.path.join(folder, "checkpoint_latest_t-1.pth")):
-                ckpt_path = os.path.join(folder, "checkpoint_latest_t-1.pth")
-            else:
-                ckpt_path = os.path.join(folder, "checkpoint_latest.pth")
-            checkpoints.append(
-                torch.load(ckpt_path, map_location="cpu", weights_only=False)
-            )
+    last_epochs = [ckpt["current_epoch"] for ckpt in checkpoints]
+    if not len(set(last_epochs)) == 1:
+        # lowest last epoch across clients
+        min_last_epoch = min(last_epochs)
+        # load latest_t-1 for clients where last epoch > min_last_epoch
+        for i, (curr_checkpoint_last_epoch, folder) in enumerate(zip(last_epochs, result_folders)):
+            if curr_checkpoint_last_epoch > min_last_epoch:
+                checkpoints[i] = torch.load(
+                    os.path.join(folder, "checkpoint_latest_t-1.pth"),
+                    map_location="cpu",
+                    weights_only=False,
+                )
 
     # get number of clients
     num_clients = len(checkpoints)
