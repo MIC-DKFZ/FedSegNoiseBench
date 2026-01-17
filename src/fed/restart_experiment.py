@@ -62,23 +62,36 @@ def get_experiment_args(exp_id: str):
     latest_t_1_checkpoints = glob(
         str(nnunet_results_path / "*" / "*" / "*" / f"D*_{exp_id}" / "checkpoint_latest_t-1.pth")
     )
-    checkpoints = [
-            torch.load(
+    # checkpoints = [
+    #         torch.load(
+    #             os.path.join(folder, "checkpoint_latest.pth"),
+    #             map_location="cpu",
+    #             weights_only=False,
+    #         )
+    #         for folder in result_folders
+    #     ]
+    checkpoints = {
+        i: {
+            "path": os.path.join(folder, "checkpoint_latest.pth"),
+            "checkpoint": torch.load(
                 os.path.join(folder, "checkpoint_latest.pth"),
                 map_location="cpu",
                 weights_only=False,
-            )
-            for folder in result_folders
-        ]
-    last_epochs = [ckpt["current_epoch"] for ckpt in checkpoints]
+            ),
+        }
+        for i, folder in enumerate(result_folders)
+    }
+    last_epochs = [ckpt["checkpoint"]["current_epoch"] for ckpt in checkpoints]
     if not len(set(last_epochs)) == 1:
         # lowest last epoch across clients
         min_last_epoch = min(last_epochs)
         # load latest_t-1 for clients where last epoch > min_last_epoch
         for i, (curr_checkpoint_last_epoch, folder) in enumerate(zip(last_epochs, result_folders)):
             if curr_checkpoint_last_epoch > min_last_epoch:
-                checkpoints[i] = torch.load(
-                    os.path.join(folder, "checkpoint_latest_t-1.pth"),
+                path = os.path.join(folder, "checkpoint_latest_t-1.pth")
+                checkpoints[i]["path"] = path
+                checkpoints[i]["checkpoint"] = torch.load(
+                    path,
                     map_location="cpu",
                     weights_only=False,
                 )
@@ -165,6 +178,23 @@ def get_experiment_args(exp_id: str):
     ), "All clients must have the same last epoch to restart the experiment!"
     start_epoch = last_epochs[0]
     start_fl_round = start_epoch // num_local_epochs - 1
+
+    # all checks passed, actually rename "checkpoint_latest_t-1.pth" to "checkpoint_latest.pth" where needed
+    for i, ckpt_info in checkpoints.items():
+        latest_path = ckpt_info["path"]
+        if os.path.basename(latest_path) == "checkpoint_latest.pth":
+            backup_path = os.path.join(os.path.dirname(latest_path), "checkpoint_latest_backup.pth")
+            os.replace(latest_path, backup_path)
+            print(f"Backed up latest checkpoint for client {i} to 'checkpoint_latest_backup.pth'")
+
+        if os.path.basename(ckpt_info["path"]) == "checkpoint_latest_t-1.pth":
+            new_path = os.path.join(
+                os.path.dirname(ckpt_info["path"]), "checkpoint_latest.pth"
+            )
+            os.replace(ckpt_info["path"], new_path)
+            print(
+                f"Renamed checkpoint for client {i} from 'checkpoint_latest_t-1.pth' to 'checkpoint_latest.pth'"
+            )
 
     # return all extracted args
     return (
