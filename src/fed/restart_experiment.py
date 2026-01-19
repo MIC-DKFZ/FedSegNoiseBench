@@ -181,10 +181,10 @@ def get_experiment_args(exp_id: str):
 
     # all checks passed, actually rename "checkpoint_latest_t-1.pth" to "checkpoint_latest.pth" where needed
     for i, ckpt_info in checkpoints.items():
-        latest_path = ckpt_info["path"]         
         if os.path.basename(ckpt_info["path"]) == "checkpoint_latest_t-1.pth":
             # backup old latest checkpoint
-            backup_path = os.path.join(os.path.dirname(latest_path), "checkpoint_latest_backup.pth")
+            latest_path = os.path.join(os.path.dirname(ckpt_info["path"]), "checkpoint_latest.pth")
+            backup_path = os.path.join(os.path.dirname(ckpt_info["path"]), "checkpoint_latest_backup.pth")
             os.replace(latest_path, backup_path)
             print(f"Backed up latest checkpoint for client {i} to 'checkpoint_latest_backup.pth'")
             # rename t-1 to latest
