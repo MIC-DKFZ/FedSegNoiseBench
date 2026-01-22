@@ -165,10 +165,10 @@ def check_cli_args(args):
             and args.clean_validation_dataset is not None
         ), "Arguments --noisy_train_folder and --clean_validation_dataset must be provided together or not at all"
 
-    # save_every should be positive and larger than num_local_epochs
-    assert (
-        args.save_every > 0 and args.save_every >= args.num_local_epochs
-    ), "--save_every must be positive and larger than or equal to --num_local_epochs"
+    # # save_every should be positive and larger than num_local_epochs
+    # assert (
+    #     args.save_every > 0 and args.save_every >= args.num_local_epochs
+    # ), "--save_every must be positive and larger than or equal to --num_local_epochs"
 
 
 if __name__ == "__main__":
