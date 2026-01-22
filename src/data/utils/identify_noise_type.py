@@ -174,7 +174,7 @@ def compare_clean_noisy_labels(clean_label_file, noisy_label_file, gt_file_endin
     if gt_file_ending == ".nii.gz":
         clean_mask = np.array(nib.load(clean_label_file).get_fdata())
         noisy_mask = np.array(nib.load(noisy_label_file).get_fdata())
-    elif gt_file_ending == ".tif":
+    elif gt_file_ending == ".tif" or gt_file_ending == ".png":
         clean_mask = np.array(Image.open(clean_label_file))
         noisy_mask = np.array(Image.open(noisy_label_file))
 
