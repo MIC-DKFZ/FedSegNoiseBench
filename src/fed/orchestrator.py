@@ -41,7 +41,11 @@ class Orchestrator:
                 fl_args["feddm_loss"],
             )
         elif fl_args["strategy"].lower() == "iopfl":
-            self.fl_strategy = IOPFL(self.clients, fl_args["iopfl_alpha"])
+            self.fl_strategy = IOPFL(
+                self.clients,
+                fl_args["iopfl_alpha"],
+                fl_strategy_state=fl_args.get("fl_strategy_state", None),
+            )
         elif fl_args["strategy"].lower() == "fedcorr":
             self.fl_strategy = FedCorr(
                 self.clients,

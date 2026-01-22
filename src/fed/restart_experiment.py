@@ -379,10 +379,10 @@ def main(args):
                 if noise_mitigation_method.lower() == "fedcorr"
                 else None
             ),
-            # FL strategy state implemented for FedCorr, FedA3I
+            # FL strategy state implemented for FedCorr, FedA3I, IOPFL
             "fl_strategy_state": (
                 fl_strategy_state
-                if noise_mitigation_method.lower() in ["fedcorr", "feda3i"]
+                if noise_mitigation_method.lower() in ["fedcorr", "feda3i", "iopfl"]
                 else None
             ),
         },

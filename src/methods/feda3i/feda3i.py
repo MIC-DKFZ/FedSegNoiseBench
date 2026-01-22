@@ -368,7 +368,7 @@ class FedA3I(FedAvg):
             logging.info(f"Invalid region_mask with {np.unique(region_mask)} !")
         return region_mask
 
-    def save_state(self, exp_id: str):
+    def save_state(self, exp_id: str, client_id: int = None):
         """
         Save the current state of FedA3I method to experiment's cli args file.
         """

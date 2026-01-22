@@ -594,9 +594,9 @@ class FedCorr(FedAvg):
             logging.info(
                 f"Saved FedCorr global model weights to {self.path_to_global_fl_model_weights}!"
             )
-            self.save_state(exp_id=self.experiment_id)
+            self.save_state(exp_id=self.experiment_id, client_id=None)
 
-    def save_state(self, exp_id: str):
+    def save_state(self, exp_id: str, client_id: int = None):
         """
         Save the current state of FedCorr method to experiment's cli args file.
         """

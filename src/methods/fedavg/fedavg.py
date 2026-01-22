@@ -79,7 +79,7 @@ class FedAvg:
 
         return _server_model_weights
 
-    def save_state(self, exp_id: str = None):
+    def save_state(self, exp_id: str = None, client_id: int = None):
         print(
             f"Saving state of {self.name} not implemented yet for FL strategy {self.name}!"
         )

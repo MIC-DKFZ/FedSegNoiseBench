@@ -243,7 +243,9 @@ class Client:
 
         # periodically save fl_strategy state
         if fl_round % self.model.save_every == 0:
-            fl_strategy.save_state(exp_id=self.model_args["experiment_id"])
+            fl_strategy.save_state(
+                exp_id=self.model_args["experiment_id"], client_id=self.client_id
+            )
 
         # log time
         end_time = time.time()
