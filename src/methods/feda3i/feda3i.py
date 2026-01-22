@@ -1,3 +1,5 @@
+import os
+import json
 import logging
 from tqdm import tqdm
 import copy
@@ -25,16 +27,42 @@ class FedA3I(FedAvg):
         feda3i_interw (float): Interpolation weight between expand and shrink clients for quality-based aggregation.
     """
 
-    def __init__(self, clients: list = None, feda3i_warmup_rounds: int = None, feda3i_interw: float = None):
+    def __init__(
+        self,
+        clients: list = None,
+        feda3i_warmup_rounds: int = None,
+        feda3i_interw: float = None,
+        fl_strategy_state: dict = None,
+    ):
         super().__init__(clients=clients)
+        self.experiment_id = None  # to be set when saving state
+
         self.name = "feda3i"
         self.feda3i_warmup_rounds = feda3i_warmup_rounds
         self.feda3i_interw = feda3i_interw
-        self.quality_agg_weights = None
-        self.alpha_weight = 1.0
-        self.alpha_power = 1.0
-        self.alpha_bias = 0.0
-        logging.info(f"FedA3I initialized with warmup rounds {self.feda3i_warmup_rounds} and interw {self.feda3i_interw}!")
+        self.quality_agg_weights = (
+            None
+            if fl_strategy_state is None
+            else fl_strategy_state.get("quality_agg_weights", None)
+        )
+        self.alpha_weight = (
+            1.0
+            if fl_strategy_state is None
+            else fl_strategy_state.get("alpha_weight", 1.0)
+        )
+        self.alpha_power = (
+            1.0
+            if fl_strategy_state is None
+            else fl_strategy_state.get("alpha_power", 1.0)
+        )
+        self.alpha_bias = (
+            0.0
+            if fl_strategy_state is None
+            else fl_strategy_state.get("alpha_bias", 0.0)
+        )
+        logging.info(
+            f"FedA3I initialized with warmup rounds {self.feda3i_warmup_rounds} and interw {self.feda3i_interw}!"
+        )
 
     def feda3i_compute_quality_agg_weights(self):
         """
@@ -102,7 +130,7 @@ class FedA3I(FedAvg):
         - Weight1-weight2-weighted aka. quality-quantity-weighted FedAvg highly adapted from FedAvg.fed_avg() method
         """
         # quality-based weights
-        weight1 = self.quality_agg_weights
+        weight1 = np.array(self.quality_agg_weights)
         # quantity-based weights
         weight2 = np.array(
             [
@@ -243,9 +271,10 @@ class FedA3I(FedAvg):
                         raise ValueError(
                             f"Unexpected shape of one_hot_labels: {one_hot_labels.shape}"
                         )
-                    
-                    assert high_res_outputs.shape == one_hot_labels.shape, \
-                        f"Shape mismatch: output shape {high_res_outputs.shape} vs target shape {one_hot_labels.shape}"
+
+                    assert (
+                        high_res_outputs.shape == one_hot_labels.shape
+                    ), f"Shape mismatch: output shape {high_res_outputs.shape} vs target shape {one_hot_labels.shape}"
                     loss = criterion(
                         high_res_outputs, one_hot_labels
                     )  # [b, c, (d), h, w]
@@ -283,12 +312,16 @@ class FedA3I(FedAvg):
                                 1
                             )
                             assert (
-                                loss_n_in.shape[0] == loss_n_out.shape[0] == images.shape[0]
+                                loss_n_in.shape[0]
+                                == loss_n_out.shape[0]
+                                == images.shape[0]
                             )
                             loss_feature[:, c * 2] = loss_n_in
                             loss_feature[:, c * 2 + 1] = loss_n_out
                         else:
-                            print(f"Computed region_mask only contains {torch.unique(region_mask)} values and therefore now boundaries!")
+                            print(
+                                f"Computed region_mask only contains {torch.unique(region_mask)} values and therefore now boundaries!"
+                            )
 
                 if i == 0:
                     loss_whole_n = loss_feature.cpu().numpy()
@@ -326,12 +359,37 @@ class FedA3I(FedAvg):
                 assert dis > 0, f"{dis} is not bigger than 0"
                 region_mask[i][(labels[i] == 0) & (sdm[i] <= dis)] = 2
                 region_mask[i][(labels[i] == 1) & (sdm[i] >= -dis)] = 1
-        
+
         if region_mask.sum() > 0:
-            logging.debug(f"Valid region_mask computed in def region() with {np.unique(region_mask)} !")
+            logging.debug(
+                f"Valid region_mask computed in def region() with {np.unique(region_mask)} !"
+            )
         else:
             logging.info(f"Invalid region_mask with {np.unique(region_mask)} !")
         return region_mask
+
+    def save_state(self, exp_id: str):
+        """
+        Save the current state of FedA3I method to experiment's cli args file.
+        """
+        # compose fl_strategy_state dict
+        fl_strategy_state = {
+            "quality_agg_weights": (
+                self.quality_agg_weights.tolist()
+                if isinstance(self.quality_agg_weights, np.ndarray)
+                else self.quality_agg_weights
+            ),
+            "alpha_weight": self.alpha_weight,
+            "alpha_power": self.alpha_power,
+            "alpha_bias": self.alpha_bias,
+        }
+        self.experiment_id = exp_id
+
+        args_file = self.save_fl_strategy_state_to_file(
+            fl_strategy_state=fl_strategy_state, exp_id=exp_id
+        )
+
+        logging.info(f"Saved FedA3I state to {args_file}")
 
 
 if __name__ == "__main__":

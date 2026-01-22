@@ -1,5 +1,4 @@
 import os
-import json
 import copy
 import ast
 from glob import glob
@@ -122,8 +121,7 @@ class FedCorr(FedAvg):
                 self.clients_estimated_noisy_level.keys().__iter__().__next__(), str
             ):
                 self.clients_estimated_noisy_level = {
-                    int(k): v
-                    for k, v in self.clients_estimated_noisy_level.items()
+                    int(k): v for k, v in self.clients_estimated_noisy_level.items()
                 }
 
         # compute number of fl_rounds for fine-tuning and full-training stages
@@ -132,7 +130,6 @@ class FedCorr(FedAvg):
         )
 
         # initialize estimated noisy levels for clients
-        
 
         # global model weights for proximal term computation are set from orchestrator
         self.global_fl_model_weights = (
@@ -617,25 +614,8 @@ class FedCorr(FedAvg):
         }
         self.experiment_id = exp_id
 
-        # save fl_strategy_state to experiment's cli args file
-        results_dir = os.getenv("nnUNet_results") or os.getcwd()
-        # strip from exp_id "DXXX_" prefix if exists
-        if exp_id.startswith("D") and "_" in exp_id:
-            exp_id = "_".join(exp_id.split("_")[1:])
-        args_file = os.path.join(results_dir, f"ExperimentArgs_{exp_id}.json")
-
-        # Read existing args if file exists, otherwise create empty dict
-        if os.path.exists(args_file):
-            with open(args_file, "r") as f:
-                args_data = json.load(f)
-        else:
-            args_data = {}
-
-        # Add fl_strategy_state to args data
-        args_data["fl_strategy_state"] = fl_strategy_state
-
-        # Write updated args data back to file
-        with open(args_file, "w") as f:
-            json.dump(args_data, f, indent=2, default=str)
+        args_file = self.save_fl_strategy_state_to_file(
+            fl_strategy_state=fl_strategy_state, exp_id=exp_id
+        )
 
         logging.info(f"Saved FedCorr state to {args_file}")

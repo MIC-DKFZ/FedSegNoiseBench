@@ -1,4 +1,6 @@
 import copy
+import os
+import json
 
 
 class FedAvg:
@@ -78,4 +80,42 @@ class FedAvg:
         return _server_model_weights
 
     def save_state(self, exp_id: str = None):
-        print(f"Saving state of {self.name} not implemented yet for FL strategy {self.name}!")
+        print(
+            f"Saving state of {self.name} not implemented yet for FL strategy {self.name}!"
+        )
+
+    def save_fl_strategy_state_to_file(
+        self, fl_strategy_state: dict = None, exp_id: str = None
+    ):
+        """
+        Save FL strategy state to experiment's cli args file.
+
+        Args:
+            fl_strategy_state (dict): State of the FL strategy to be saved.
+            exp_id (str): Experiment ID.
+        Returns:
+            args_file (str): Path to the updated args file.
+        """
+
+        # save fl_strategy_state to experiment's cli args file
+        results_dir = os.getenv("nnUNet_results") or os.getcwd()
+        # strip from exp_id "DXXX_" prefix if exists
+        if exp_id.startswith("D") and "_" in exp_id:
+            exp_id = "_".join(exp_id.split("_")[1:])
+        args_file = os.path.join(results_dir, f"ExperimentArgs_{exp_id}.json")
+
+        # Read existing args if file exists, otherwise create empty dict
+        if os.path.exists(args_file):
+            with open(args_file, "r") as f:
+                args_data = json.load(f)
+        else:
+            args_data = {}
+
+        # Add fl_strategy_state to args data
+        args_data["fl_strategy_state"] = fl_strategy_state
+
+        # Write updated args data back to file
+        with open(args_file, "w") as f:
+            json.dump(args_data, f, indent=2, default=str)
+
+        return args_file

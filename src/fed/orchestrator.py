@@ -30,6 +30,7 @@ class Orchestrator:
                 self.clients,
                 int(fl_args["feda3i_warmup_rounds_frac"] * self.num_rounds),
                 fl_args["feda3i_interw"],
+                fl_strategy_state=fl_args.get("fl_strategy_state", None),
             )
         elif fl_args["strategy"].lower() == "feddm":
             self.fl_strategy = FedDM(
@@ -191,9 +192,7 @@ class Orchestrator:
 
             # FedSelect
             elif self.fl_strategy.name == "fedselect":
-                logging.info(
-                    "Aggregating model weights with FedSelect strategy!"
-                )
+                logging.info("Aggregating model weights with FedSelect strategy!")
                 # FedSelect uses importance-weighted aggregation
                 self.aggregate(strategy=self.fl_strategy.name, fl_round=fl_round)
             else:

@@ -57,19 +57,25 @@ def get_experiment_args(exp_id: str):
     # load checkpoints from result folders to get args
     # determine whether to load latest or latest_t-1 checkpoint
     latest_checkpoints = glob(
-        str(nnunet_results_path / "*" / "*" / "*" / f"D*_{exp_id}" / "checkpoint_latest.pth")
+        str(
+            nnunet_results_path
+            / "*"
+            / "*"
+            / "*"
+            / f"D*_{exp_id}"
+            / "checkpoint_latest.pth"
+        )
     )
     latest_t_1_checkpoints = glob(
-        str(nnunet_results_path / "*" / "*" / "*" / f"D*_{exp_id}" / "checkpoint_latest_t-1.pth")
+        str(
+            nnunet_results_path
+            / "*"
+            / "*"
+            / "*"
+            / f"D*_{exp_id}"
+            / "checkpoint_latest_t-1.pth"
+        )
     )
-    # checkpoints = [
-    #         torch.load(
-    #             os.path.join(folder, "checkpoint_latest.pth"),
-    #             map_location="cpu",
-    #             weights_only=False,
-    #         )
-    #         for folder in result_folders
-    #     ]
     checkpoints = {
         i: {
             "path": os.path.join(folder, "checkpoint_latest.pth"),
@@ -86,7 +92,9 @@ def get_experiment_args(exp_id: str):
         # lowest last epoch across clients
         min_last_epoch = min(last_epochs)
         # load latest_t-1 for clients where last epoch > min_last_epoch
-        for i, (curr_checkpoint_last_epoch, folder) in enumerate(zip(last_epochs, result_folders)):
+        for i, (curr_checkpoint_last_epoch, folder) in enumerate(
+            zip(last_epochs, result_folders)
+        ):
             if curr_checkpoint_last_epoch > min_last_epoch:
                 path = os.path.join(folder, "checkpoint_latest_t-1.pth")
                 checkpoints[i]["path"] = path
@@ -183,10 +191,16 @@ def get_experiment_args(exp_id: str):
     for i, ckpt_info in checkpoints.items():
         if os.path.basename(ckpt_info["path"]) == "checkpoint_latest_t-1.pth":
             # backup old latest checkpoint
-            latest_path = os.path.join(os.path.dirname(ckpt_info["path"]), "checkpoint_latest.pth")
-            backup_path = os.path.join(os.path.dirname(ckpt_info["path"]), "checkpoint_latest_backup.pth")
+            latest_path = os.path.join(
+                os.path.dirname(ckpt_info["path"]), "checkpoint_latest.pth"
+            )
+            backup_path = os.path.join(
+                os.path.dirname(ckpt_info["path"]), "checkpoint_latest_backup.pth"
+            )
             os.replace(latest_path, backup_path)
-            print(f"Backed up latest checkpoint for client {i} to 'checkpoint_latest_backup.pth'")
+            print(
+                f"Backed up latest checkpoint for client {i} to 'checkpoint_latest_backup.pth'"
+            )
             # rename t-1 to latest
             new_path = os.path.join(
                 os.path.dirname(ckpt_info["path"]), "checkpoint_latest.pth"
@@ -365,9 +379,10 @@ def main(args):
                 if noise_mitigation_method.lower() == "fedcorr"
                 else None
             ),
+            # FL strategy state implemented for FedCorr, FedA3I
             "fl_strategy_state": (
                 fl_strategy_state
-                if noise_mitigation_method.lower() == "fedcorr"
+                if noise_mitigation_method.lower() in ["fedcorr", "feda3i"]
                 else None
             ),
         },
