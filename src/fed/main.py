@@ -167,8 +167,8 @@ def check_cli_args(args):
 
     # save_every should be positive and larger than num_local_epochs
     assert (
-        args.save_every > 0 and args.save_every >= args.num_local_epochs
-    ), "--save_every must be positive and larger than or equal to --num_local_epochs"
+        args.save_every > 0 and args.save_every >= min(args.num_local_epochs, args.num_rounds)
+    ), "--save_every must be positive and larger than or equal to min(--num_local_epochs, --num_rounds)"
 
 
 if __name__ == "__main__":
