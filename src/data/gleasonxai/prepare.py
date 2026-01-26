@@ -95,7 +95,7 @@ class GleasonXAIDataPreparer:
         self.convert_output_dir.mkdir(parents=True, exist_ok=True)
 
     def init_to_nnunet_raw_dataset_task(
-        self, dataset_ids, label_mode, labels_input_dir, images_input_dir, output_dir
+        self, dataset_ids, label_mode, labels_input_dir, images_input_dir, output_dir, split_mode="separate_sources", single_source=None
     ):
         """Initialize task to create nnUNet raw datasets.
 
@@ -116,6 +116,8 @@ class GleasonXAIDataPreparer:
         self.nnunet_images_input_dir = Path(images_input_dir)
         self.nnunet_output_dir = Path(output_dir)
         self.nnunet_output_dir.mkdir(parents=True, exist_ok=True)
+        self.nnunet_split_mode = split_mode
+        self.nnunet_single_source = single_source
 
     def _load_image(self, tma_identifier):
         # search for the image in all raw image lists
@@ -495,6 +497,199 @@ class GleasonXAIDataPreparer:
 
         print(f"nnUNet raw datasets created in {self.nnunet_output_dir}")
 
+    def _compute_single_source_splits(self, datasource, single_source_splitting_strategy="least_freq_label_uniform"):
+        """
+        Computes splitting of a single source dataset into 3 FL clients.
+        Splitting is done either randomly or using least frequent label uniform strategy.
+        Before splitting is computed, check whether existing splits are available to load.
+
+        Args:
+            datasource: The source dataset to split (e.g., 'tissue_array', 'harvard_dataverse', 'gleason2019')
+            single_source_splitting_strategy: Strategy for splitting ('random', 'least_freq_label_uniform')
+        
+        Returns:
+            Dictionary mapping client indices to lists of TMA_identifiers.
+        """
+        # check whether existing splits are available to load
+        splits_file = (
+            self.nnunet_output_dir
+            / f"{datasource}_splits_{single_source_splitting_strategy}.json"
+        )
+        if splits_file.exists():
+            print(f"Loading existing splits from {splits_file}")
+            with open(splits_file, "r") as f:
+                fl_client_splits = json.load(f)
+            return fl_client_splits
+        
+        if single_source_splitting_strategy == "random":
+            # implement random splitting
+            raise NotImplementedError("Random splitting not yet implemented.")
+        elif single_source_splitting_strategy == "least_freq_label_uniform":
+            # load all labels for the given datasource and label mode
+            labels_subdir = (
+                self.nnunet_labels_input_dir / datasource / self.nnunet_label_mode
+            )
+            label_files = list(labels_subdir.glob("*_mask.png"))
+            # create dict with TMA_identifier as key and occuring labels as values
+            tma_labels_dict = {}
+            for label_file in tqdm(label_files, desc=f"Loading labels for {datasource}"):
+                tma_identifier = label_file.stem.replace(f"_{self.nnunet_label_mode}_mask", "")
+                label_img = Image.open(label_file)
+                label_array = np.array(label_img)
+                unique_labels = np.unique(label_array)
+                tma_labels_dict[tma_identifier] = unique_labels.tolist()
+            
+            # identify least frequent label across all TMAs
+            label_counts = {}
+            for labels in tma_labels_dict.values():
+                for label in labels:
+                    label_counts[label] = label_counts.get(label, 0) + 1
+            least_frequent_label = min(label_counts, key=label_counts.get)
+            print(f"Least frequent label in {datasource} is {least_frequent_label} with count {label_counts[least_frequent_label]}")
+
+            # assign TMAs to clients to balance least frequent label
+            fl_client_splits = {0: [], 1: [], 2: []}
+            client_least_freq_counts = {0: 0, 1: 0, 2: 0}
+            for tma_identifier, labels in tma_labels_dict.items():
+                if least_frequent_label in labels:
+                    # assign to client with currently least count of least frequent label
+                    target_client = min(client_least_freq_counts, key=client_least_freq_counts.get)
+                    fl_client_splits[target_client].append(tma_identifier)
+                    client_least_freq_counts[target_client] += 1
+                else:
+                    # assign to client with least total samples
+                    target_client = min(fl_client_splits, key=lambda k: len(fl_client_splits[k]))
+                    fl_client_splits[target_client].append(tma_identifier)
+
+            # save splits to file for future use
+            with open(splits_file, "w") as f:
+                json.dump(fl_client_splits, f, indent=4)
+            print(f"Saved computed splits to {splits_file}")
+
+            return fl_client_splits
+        else:
+            raise ValueError(f"Unknown single_source_splitting_strategy: {single_source_splitting_strategy}")
+
+
+    def to_nnunet_raw_dataset_single_source(self):
+        """
+        Create nnUNet raw dataset from a single source dataset.
+
+        Splits self.nnunet_single_source with given self.nnunet_label_mode to 3 FL clients.
+        Various splitting strategies are supported: 'random', 'least_freq_label_uniform'
+        """
+        print(
+            f"Creating nnUNet raw dataset from single source: {self.nnunet_single_source} with label_mode={self.nnunet_label_mode} to dataset IDs={self.nnunet_dataset_ids}"
+        )
+
+        datasource = self.nnunet_single_source
+
+        # define splitting
+        fl_client_splits = self._compute_single_source_splits(datasource)
+
+        for client_idx, dataset_id in enumerate(self.nnunet_dataset_ids):
+            print(
+                f"Processing client {client_idx} (dataset_id={dataset_id}, datasource={datasource})"
+            )
+
+            # Create nnUNet dataset directory
+            nnunet_dataset_name = f"Dataset{dataset_id}_GleasonXAI_{self.nnunet_label_mode}_client{client_idx}"
+            nnunet_dataset_dir = self.nnunet_output_dir / nnunet_dataset_name
+            imagesTr_dir = nnunet_dataset_dir / "imagesTr"
+            labelsTr_dir = nnunet_dataset_dir / "labelsTr"
+            imagesTr_dir.mkdir(parents=True, exist_ok=True)
+            labelsTr_dir.mkdir(parents=True, exist_ok=True)
+
+            tma_identifiers = fl_client_splits[str(client_idx)]
+
+            sample_count = 0
+
+            for tma_identifier in tqdm(tma_identifiers, desc=f"Processing {datasource} TMAs for client {client_idx}"):
+                # Load image, split it in its channels and save it, and same with labels
+                img_file = self.nnunet_images_input_dir / datasource / f"{tma_identifier}.png"
+                label_file = (
+                    self.nnunet_labels_input_dir
+                    / datasource
+                    / self.nnunet_label_mode
+                    / f"{tma_identifier}_{self.nnunet_label_mode}_mask.png"
+                )
+                if not img_file.exists() or not label_file.exists():
+                    print(
+                        f"Warning: Image or label not found for TMA {tma_identifier}, skipping"
+                    )
+                    continue
+
+                # Load image and convert to RGB if needed
+                img = Image.open(img_file).convert("RGB")
+                img_array = np.array(img)  # (H, W, 3) with RGB channels
+
+                # Load label
+                label_img = Image.open(label_file)
+                label_array = np.array(label_img)  # (H, W)
+
+                # Verify sizes match (should be guaranteed from generation)
+                if img_array.shape[:2] != label_array.shape[:2]:
+                    raise ValueError(
+                        f"Size mismatch for {tma_identifier}: "
+                        f"image {img_array.shape[:2]} vs label {label_array.shape[:2]}. "
+                        f"Check mask generation."
+                    )
+                
+                # Split into R, G, B channels
+                r_channel = img_array[:, :, 0]
+                g_channel = img_array[:, :, 1]
+                b_channel = img_array[:, :, 2]
+
+                # Save channels with nnUNet naming convention
+                # Channel 0 (R), 1 (G), 2 (B)
+                for channel_idx, channel_data in enumerate(
+                    [r_channel, g_channel, b_channel]
+                ):
+                    channel_img = Image.fromarray(channel_data, mode="L")
+                    channel_filename = f"{tma_identifier}_{channel_idx:04d}.png"
+                    channel_img.save(imagesTr_dir / channel_filename)
+
+                # Save label to labelsTr with nnUNet naming
+                label_img.save(labelsTr_dir / f"{tma_identifier}.png")
+                sample_count += 1
+
+            # Create dataset.json as before
+            dataset_json = {
+                "name": f"GleasonXAI_{self.nnunet_label_mode}_client{client_idx}",
+                "description": f"GleasonXAI dataset from {datasource} using {self.nnunet_label_mode} labels",
+                "reference": "GleasonXAI",
+                "license": "CC-BY-4.0",
+                "release": "1.0",
+                "file_ending": ".png",
+                "channel_names": {"0": "R", "1": "G", "2": "B"},
+                "labels": {
+                    "background": 0,
+                    "gleason_3": 1,
+                    "gleason_4": 2,
+                    "gleason_5": 3,
+                },
+                "numTraining": sample_count,
+                "numTest": 0,
+                "training": [],
+                "test": [],
+            }
+            # Add file references
+            for tma_identifier in tma_identifiers:
+                if (labelsTr_dir / f"{tma_identifier}.png").exists():
+                    dataset_json["training"].append(
+                        {
+                            "image": f"./imagesTr/{tma_identifier}_0000.png",
+                            "label": f"./labelsTr/{tma_identifier}.png",
+                        }
+                    )
+
+            # Save dataset.json
+            with open(nnunet_dataset_dir / "dataset.json", "w") as f:
+                json.dump(dataset_json, f, indent=4)
+
+            print(f"Processed {sample_count} samples for client {client_idx}")
+
+        print(f"nnUNet raw datasets created in {self.nnunet_output_dir}")
 
 def main(args):
     preparer = GleasonXAIDataPreparer(raw_data_dir=args.raw_data_dir)
@@ -518,8 +713,13 @@ def main(args):
             labels_input_dir=args.nnunet_labels_input_dir,
             images_input_dir=args.nnunet_images_input_dir,
             output_dir=args.nnunet_output_dir,
+            split_mode=args.nnunet_split_mode,
+            single_source=args.nnunet_single_source,
         )
-        preparer.to_nnunet_raw_dataset()
+        if preparer.nnunet_split_mode == "single_source":
+            preparer.to_nnunet_raw_dataset_single_source()
+        elif preparer.nnunet_split_mode == "separate_sources":
+            preparer.to_nnunet_raw_dataset()
     else:
         raise ValueError(f"Unknown task: {args.task}")
 
@@ -595,6 +795,18 @@ if __name__ == "__main__":
         type=str,
         required=False,
         help="Output directory for nnUNet raw datasets",
+    )
+    parser.add_argument(
+        "--nnunet_split_mode",
+        type=str,
+        required=False,
+        help="Mode for splitting datasets: 'separate_sources', 'single_source'",
+    )
+    parser.add_argument(
+        "--nnunet_single_source",
+        type=str,
+        required=False,
+        help="If split_mode is 'single_source', specify which source to use: 'tissue_array', 'harvard_dataverse', 'gleason2019'",
     )
 
     args = parser.parse_args()
