@@ -277,7 +277,7 @@ def plot_classwise_boxplots_clean_noisy(df_all: pd.DataFrame):
     """
 
     noise_states = {"0": "clean", "100": "noisy"}
-    # data[dataset][class][noise_state] = [dice_values_across_methods]
+    # data[dataset][algorithm][class][noise_state] = [bootstrap_dice_values]
     data = {ds: {algo: {} for algo in target_algos} for ds in target_datasets}
 
     for ds in target_datasets:
@@ -347,6 +347,8 @@ def plot_classwise_boxplots_clean_noisy(df_all: pd.DataFrame):
     dataset_boundaries = []
     class_boundaries = []
     noise_boundaries = []
+    label_positions = []  # positions for clean/noisy labels
+    label_texts = []      # "clean" or "noisy"
 
     pos = 0.0
     gap_algo = 0.1    # gap between algorithms within the same state
@@ -368,27 +370,40 @@ def plot_classwise_boxplots_clean_noisy(df_all: pd.DataFrame):
 
         for cl in class_labels_sorted:
             class_has_data = False
+            class_positions = []
+            clean_positions = []
+            noisy_positions = []
             for state_key in ["clean", "noisy"]:
                 state_has_data = False
+                state_positions = []
                 for algo in target_algos:
                     vals = data[ds].get(algo, {}).get(cl, {}).get(state_key, [])
                     if not vals:
                         continue
                     positions.append(pos)
-                    # labels.append(f"{state_key}\n{algo}")
-                    labels.append(state_key)
                     box_data.append(vals)
                     colors.append(algo_colors[algo])
                     meta_info.append({"ds": ds, "class": cl, "state": state_key, "algo": algo, "n": len(vals)})
+                    state_positions.append(pos)
+                    class_positions.append(pos)
                     pos += gap_algo
                     state_has_data = True
                     dataset_has_data = True
                     class_has_data = True
-                    noise_boundaries.append((pos - gap_noise, pos - gap_algo, state_key))
                 if state_has_data:
+                    if state_key == "clean":
+                        clean_positions = state_positions
+                    else:
+                        noisy_positions = state_positions
+                    # Add label position at center of state group
+                    label_positions.append(np.mean(state_positions))
+                    label_texts.append(state_key)
                     pos += gap_noise
             if class_has_data:
-                class_boundaries.append((pos - gap_class, pos - gap_noise, cl))
+                if clean_positions and noisy_positions:
+                    noise_sep = (max(clean_positions) + min(noisy_positions)) / 2.0
+                    noise_boundaries.append(noise_sep)
+                class_boundaries.append(max(class_positions))
                 pos += gap_class
 
         if dataset_has_data:
@@ -415,11 +430,11 @@ def plot_classwise_boxplots_clean_noisy(df_all: pd.DataFrame):
     # Add vertical lines
     # Dotted lines between clean and noisy
     for boundary in noise_boundaries:
-        ax.axvline(boundary[1], color="gray", linestyle=":", linewidth=0.8, alpha=0.6)
+        ax.axvline(boundary, color="gray", linestyle=":", linewidth=0.8, alpha=0.6)
     
     # Dashed lines between classes
     for boundary in class_boundaries:
-        ax.axvline(boundary[1], color="gray", linestyle="--", linewidth=0.8, alpha=0.7)
+        ax.axvline(boundary, color="gray", linestyle="--", linewidth=0.8, alpha=0.7)
 
     # Add dataset labels and separators
     for ds_start, ds_end, ds_name in dataset_boundaries:
@@ -428,8 +443,8 @@ def plot_classwise_boxplots_clean_noisy(df_all: pd.DataFrame):
                 transform=ax.get_xaxis_transform())
         ax.axvline(ds_end + gap_dataset / 2.0, color="gray", linestyle="-", linewidth=1.0, alpha=0.5)
 
-    ax.set_xticks(positions)
-    ax.set_xticklabels(labels, rotation=0, ha='center', fontsize=8)
+    ax.set_xticks(label_positions)
+    ax.set_xticklabels(label_texts, rotation=0, ha='center', fontsize=9)
     ax.set_ylabel(classwise_metric, fontsize=11)
     # Tighten in-axes horizontal margins
     xmin = min(positions) - bplot_width
@@ -459,6 +474,219 @@ def plot_classwise_boxplots_clean_noisy(df_all: pd.DataFrame):
     fig.savefig(OUTPUT_DIR / "classwise_boxplots_clean_vs_noisy.png", dpi=200, bbox_inches='tight')
     print(f"Saved boxplot to {OUTPUT_DIR / 'classwise_boxplots_clean_vs_noisy.png'}")
 
+def plot_classwise_boxplots_clean_noisy_bootstrapping(df_all: pd.DataFrame):
+    """
+    Create boxplots with hierarchical structure:
+    - 6 columns for datasets
+    - Within each dataset: C sub-columns for each class
+    - Within each class: clean and noisy boxplots
+    - Within each noise state: boxplot of all methods from bootstrapping results
+    """
+
+    noise_states = {"0": "clean", "100": "noisy"}
+    # data[dataset][class][noise_state] = [dice_values_across_methods]
+    data = {ds: {algo: {} for algo in target_algos} for ds in target_datasets}
+
+    for ds in target_datasets:
+        df_ds = df_all[df_all["Dataset_norm"] == ds]
+        if df_ds.empty:
+            print(f"{ds}: no data for boxplots")
+            continue
+
+        for algo in target_algos:
+            df_algo = df_ds[df_ds[algo_col] == algo]
+            if df_algo.empty:
+                continue
+            # only keep clean/noisy buckets
+            df_algo = df_algo[df_algo[noise_col].isin(noise_states.keys())]
+
+            exp_ids = df_algo["Experiment ID"].dropna().unique().tolist()
+            for exp_id in exp_ids:
+                exp_rows = df_algo[df_algo["Experiment ID"] == exp_id]
+                exp_paths = [p for p in nnUNet_results_all_exps if exp_id in p]
+                expected_clients = dataset_to_numclients.get(ds, None)
+                if expected_clients and len(exp_paths) != expected_clients:
+                    print(f"Skipping Exp_ID {exp_id} for {ds}/{algo}: expected {expected_clients} clients, found {len(exp_paths)}")
+                    continue
+                if len(exp_paths) == 0:
+                    print(f"No exp paths found for Exp_ID {exp_id} ({ds}/{algo})")
+                    continue
+
+                client_classwise_metrics = []
+                for exp_path in exp_paths:
+                    bootstrap_file = Path(exp_path) / "validation" / "bootstrap_evaluation_results.json"
+                    if not bootstrap_file.is_file():
+                        print(f"Missing bootstrap_evaluation_results.json at {bootstrap_file}")
+                        continue
+                    with open(bootstrap_file, "r") as f:
+                        results_summary = json.load(f)
+                    client_classwise_metrics.append(results_summary)
+                if not client_classwise_metrics:
+                    continue
+
+                # # average across clients
+                # classwise_metrics = {}
+                # first = client_classwise_metrics[0]
+                # for class_label in first.keys():
+                #     classwise_metrics[class_label] = {}
+                #     for metric_name in first[class_label].keys():
+                #         classwise_metrics[class_label][metric_name] = sum(
+                #             cm[class_label][metric_name] for cm in client_classwise_metrics
+                #         ) / len(client_classwise_metrics)
+
+                # assign to buckets: data[ds][algo][class][noise_state].extend(bootstrap_values)
+                for noise_val in exp_rows[noise_col].unique():
+                    state_key = noise_states[noise_val]
+                    for client_bootstrap_res in client_classwise_metrics:
+                        for class_label, metrics in client_bootstrap_res.items():
+                            if class_label == "stats":
+                                continue
+                            if class_label not in data[ds][algo]:
+                                data[ds][algo][class_label] = {"clean": [], "noisy": []}
+                            vals = metrics.get(classwise_metric, None)
+                            if vals is None:
+                                continue
+                            if isinstance(vals, list):
+                                data[ds][algo][class_label][state_key].extend(vals)
+                            else:
+                                data[ds][algo][class_label][state_key].append(vals)
+
+    # Build boxplot structure (per dataset → class → noise state → algorithm)
+    algo_colors = {algo: plt.cm.tab10(i % 10) for i, algo in enumerate(target_algos)}
+    positions = []
+    labels = []
+    box_data = []
+    colors = []
+    meta_info = []
+    dataset_boundaries = []
+    class_boundaries = []
+    noise_boundaries = []
+    label_positions = []  # positions for clean/noisy labels
+    label_texts = []      # "clean" or "noisy"
+
+    pos = 0.0
+    gap_algo = 0.1    # gap between algorithms within the same state
+    gap_noise = 0.05   # gap between clean/noisy within a class
+    gap_class = 0.0   # gap between classes within a dataset
+    gap_dataset = 0.0 # gap between datasets
+    bplot_width = 0.1
+
+    for ds in target_datasets:
+        if not data.get(ds):
+            continue
+
+        dataset_start = pos
+        dataset_has_data = False
+        class_labels_sorted = sorted(
+            {cl for algo_data in data[ds].values() for cl in algo_data.keys()},
+            key=lambda x: int(x) if isinstance(x, (int, str)) and str(x).replace('(', '').replace(')', '').split(',')[0].isdigit() else str(x)
+        )
+
+        for cl in class_labels_sorted:
+            class_has_data = False
+            class_positions = []
+            clean_positions = []
+            noisy_positions = []
+            for state_key in ["clean", "noisy"]:
+                state_has_data = False
+                state_positions = []
+                for algo in target_algos:
+                    vals = data[ds].get(algo, {}).get(cl, {}).get(state_key, [])
+                    if not vals:
+                        continue
+                    positions.append(pos)
+                    box_data.append(vals)
+                    colors.append(algo_colors[algo])
+                    meta_info.append({"ds": ds, "class": cl, "state": state_key, "algo": algo, "n": len(vals)})
+                    state_positions.append(pos)
+                    class_positions.append(pos)
+                    pos += gap_algo
+                    state_has_data = True
+                    dataset_has_data = True
+                    class_has_data = True
+                if state_has_data:
+                    if state_key == "clean":
+                        clean_positions = state_positions
+                    else:
+                        noisy_positions = state_positions
+                    # Add label position at center of state group
+                    label_positions.append(np.mean(state_positions))
+                    label_texts.append(state_key)
+                    pos += gap_noise
+            if class_has_data:
+                if clean_positions and noisy_positions:
+                    noise_sep = (max(clean_positions) + min(noisy_positions)) / 2.0
+                    noise_boundaries.append(noise_sep)
+                class_boundaries.append(max(class_positions))
+                pos += gap_class
+
+        if dataset_has_data:
+            dataset_boundaries.append((dataset_start, positions[-1], ds))
+            pos += gap_dataset
+
+    if not box_data:
+        print("No bootstrapping boxplot data collected.")
+        return
+
+    # Create figure
+    fig, ax = plt.subplots(figsize=(max(12, len(target_datasets) * 2.5), 7))
+
+    bp = ax.boxplot(box_data, positions=positions, widths=bplot_width, patch_artist=True, showfliers=False)
+
+    for patch, c in zip(bp['boxes'], colors):
+        patch.set_facecolor(c)
+        patch.set_alpha(0.75)
+
+    for median in bp['medians']:
+        median.set_color("black")
+        median.set_linewidth(1.5)
+
+    # Add vertical lines
+    # Dotted lines between clean and noisy
+    for boundary in noise_boundaries:
+        ax.axvline(boundary, color="gray", linestyle=":", linewidth=0.8, alpha=0.6)
+    
+    # Dashed lines between classes
+    for boundary in class_boundaries:
+        ax.axvline(boundary, color="gray", linestyle="--", linewidth=0.8, alpha=0.7)
+
+    # Add dataset labels and separators
+    for ds_start, ds_end, ds_name in dataset_boundaries:
+        ds_center = (ds_start + ds_end) / 2.0
+        ax.text(ds_center, -0.15, ds_name, ha='center', va='top', fontsize=11, fontweight='bold',
+                transform=ax.get_xaxis_transform())
+        ax.axvline(ds_end + gap_dataset / 2.0, color="gray", linestyle="-", linewidth=1.0, alpha=0.5)
+
+    ax.set_xticks(label_positions)
+    ax.set_xticklabels(label_texts, rotation=0, ha='center', fontsize=9)
+    ax.set_ylabel(classwise_metric, fontsize=11)
+    # Tighten in-axes horizontal margins
+    xmin = min(positions) - bplot_width
+    xmax = max(positions) + bplot_width
+    ax.set_xlim(xmin, xmax)
+    ax.margins(x=0)
+    ax.set_ylim(0.0, 1.0)
+    ax.set_title("Class-wise Dice (bootstrapping): clean vs noisy per dataset/class/algorithm", fontsize=12, fontweight='bold')
+    ax.grid(axis="y", linestyle="--", alpha=0.5)
+
+    # Overlay mean markers
+    means = [np.mean(vals) if len(vals) else np.nan for vals in box_data]
+    ax.scatter(positions, means, marker='D', c=colors, edgecolors='k', zorder=4, s=30, linewidths=0.6, label=None)
+    # Print means per boxplot
+    for vals, m, meta in zip(box_data, means, meta_info):
+        if np.isnan(m):
+            continue
+        print(f"{meta['ds']} | class {meta['class']} | {meta['state']} | {meta['algo']}: "
+              f"mean={m:.4f} (n={meta['n']})")
+
+    # Legend by algorithm color
+    algo_patches = [plt.matplotlib.patches.Patch(facecolor=algo_colors[a], alpha=0.75, label=a) for a in target_algos]
+    ax.legend(handles=algo_patches, loc="lower right", fontsize=10)
+
+    fig.tight_layout()
+    fig.subplots_adjust(bottom=0.18)
+    fig.savefig(OUTPUT_DIR / "classwise_boxplots_clean_vs_noisy_bootstrapping.png", dpi=200, bbox_inches='tight')
+    print(f"Saved boxplot to {OUTPUT_DIR / 'classwise_boxplots_clean_vs_noisy_bootstrapping.png'}")
 
 # -------------------------------------------------------------------
 # Generate plots
@@ -476,5 +704,8 @@ def plot_classwise_boxplots_clean_noisy(df_all: pd.DataFrame):
 # for ds in target_datasets:
 #     plot_dataset_per_class(df, ds)
 
-# boxplots clean vs noisy per dataset/class across methods
-plot_classwise_boxplots_clean_noisy(df)
+# # boxplots clean vs noisy per dataset/class across methods
+# plot_classwise_boxplots_clean_noisy(df)
+
+# boxplots clean vs noisy per dataset/class across methods from bootstrapping
+plot_classwise_boxplots_clean_noisy_bootstrapping(df)
