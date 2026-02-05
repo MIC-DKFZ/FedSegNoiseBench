@@ -1177,14 +1177,14 @@ def plot_classwise_boxplots_clean_roc_noisy_bootstrapping(df_all: pd.DataFrame):
 # for ds in target_datasets:
 #     plot_dataset_per_class(df, ds)
 
-# # boxplots clean vs noisy per dataset/class across methods
-# plot_classwise_boxplots_clean_noisy(df)
+# boxplots clean vs noisy per dataset/class across methods
+plot_classwise_boxplots_clean_noisy(df)
 
-# # boxplots clean vs noisy per dataset/class across methods from bootstrapping
-# plot_classwise_boxplots_clean_noisy_bootstrapping(df)
+# boxplots clean vs noisy per dataset/class across methods from bootstrapping
+plot_classwise_boxplots_clean_noisy_bootstrapping(df)
 
-# # boxplots clean vs roa(X) vs noisy per dataset/class across methods from bootstrapping
-# plot_classwise_boxplots_clean_noiseratioall_noisy_bootstrapping(df)
+# boxplots clean vs roa(X) vs noisy per dataset/class across methods from bootstrapping
+plot_classwise_boxplots_clean_noiseratioall_noisy_bootstrapping(df)
 
 # boxplots clean vs roc(X) vs noisy per dataset/class across methods from bootstrapping
 plot_classwise_boxplots_clean_roc_noisy_bootstrapping(df)
