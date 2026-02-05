@@ -141,6 +141,37 @@ def main(args):
                 if args.noise_mitigation_method.lower() == "fedcorr"
                 else None
             ),
+            # FedSelect
+            "fedselect_warmup_rounds_frac": (
+                args.fedselect_warmup_rounds_frac
+                if args.noise_mitigation_method.lower() == "fedselect"
+                else None
+            ),
+            "fedselect_client_select_ratio": (
+                args.fedselect_client_select_ratio
+                if args.noise_mitigation_method.lower() == "fedselect"
+                else None
+            ),
+            "fedselect_sample_select_ratio": (
+                args.fedselect_sample_select_ratio
+                if args.noise_mitigation_method.lower() == "fedselect"
+                else None
+            ),
+            "fedselect_meta_momentum": (
+                args.fedselect_meta_momentum
+                if args.noise_mitigation_method.lower() == "fedselect"
+                else None
+            ),
+            "fedselect_meta_lr": (
+                args.fedselect_meta_lr
+                if args.noise_mitigation_method.lower() == "fedselect"
+                else None
+            ),
+            "fedselect_reward_data_size": (
+                args.fedselect_reward_data_size
+                if args.noise_mitigation_method.lower() == "fedselect"
+                else None
+            ),
         },
     )
 
@@ -166,8 +197,8 @@ def check_cli_args(args):
         ), "Arguments --noisy_train_folder and --clean_validation_dataset must be provided together or not at all"
 
     # save_every should be positive and larger than num_local_epochs
-    assert (
-        args.save_every > 0 and args.save_every >= min(args.num_local_epochs, args.num_rounds)
+    assert args.save_every > 0 and args.save_every >= min(
+        args.num_local_epochs, args.num_rounds
     ), "--save_every must be positive and larger than or equal to min(--num_local_epochs, --num_rounds)"
 
 

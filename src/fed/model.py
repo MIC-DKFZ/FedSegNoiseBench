@@ -32,7 +32,7 @@ class nnUNetv2_fed:
         self.trainer = trainer
         self.save_every = save_every
         self.oversample_foreground_percent = oversample_foreground_percent
-        
+
         self.class_sampling_probabilities = (
             ast.literal_eval(class_sampling_probabilities)
             if class_sampling_probabilities
@@ -98,6 +98,7 @@ class nnUNetv2_fed:
         is_fedcorr_preproc_stage: bool = False,
         is_fedcorr_finetune_stage: bool = False,
         is_fedcorr_fulltrain_stage: bool = False,
+        is_fedselect_selected_client: bool = False,
     ):
         self.current_model_weights, self.nnunet_trainer = run_training(
             nnunet_trainer=self.nnunet_trainer,
@@ -136,4 +137,5 @@ class nnUNetv2_fed:
             is_fedcorr_preproc_stage=is_fedcorr_preproc_stage,
             is_fedcorr_finetune_stage=is_fedcorr_finetune_stage,
             is_fedcorr_fulltrain_stage=is_fedcorr_fulltrain_stage,
+            is_fedselect_selected_client=is_fedselect_selected_client,
         )

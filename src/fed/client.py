@@ -206,6 +206,16 @@ class Client:
         # FedSelect
         ##########################################
         elif fl_strategy.name == "fedselect":
+            # do sample and client weighting (just for selected clients)
+            if self.client_id in fl_strategy.selected_clients:
+                fl_strategy.compute_sample_weights(
+                    self.model.nnunet_trainer, self.client_id, fl_round
+                )
+                fl_strategy.compute_client_weights(self.client_id)
+
+            # local training only for selected clients on selected data
+            # selected clients via arg is_fedselect_selected_client
+            # selected data via nnUNetTrainer_FedSelectSampling's dataloader
             self.model.run(
                 initialize_fed_training=False,
                 num_epochs=target_num_epochs,
@@ -216,7 +226,20 @@ class Client:
                 only_run_validation=only_run_validation,
                 fl_strategy=fl_strategy,
                 fl_client_id=self.client_id,
+                is_fedselect_selected_client=(
+                    self.client_id in fl_strategy.selected_clients
+                ),
             )
+
+            # calculate meta-margin scores (just for selected clients)
+            if self.client_id in fl_strategy.selected_clients:
+                fl_strategy.compute_meta_margin_scores(
+                    self.model.nnunet_trainer, self.client_id, fl_round
+                )
+
+            # update proxy validation dataset with new meta-margin scores (just for selected clients)
+            if self.client_id in fl_strategy.selected_clients:
+                fl_strategy.update_proxy_validation_dataset(self.client_id)
 
         ##########################################
         # all other FL strategies

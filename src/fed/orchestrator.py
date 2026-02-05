@@ -60,12 +60,12 @@ class Orchestrator:
             self.fl_strategy = FedSelect(
                 self.clients,
                 self.num_rounds,
-                fl_args.get("fedselect_warmup_rounds_frac", 0.1),
-                fl_args.get("fedselect_client_select_ratio", 0.4),
-                fl_args.get("fedselect_sample_select_ratio", 0.6),
-                fl_args.get("fedselect_meta_momentum", 0.9),
-                fl_args.get("fedselect_meta_lr", 1e-3),
-                fl_args.get("fedselect_reward_data_size", 1000),
+                fl_args["fedselect_warmup_rounds_frac"],
+                fl_args["fedselect_client_select_ratio"],
+                fl_args["fedselect_sample_select_ratio"],
+                fl_args["fedselect_meta_momentum"],
+                fl_args["fedselect_meta_lr"],
+                fl_args["fedselect_reward_data_size"],
             )
         else:
             raise NotImplementedError(
@@ -88,6 +88,10 @@ class Orchestrator:
             logging.info(
                 f"Orchestrator processing time in FL round {fl_round}: {orchestrator_end_time - orchestrator_start_time:.2f} seconds!"
             )
+
+            # FedSelect: do client selection before local training
+            if self.fl_strategy.name == "fedselect":
+                self.fl_strategy.select_clients(fl_round)
 
             # iterate over clients
             for client in self.clients:
@@ -196,9 +200,15 @@ class Orchestrator:
 
             # FedSelect
             elif self.fl_strategy.name == "fedselect":
+                # FedSelect's aggregation
                 logging.info("Aggregating model weights with FedSelect strategy!")
-                # FedSelect uses importance-weighted aggregation
                 self.aggregate(strategy=self.fl_strategy.name, fl_round=fl_round)
+
+                # train meta model of most influential selected clients
+                most_influential_client_id = (
+                    self.fl_strategy.get_most_influential_client()
+                )
+                self.fl_strategy.train_meta_model(most_influential_client_id)
             else:
                 raise NotImplementedError(
                     f"Federated learning strategy {self.fl_strategy.name} not implemented!"
