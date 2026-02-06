@@ -64,8 +64,7 @@ class Orchestrator:
                 fl_args["fedselect_client_select_ratio"],
                 fl_args["fedselect_sample_select_ratio"],
                 fl_args["fedselect_meta_momentum"],
-                fl_args["fedselect_meta_lr"],
-                fl_args["fedselect_reward_data_size"],
+                fl_args["fedselect_reward_data_size_frac"],
             )
         else:
             raise NotImplementedError(

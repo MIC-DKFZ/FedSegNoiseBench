@@ -13,8 +13,9 @@ import heapq
 from torch.utils.data import WeightedRandomSampler, DataLoader, Dataset
 from torch.optim.sgd import SGD
 
-from nnUNet.nnunetv2.utilities.helpers import dummy_context
-from src.methods.fedavg.fedavg import FedAvg
+from nnunetv2.utilities.helpers import dummy_context
+
+from methods.fedavg.fedavg import FedAvg
 
 
 class MetaSGD(SGD):
@@ -122,13 +123,12 @@ class FedSelect(FedAvg):
     def __init__(
         self,
         clients: list = None,
-        num_rounds: int = 100,
-        warmup_rounds_frac: float = 0.1,
-        client_select_ratio: float = 0.4,
-        sample_select_ratio: float = 0.6,
-        meta_momentum: float = 0.9,
-        meta_lr: float = 1e-3,
-        reward_data_size: int = 1000,
+        num_rounds: int = None,
+        warmup_rounds_frac: float = None,
+        client_select_ratio: float = None,
+        sample_select_ratio: float = None,
+        meta_momentum: float = None,
+        reward_data_size_frac: float = None,
     ):
         """
         Initialize FedSelect strategy.
@@ -140,41 +140,31 @@ class FedSelect(FedAvg):
             client_select_ratio: Ratio of clients to select in each round (default: 0.4)
             sample_select_ratio: Ratio of samples to select per client (default: 0.6)
             meta_momentum: Momentum for meta-margin computation (default: 0.9)
-            meta_lr: Learning rate for meta model (default: 1e-3)
-            reward_data_size: Size of reward/proxy validation dataset (default: 1000)
+            reward_data_size_frac: Fraction of reward/proxy validation dataset size (default: 0.1)
         """
         # Call parent FedAvg constructor
         super().__init__(clients=clients)
 
-        # Override name for FedSelect
         self.name = "fedselect"
 
         self.warmup_rounds = int(warmup_rounds_frac * num_rounds)
         self.client_select_ratio = client_select_ratio
         self.sample_select_ratio = sample_select_ratio
         self.meta_momentum = meta_momentum
-        self.meta_lr = meta_lr
-        self.reward_data_size = reward_data_size
+        self.meta_lr = 1e-3  # default learning rate for VNet meta model
+        self.reward_data_size_frac = reward_data_size_frac
 
         # Initialize per-client tracking
-        self.meta_margin_pre = {}  # Previous meta-margin per client
-        self.sample_total_loss_pre = {}  # Previous sample losses per client
-        # self.client_weight = {}  # Client importance weights
-        self.client_meta_models = {}  # Per-client VNet models
-
-        # Initialize VNet models for each client
-        for client in self.clients:
-            self.client_meta_models[client.client_id] = VNet()
-            self.meta_margin_pre[client.client_id] = None
-            self.sample_total_loss_pre[client.client_id] = None
-            # self.client_weight[client.client_id] = 1.0
-
         self.selected_clients = []  # Currently selected clients
-        self.clients_sample_weights = {c_id: None for c_id in range(len(self.clients))}
-        self.client_weights = {c_id: 1.0 for c_id in range(len(self.clients))}
-        self.clients_proxy_validation_dataloaders = {
-            c_id: None for c_id in range(len(self.clients))
-        }
+        
+        # Initialize dictionaries for all clients using consistent indexing
+        client_ids = range(len(self.clients))
+        self.meta_margin_pre = {c_id: None for c_id in client_ids}
+        self.sample_total_loss_pre = {c_id: None for c_id in client_ids}
+        self.client_meta_models = {c_id: VNet() for c_id in client_ids}
+        self.clients_sample_weights = {c_id: None for c_id in client_ids}
+        self.client_weights = {c_id: 1.0 for c_id in client_ids}
+        self.clients_proxy_validation_dataloaders = {c_id: None for c_id in client_ids}
 
         logging.info(
             f"Initialized FedSelect with warmup_rounds={self.warmup_rounds}, "
@@ -182,12 +172,12 @@ class FedSelect(FedAvg):
             f"sample_select_ratio={self.sample_select_ratio}"
         )
 
-    def get_num_datasamples_client(self, client_id: int = None):
-        """
-        Get number of training samples of a client with client_id or of all clients.
-        Inherited from FedAvg.
-        """
-        return super().get_num_datasamples_client(client_id)
+    # def get_num_datasamples_client(self, client_id: int = None):
+    #     """
+    #     Get number of training samples of a client with client_id or of all clients.
+    #     Inherited from FedAvg.
+    #     """
+    #     return super().get_num_datasamples_client(client_id)
 
     def fedselect_aggregate(self, client_checkpoints: dict = {}, fl_round: int = 0):
         """
@@ -597,7 +587,7 @@ class FedSelect(FedAvg):
 
         # Determine number of samples to select for proxy validation
         num_samples = len(weights)
-        select_num = min(self.reward_data_size, num_samples)
+        select_num = int(self.reward_data_size_frac * num_samples)
 
         # Select top-k samples by meta-margin score using heapq
         top_k_indices = heapq.nlargest(

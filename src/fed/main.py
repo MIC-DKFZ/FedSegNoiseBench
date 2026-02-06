@@ -162,13 +162,8 @@ def main(args):
                 if args.noise_mitigation_method.lower() == "fedselect"
                 else None
             ),
-            "fedselect_meta_lr": (
-                args.fedselect_meta_lr
-                if args.noise_mitigation_method.lower() == "fedselect"
-                else None
-            ),
-            "fedselect_reward_data_size": (
-                args.fedselect_reward_data_size
+            "fedselect_reward_data_size_frac": (
+                args.fedselect_reward_data_size_frac
                 if args.noise_mitigation_method.lower() == "fedselect"
                 else None
             ),
@@ -385,16 +380,10 @@ if __name__ == "__main__":
         help="Momentum for meta-margin computation in FedSelect (default: 0.9).",
     )
     parser.add_argument(
-        "--fedselect_meta_lr",
+        "--fedselect_reward_data_size_frac",
         type=float,
-        default=1e-3,
-        help="Learning rate for VNet meta model in FedSelect (default: 1e-3).",
-    )
-    parser.add_argument(
-        "--fedselect_reward_data_size",
-        type=int,
-        default=1000,
-        help="Size of proxy validation/reward dataset in FedSelect (default: 1000).",
+        default=0.1,
+        help="Fraction of proxy validation/reward dataset size in FedSelect (default: 0.1).",
     )
 
     # other arguments
