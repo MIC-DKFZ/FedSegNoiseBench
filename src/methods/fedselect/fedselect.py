@@ -10,10 +10,15 @@ import torch.nn.functional as F
 import logging
 import random
 import heapq
-from torch.utils.data import WeightedRandomSampler, DataLoader, Dataset
+from torch.utils.data import WeightedRandomSampler, Dataset
 from torch.optim.sgd import SGD
 
-from nnunetv2.utilities.helpers import dummy_context
+from nnunetv2.utilities.helpers import empty_cache, dummy_context
+from nnunetv2.training.dataloading.data_loader_2d import nnUNetDataLoader2D
+from nnunetv2.training.dataloading.data_loader_3d import nnUNetDataLoader3D
+from batchgenerators.dataloading.single_threaded_augmenter import (
+    SingleThreadedAugmenter,
+)
 
 from methods.fedavg.fedavg import FedAvg
 
@@ -44,6 +49,8 @@ class MetaSGD(SGD):
         lr = group["lr"]
 
         for (name, parameter), grad in zip(self.net.named_parameters(), grads):
+            if grad is None:
+                continue
             parameter.detach_()
             if weight_decay != 0:
                 grad_wd = grad.add(parameter, alpha=weight_decay)
@@ -70,23 +77,21 @@ class ProxyValidationDataset(Dataset):
     Used for creating proxy validation datasets with top-k important samples.
     """
 
-    def __init__(self, base_dataset, selected_indices: list):
+    def __init__(self, base_dataset, selected_identifiers: list):
         """
         Args:
             base_dataset: The original dataset to wrap
-            selected_indices: List of indices to include in this dataset
+            selected_identifiers: List of identifiers to include in this dataset
         """
         self.base_dataset = base_dataset
-        self.selected_indices = selected_indices
-        # Map from new index to original index
-        self.index_map = {i: idx for i, idx in enumerate(selected_indices)}
+        self.selected_identifiers = selected_identifiers
 
     def __len__(self):
-        return len(self.selected_indices)
+        return len(self.selected_identifiers)
 
     def __getitem__(self, idx):
-        original_idx = self.index_map[idx]
-        return self.base_dataset[original_idx]
+        identifier = self.selected_identifiers[idx]
+        return self.base_dataset[identifier]
 
 
 class VNet(torch.nn.Module):
@@ -156,28 +161,22 @@ class FedSelect(FedAvg):
 
         # Initialize per-client tracking
         self.selected_clients = []  # Currently selected clients
-        
+
         # Initialize dictionaries for all clients using consistent indexing
         client_ids = range(len(self.clients))
-        self.meta_margin_pre = {c_id: None for c_id in client_ids}
-        self.sample_total_loss_pre = {c_id: None for c_id in client_ids}
+        self.meta_margin_pre = {c_id: {} for c_id in client_ids}
+        self.sample_total_loss_pre = {c_id: {} for c_id in client_ids}
         self.client_meta_models = {c_id: VNet() for c_id in client_ids}
         self.clients_sample_weights = {c_id: None for c_id in client_ids}
-        self.client_weights = {c_id: 1.0 for c_id in client_ids}
+        self.client_weights = {c_id: 0.0 for c_id in client_ids}
         self.clients_proxy_validation_dataloaders = {c_id: None for c_id in client_ids}
+        self.client_meta_optimizers = {c_id: None for c_id in client_ids}
 
         logging.info(
             f"Initialized FedSelect with warmup_rounds={self.warmup_rounds}, "
             f"client_select_ratio={self.client_select_ratio}, "
             f"sample_select_ratio={self.sample_select_ratio}"
         )
-
-    # def get_num_datasamples_client(self, client_id: int = None):
-    #     """
-    #     Get number of training samples of a client with client_id or of all clients.
-    #     Inherited from FedAvg.
-    #     """
-    #     return super().get_num_datasamples_client(client_id)
 
     def fedselect_aggregate(self, client_checkpoints: dict = {}, fl_round: int = 0):
         """
@@ -247,87 +246,10 @@ class FedSelect(FedAvg):
         most_influential_client_id = max(
             self.client_weights, key=self.client_weights.get
         )
+        logging.info(
+            f"FedSelect: most influential client selected for meta model update: {most_influential_client_id} with weight {self.client_weights[most_influential_client_id]:.4f}"
+        )
         return most_influential_client_id
-
-    # def compute_client_importance(
-    #     self,
-    #     client_id: int,
-    #     sample_losses_pre: torch.Tensor,
-    #     sample_losses_cur: torch.Tensor,
-    # ):
-    #     """
-    #     Compute client importance weight using meta-margin (difference in loss).
-    #     meta_margin = loss_before - loss_after
-
-    #     Args:
-    #         client_id: Client identifier
-    #         sample_losses_pre: Sample losses from previous epoch
-    #         sample_losses_cur: Sample losses from current epoch
-
-    #     Returns:
-    #         client_weight: Importance weight for the client
-    #     """
-    #     if sample_losses_pre is None or sample_losses_cur is None:
-    #         return 1.0
-
-    #     # Compute meta-margin: positive margin indicates improvement
-    #     meta_margin = (sample_losses_pre - sample_losses_cur).clamp(min=0.0)
-
-    #     # Apply momentum to meta-margin
-    #     if self.meta_margin_pre.get(client_id) is not None:
-    #         meta_margin_momentum = (
-    #             self.meta_momentum * self.meta_margin_pre[client_id]
-    #             + (1 - self.meta_momentum) * meta_margin
-    #         )
-    #     else:
-    #         meta_margin_momentum = meta_margin
-
-    #     # Normalize meta-margin
-    #     if meta_margin_momentum.max() > 0:
-    #         meta_margin_momentum = meta_margin_momentum / (
-    #             meta_margin_momentum.max() + 1e-8
-    #         )
-
-    #     self.meta_margin_pre[client_id] = meta_margin_momentum
-
-    #     # Client weight is the sum of normalized meta-margins
-    #     client_weight = meta_margin_momentum.sum().item() / max(
-    #         len(meta_margin_momentum), 1
-    #     )
-    #     self.client_weight[client_id] = max(client_weight, 0.1)  # Minimum weight 0.1
-
-    #     logging.info(
-    #         f"FedSelect: Client {client_id} importance weight = {self.client_weight[client_id]:.4f}"
-    #     )
-    #     return self.client_weight[client_id]
-
-    # def compute_sample_importance(
-    #     self, client_id: int, sample_losses: torch.Tensor, device: torch.device = None
-    # ):
-    #     """
-    #     Compute sample importance weights using the VNet meta model.
-
-    #     Args:
-    #         client_id: Client identifier
-    #         sample_losses: Tensor of sample losses
-    #         device: Device for computation
-
-    #     Returns:
-    #         sample_weights: Importance weights for each sample
-    #     """
-    #     if device is None:
-    #         device = torch.device("cpu")
-
-    #     vnet = self.client_meta_models[client_id].to(device)
-    #     vnet.eval()
-
-    #     with torch.no_grad():
-    #         # Reshape losses and compute importance
-    #         sample_losses_reshaped = sample_losses.view(-1, 1).to(device)
-    #         sample_weights = vnet(sample_losses_reshaped)
-    #         sample_weights = sample_weights.view(-1)
-
-    #     return sample_weights
 
     def select_clients(self, fl_round: int, num_clients_to_select: int = None):
         """
@@ -344,7 +266,9 @@ class FedSelect(FedAvg):
                 [c.client_id for c in self.clients],
                 min(num_to_select, len(self.clients)),
             )
-            logging.info(f"FedSelect warmup: randomly selected {len(selected)} clients")
+            logging.info(
+                f"FedSelect warmup: randomly selected {len(selected)} clients: {selected}"
+            )
             self.selected_clients = selected
         else:
             # During training, select based on importance weights using WeightedRandomSampler
@@ -381,7 +305,7 @@ class FedSelect(FedAvg):
                 f"FedSelect warmup phase (round {fl_round}): skipping sample weight computation"
             )
             self.clients_sample_weights[client_id] = torch.ones(
-                self.get_num_datasamples_client(client_id), device=torch.device("cpu")
+                len(nnunet_trainer.tr_keys), device=torch.device("cpu")
             )
             return
         # after warmup, compute sample weights using VNet
@@ -389,7 +313,7 @@ class FedSelect(FedAvg):
             f"FedSelect training phase (round {fl_round}): computing sample weights for client {client_id}"
         )
         # get net, loader, device, criterion from nnunet_trainer
-        net = nnunet_trainer.network
+        net = nnunet_trainer.network.to(nnunet_trainer.device)
         net.eval()
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
@@ -403,7 +327,7 @@ class FedSelect(FedAvg):
 
         # forward pass through training data to compute sample losses
         processed_batch_el_keys = {}
-        sample_weights = torch.ones(0, device=device)
+        sample_weights = torch.ones(0, device="cpu")
         with torch.no_grad():
             for batch_idx, batch in enumerate(loader):
                 if batch_idx >= nnunet_trainer.num_iterations_per_epoch:
@@ -437,20 +361,23 @@ class FedSelect(FedAvg):
                         else dummy_context()
                     ):
                         output = net(data)
-                        l = criterion(output, target).cpu()
+                        l = criterion(output, target)
                         processed_batch_el_keys[key] = l
 
                     # feed loss through meta model to get sample weight
-                    weight = meta_model(torch.reshape(l, (len(l), -1)))
-                    weight = torch.reshape(weight, l.shape)
-                    sample_weights = torch.cat((sample_weights, weight.to(device)), -1)
+                    weight = meta_model(l.unsqueeze(0).reshape(1, -1))
+                    weight = torch.reshape(weight, l.shape).unsqueeze(0).to("cpu")
+                    sample_weights = torch.cat((sample_weights, weight), -1)
 
         self.clients_sample_weights[client_id] = sample_weights
+
         logging.info(
             f"FedSelect: computed sample weights for client {client_id}, total samples: {len(sample_weights)}"
         )
+        del net, loader, criterion, data, target, output, l, weight, sample_weights
+        empty_cache(device)
 
-    def compute_client_weights(self, client_id: int):
+    def compute_client_weights(self, nnunet_trainer, client_id: int):
         """
         Compute client importance weight based on sample weights.
 
@@ -459,7 +386,7 @@ class FedSelect(FedAvg):
         """
         self.client_weights[client_id] = self.clients_sample_weights[
             client_id
-        ].sum().item() / self.get_num_datasamples_client(client_id)
+        ].sum().item() / len(nnunet_trainer.tr_keys)
         logging.info(
             f"FedSelect: computed client weight for client {client_id}: {self.client_weights[client_id]:.4f}"
         )
@@ -488,9 +415,9 @@ class FedSelect(FedAvg):
         device = nnunet_trainer.device
         criterion = nnunet_trainer.loss
 
-        # forward pass through training data to compute sample losses
+        # forward pass through training data to compute per-sample losses
         processed_batch_el_keys = {}
-        sample_total_loss = torch.ones(0)
+        sample_total_loss = {}
         with torch.no_grad():
             for batch_idx, batch in enumerate(loader):
                 if batch_idx >= nnunet_trainer.num_iterations_per_epoch:
@@ -502,7 +429,7 @@ class FedSelect(FedAvg):
                     key = batch["keys"][batch_element_idx]
 
                     # check if batch element already processed
-                    if key in processed_batch_el_keys.keys():
+                    if key in processed_batch_el_keys:
                         continue
 
                     # some target handling and data to device
@@ -524,27 +451,58 @@ class FedSelect(FedAvg):
                         else dummy_context()
                     ):
                         output = net(data)
-                        l = criterion(output, target).cpu()
-                        sample_total_loss = torch.cat(
-                            (sample_total_loss, l.to(device)), -1
-                        )
-                        processed_batch_el_keys[key] = l
+                        l = criterion(output, target).detach()
 
-        # compute meta margin scores
+                    # store scalar loss per sample key
+                    loss_value = l.view(-1).mean().item()
+                    sample_total_loss[key] = loss_value
+                    processed_batch_el_keys[key] = loss_value
+
+                    # Clean up after each batch
+                    del output, l, data, target
+                    empty_cache(device)
+
+        # GPU clean up
+        del net, loader, criterion
+        empty_cache(device)
+
+        if len(sample_total_loss) == 0:
+            logging.warning(
+                f"FedSelect: No sample losses computed for client {client_id}."
+            )
+            return
+
+        # compute meta margin scores (per key)
+        prev_losses = self.sample_total_loss_pre.get(client_id, {})
+        prev_margins = self.meta_margin_pre.get(client_id, {})
+
+        keys = list(sample_total_loss.keys())
+        current_losses = torch.tensor(
+            [sample_total_loss[k] for k in keys], device=device
+        )
+        previous_losses = torch.tensor(
+            [prev_losses.get(k, 0.0) for k in keys], device=device
+        )
+
         # equation (7) in the paper
-        meta_margin = self.sample_total_loss_pre[client_id].to(
-            device
-        ) - sample_total_loss.to(device)
+        meta_margin = previous_losses - current_losses
         meta_margin = self._normalize_tensor(meta_margin)
+
         # equation (8) in the paper
+        prev_margin_tensor = torch.tensor(
+            [prev_margins.get(k, 0.0) for k in keys], device=device
+        )
         meta_margin_hat = (
-            self.meta_momentum * self.meta_margin_pre[client_id].to(device)
+            self.meta_momentum * prev_margin_tensor
             + (1 - self.meta_momentum) * meta_margin
         )
         meta_margin_hat = self._normalize_tensor(meta_margin_hat)
 
+        # update stored dicts with per-sample values
         self.sample_total_loss_pre[client_id] = sample_total_loss
-        self.meta_margin_pre[client_id] = meta_margin_hat
+        self.meta_margin_pre[client_id] = {
+            k: meta_margin_hat[i].item() for i, k in enumerate(keys)
+        }
         # TODO: in original code, they do it like the following, but doesn't align with paper
         # self.meta_margin_pre[client_id] = meta_margin
 
@@ -554,10 +512,14 @@ class FedSelect(FedAvg):
         """
         min_val = torch.min(tensor)
         max_val = torch.max(tensor)
+        if max_val == min_val:
+            return torch.zeros_like(tensor)
         normalized_tensor = (tensor - min_val) / (max_val - min_val)
         return normalized_tensor
 
-    def update_proxy_validation_dataset(self, client_id: int, nnunet_trainer=None):
+    def update_proxy_validation_dataset(
+        self, nnunet_trainer=None, client_id: int = None
+    ):
         """
         Update the proxy validation dataset for a client using top-k samples based on meta-margin scores.
 
@@ -572,31 +534,39 @@ class FedSelect(FedAvg):
             dataloader: DataLoader with selected proxy validation samples
             total_value: Sum of weights for selected samples
         """
-        # Get meta-margin scores for this client, and ensure np.array and device CPU
-        if self.meta_margin_pre.get(client_id) is None:
+        if client_id is None:
+            logging.warning(
+                "FedSelect: client_id is required to update proxy validation dataset"
+            )
+            return None, 0.0
+
+        # Get meta-margin scores for this client
+        if not self.meta_margin_pre.get(client_id):
             logging.warning(
                 f"FedSelect: No meta-margin scores available for client {client_id}, "
                 "cannot update proxy validation dataset"
             )
             return None, 0.0
         meta_margin = self.meta_margin_pre[client_id]
-        if isinstance(meta_margin, torch.Tensor):
-            weights = meta_margin.cpu().numpy()
-        else:
-            weights = meta_margin
 
         # Determine number of samples to select for proxy validation
-        num_samples = len(weights)
-        select_num = int(self.reward_data_size_frac * num_samples)
+        num_samples = len(meta_margin)
+        select_num = max(1, int(self.reward_data_size_frac * num_samples))
 
         # Select top-k samples by meta-margin score using heapq
-        top_k_indices = heapq.nlargest(
-            select_num, range(num_samples), key=lambda i: weights[i]
+        top_k_keys = heapq.nlargest(
+            select_num, meta_margin.keys(), key=lambda k: meta_margin[k]
         )
 
         # Get the base dataset from trainer if available
+        if nnunet_trainer is None:
+            nnunet_trainer = getattr(self.clients[client_id], "model", None)
+            nnunet_trainer = getattr(nnunet_trainer, "nnunet_trainer", None)
+
         if nnunet_trainer is not None and hasattr(nnunet_trainer, "dataloader_train"):
-            base_dataset = copy.deepcopy(nnunet_trainer.dataloader_train.dataset)
+            base_dataset = copy.deepcopy(
+                nnunet_trainer.dataloader_train.generator._data
+            )
         else:
             logging.warning(
                 f"FedSelect: No trainer provided for client {client_id}, "
@@ -604,83 +574,91 @@ class FedSelect(FedAvg):
             )
             return None, 0.0
 
-        # Create proxy validation dataset with selected indices
-        proxy_dataset = ProxyValidationDataset(base_dataset, top_k_indices)
+        # Ensure selected keys exist in dataset identifiers
+        dataset_ids = getattr(base_dataset, "identifiers", None)
+        if dataset_ids is None:
+            logging.warning(
+                f"FedSelect: base_dataset has no identifiers for client {client_id}, "
+                "cannot align proxy validation samples"
+            )
+            return None, 0.0
+        dataset_id_set = set(dataset_ids)
+        top_k_identifiers = [k for k in top_k_keys if k in dataset_id_set]
+        if len(top_k_identifiers) == 0:
+            logging.warning(
+                f"FedSelect: No matching dataset indices found for client {client_id} "
+                "when building proxy validation dataset"
+            )
+            return None, 0.0
 
-        # Create dataloader for proxy validation dataset
-        proxy_dataloader = DataLoader(
-            proxy_dataset,
-            batch_size=select_num,
-            shuffle=False,
-            num_workers=0,
+        # Create proxy validation dataset with selected identifiers
+        proxy_dataset = copy.deepcopy(base_dataset)
+        proxy_dataset.identifiers = top_k_identifiers
+        if getattr(proxy_dataset, "identifiers_noise", None) is not None:
+            proxy_dataset.identifiers_noise = {
+                k: proxy_dataset.identifiers_noise[k]
+                for k in top_k_identifiers
+                if k in proxy_dataset.identifiers_noise
+            }
+
+        # Build nnUNet dataloader (dict batches) for proxy validation
+        patch_size = nnunet_trainer.configuration_manager.patch_size
+        # redoce patch size for proxy validation if needed
+        # patch_size = [(ps//2) if ps > (max(patch_size)//2) else ps for ps in patch_size]
+        dim = len(patch_size)
+        deep_supervision_scales = nnunet_trainer._get_deep_supervision_scales()
+        val_transforms = nnunet_trainer.get_validation_transforms(
+            deep_supervision_scales,
+            is_cascaded=nnunet_trainer.is_cascaded,
+            foreground_labels=nnunet_trainer.label_manager.foreground_labels,
+            regions=(
+                nnunet_trainer.label_manager.foreground_regions
+                if nnunet_trainer.label_manager.has_regions
+                else None
+            ),
+            ignore_label=nnunet_trainer.label_manager.ignore_label,
         )
 
-        # Compute total weight for selected samples
-        if isinstance(meta_margin, torch.Tensor):
-            total_value = meta_margin[top_k_indices].sum().item()
+        proxy_batch_size = 1  # min(nnunet_trainer.batch_size, len(top_k_identifiers))
+        if dim == 2:
+            dl_proxy = nnUNetDataLoader2D(
+                proxy_dataset,
+                proxy_batch_size,
+                patch_size,
+                patch_size,
+                nnunet_trainer.label_manager,
+                oversample_foreground_percent=nnunet_trainer.oversample_foreground_percent,
+                sampling_probabilities=None,
+                pad_sides=None,
+                transforms=val_transforms,
+            )
         else:
-            total_value = weights[top_k_indices].sum()
+            dl_proxy = nnUNetDataLoader3D(
+                proxy_dataset,
+                proxy_batch_size,
+                patch_size,
+                patch_size,
+                nnunet_trainer.label_manager,
+                oversample_foreground_percent=nnunet_trainer.oversample_foreground_percent,
+                sampling_probabilities=None,
+                pad_sides=None,
+                transforms=val_transforms,
+            )
+
+        proxy_dataloader = SingleThreadedAugmenter(dl_proxy, None)
+
+        # Compute total weight for selected samples
+        total_value = sum(meta_margin[k] for k in top_k_keys if k in meta_margin)
 
         logging.info(
             f"FedSelect: Updated proxy validation dataset for client {client_id}: "
-            f"selected {len(top_k_indices)}/{num_samples} samples, total weight: {total_value:.4f}"
+            f"selected {len(top_k_identifiers)}/{num_samples} samples, total weight: {total_value:.4f}"
         )
 
         # Store proxy validation dataloader and scores for later use
         self.clients_proxy_validation_dataloaders[client_id] = proxy_dataloader
 
         return proxy_dataloader, total_value
-
-    # def update_vnet(
-    #     self,
-    #     client_id: int,
-    #     sample_losses_train: torch.Tensor,
-    #     sample_losses_val: torch.Tensor,
-    #     device: torch.device = None,
-    # ):
-    #     """
-    #     Update the VNet model for sample importance weighting using validation data.
-
-    #     Args:
-    #         client_id: Client identifier
-    #         sample_losses_train: Training sample losses
-    #         sample_losses_val: Validation sample losses (proxy for true validation)
-    #         device: Device for computation
-    #     """
-    #     if device is None:
-    #         device = torch.device("cpu")
-
-    #     vnet = self.client_meta_models[client_id].to(device)
-    #     optimizer = torch.optim.Adam(
-    #         vnet.parameters(), lr=self.meta_lr, weight_decay=1e-4
-    #     )
-
-    #     vnet.train()
-    #     for _ in range(5):  # Few meta-update steps
-    #         # Forward pass on training data
-    #         sample_losses_train = sample_losses_train.view(-1, 1).to(device)
-    #         sample_weights = vnet(sample_losses_train)
-
-    #         # Compute weighted loss
-    #         weighted_loss = (
-    #             sample_weights.view(-1) * sample_losses_train.view(-1)
-    #         ).mean()
-
-    #         # Backward on validation data (meta-loss)
-    #         sample_losses_val = sample_losses_val.view(-1, 1).to(device)
-    #         sample_weights_val = vnet(sample_losses_val)
-    #         meta_loss = F.mse_loss(
-    #             sample_weights_val, torch.ones_like(sample_weights_val) * 0.5
-    #         )
-
-    #         # Combined loss
-    #         loss = weighted_loss + meta_loss
-
-    #         optimizer.zero_grad()
-    #         loss.backward()
-    #         optimizer.step()
-
-    #     vnet.eval()
 
     def train_meta_model(self, client_id: int, fl_round: int = 0):
         """
@@ -706,21 +684,52 @@ class FedSelect(FedAvg):
             )
             return
 
+        # Avoid functorch donated buffer issues with create_graph=True
+        try:
+            import torch._functorch.config as functorch_config  # type: ignore
+
+            functorch_config.donated_buffer = False
+        except Exception:
+            pass
+
+        # Disable torch.compile/torchdynamo for meta-training to avoid fake tensor/double backward errors
+        try:
+            import torch._dynamo as dynamo  # type: ignore
+
+            dynamo.config.suppress_errors = True
+            dynamo.disable = dynamo.disable  # keep lint happy
+        except Exception:
+            dynamo = None
+
         # Get trainer and device
-        nnunet_trainer = self.clients[client_id].trainer
+        nnunet_trainer = self.clients[client_id].model.nnunet_trainer
         device = nnunet_trainer.device
+        empty_cache(device)
         train_loader = nnunet_trainer.dataloader_train
-        net = nnunet_trainer.network
+        base_net = nnunet_trainer.network
+        net = base_net
+        if hasattr(net, "_orig_mod"):
+            net = net._orig_mod
+        # move base model to CPU during meta-training to reduce peak GPU memory
+        net_cpu = net.to("cpu")
+        empty_cache(device)
         criterion = nnunet_trainer.loss
 
         # Get or create meta model optimizer
         vnet = self.client_meta_models[client_id].to(device)
+        momentum_pseudo_optimizer = 0.5
         current_meta_lr = self.meta_lr * (
             (0.1 ** int(fl_round >= 80)) * (0.1 ** int(fl_round >= 100))
         )
-        meta_optimizer = torch.optim.Adam(
-            vnet.parameters(), lr=current_meta_lr, weight_decay=1e-4
-        )
+        meta_optimizer = self.client_meta_optimizers.get(client_id)
+        if meta_optimizer is None:
+            meta_optimizer = torch.optim.Adam(
+                vnet.parameters(), lr=current_meta_lr, weight_decay=1e-4
+            )
+            self.client_meta_optimizers[client_id] = meta_optimizer
+        else:
+            for param_group in meta_optimizer.param_groups:
+                param_group["lr"] = current_meta_lr
 
         vnet.train()
         meta_loss_total = 0.0
@@ -730,10 +739,21 @@ class FedSelect(FedAvg):
             f"(FL round {fl_round})"
         )
 
+        num_it_max = (
+            len(proxy_dataloader.data_loader.indices)
+            // proxy_dataloader.data_loader.batch_size
+        )
         # Iterate through proxy validation batches (outer loop)
         for proxy_batch_idx, proxy_batch in enumerate(proxy_dataloader):
+            if proxy_batch_idx >= num_it_max:
+                break
             # Create a copy of the local model for this meta-training iteration
-            local_model_copy = copy.deepcopy(net)
+            local_model_copy = copy.deepcopy(net_cpu)
+            if dynamo is not None:
+                try:
+                    local_model_copy = dynamo.disable(local_model_copy)
+                except Exception:
+                    pass
             local_model_copy.to(device)
             local_model_copy.train()
 
@@ -754,77 +774,103 @@ class FedSelect(FedAvg):
                     else dummy_context()
                 ):
                     output = local_model_copy(data)
-                    loss = criterion(output, target)
+                    cost = criterion(output, target)
+                    cost_v = cost.view(-1, 1)
 
-                    # Ensure loss is a 1D tensor for VNet input
-                    if loss.dim() > 1:
-                        loss = loss.view(-1)
-
-                    # Compute importance weights using VNet (detach to prevent backprop through VNet here)
-                    loss_reshaped = loss.view(-1, 1).detach()
-                    v_lambda = vnet(loss_reshaped)
+                    # Compute importance weights using VNet
+                    v_lambda = vnet(cost_v)
 
                     # Compute weighted loss
-                    l_f_meta = torch.sum(loss * v_lambda.view(-1)) / max(len(loss), 1)
+                    l_f_meta = torch.sum(cost_v * v_lambda) / len(cost_v)
 
                     # Compute gradients with create_graph=True to allow backprop through this step
                     grads = torch.autograd.grad(
                         l_f_meta,
                         local_model_copy.parameters(),
                         create_graph=True,
+                        # create_graph=False,  # set to False to avoid functorch donated buffer issues, but means we can't backprop through the pseudo step
                         allow_unused=True,
                     )
 
                 # Perform meta-SGD step (inner loop optimization)
                 pseudo_optimizer = MetaSGD(
-                    local_model_copy, local_model_copy.parameters(), lr=current_meta_lr
+                    local_model_copy,
+                    local_model_copy.parameters(),
+                    lr=current_meta_lr,
+                    momentum=momentum_pseudo_optimizer,
                 )
                 pseudo_optimizer.meta_step(grads)
-                del grads
+                del output, cost, cost_v, v_lambda, l_f_meta, grads
+                del data, target
+                empty_cache(device)
                 break
 
+            # Free memory
+            empty_cache(device)
+
             # Evaluate on proxy validation batch
+            # get data and target from proxy batch
             local_model_copy.eval()
             data_val = proxy_batch["data"].to(device, non_blocking=True)
             _target_val = proxy_batch["target"]
-
             if isinstance(_target_val, list):
                 target_val = [t.to(device, non_blocking=True) for t in _target_val]
             else:
                 target_val = _target_val.to(device, non_blocking=True)
 
+            # feed through model and compute validation loss (meta-loss)
             with (
                 torch.autocast(device.type, enabled=True)
                 if device.type == "cuda"
                 else dummy_context()
             ):
                 y_g_hat = local_model_copy(data_val)
+                print(
+                    f"FedSelect: Meta-training iteration {proxy_batch_idx}, y_g_hat computed."
+                )
                 l_g_meta = criterion(y_g_hat, target_val)
+                print(
+                    f"FedSelect: Meta-training iteration {proxy_batch_idx}, meta-loss computed: {l_g_meta.item():.4f}"
+                )
 
             # Backprop validation loss to update VNet
             meta_optimizer.zero_grad()
             l_g_meta.backward()
             meta_optimizer.step()
+            del y_g_hat, data_val, target_val
+            empty_cache(device)
 
             meta_loss_total += l_g_meta.item()
+            del local_model_copy, l_g_meta
+            empty_cache(device)
 
         vnet.eval()
 
-        avg_meta_loss = meta_loss_total / max(len(proxy_dataloader), 1)
+        # # restore base model back to GPU for subsequent training steps
+        # base_net.to(device)
+
+        avg_meta_loss = meta_loss_total / max(
+            len(proxy_dataloader.data_loader.indices), 1
+        )
         logging.info(
             f"FedSelect: Meta model training completed for client {client_id}, "
             f"average meta loss: {avg_meta_loss:.4f}"
         )
 
         # finally set updated vnet to all clients' meta model
-        self._set_meta_model_to_all_clients(vnet)
+        self._set_meta_model_n_opti_to_all_clients(vnet, meta_optimizer)
 
-    def _set_meta_model_to_all_clients(self, meta_model: torch.nn.Module):
+    def _set_meta_model_n_opti_to_all_clients(
+        self, meta_model: torch.nn.Module, optimizer: torch.optim.Optimizer
+    ):
         """
-        Set the given meta model to all clients.
+        Set the given meta model and optimizer to all clients.
 
         Args:
             meta_model: The VNet meta model to set
+            optimizer: The optimizer associated with the meta model
         """
         for cid in self.client_meta_models.keys():
             self.client_meta_models[cid] = copy.deepcopy(meta_model)
+            self.client_meta_optimizers[cid] = copy.deepcopy(optimizer)
+        logging.info(f"FedSelect: Updated meta model and optimizer set for all clients")

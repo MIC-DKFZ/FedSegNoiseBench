@@ -2,6 +2,8 @@ import logging
 import time
 import copy
 
+import torch
+
 from client import Client
 from methods.fedavg.fedavg import FedAvg
 from methods.feda3i.feda3i import FedA3I
@@ -207,6 +209,7 @@ class Orchestrator:
                 most_influential_client_id = (
                     self.fl_strategy.get_most_influential_client()
                 )
+                torch.cuda.empty_cache()
                 self.fl_strategy.train_meta_model(most_influential_client_id)
             else:
                 raise NotImplementedError(
@@ -215,6 +218,7 @@ class Orchestrator:
 
         # distiribute flinal fl models to clients
         self.update_clients(checkpoint_name="server_checkpoint_final.pth")
+        torch.cuda.empty_cache()
 
         # very last fl round to just predict
         for client in self.clients:

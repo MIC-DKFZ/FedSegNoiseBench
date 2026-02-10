@@ -211,7 +211,7 @@ class Client:
                 fl_strategy.compute_sample_weights(
                     self.model.nnunet_trainer, self.client_id, fl_round
                 )
-                fl_strategy.compute_client_weights(self.client_id)
+                fl_strategy.compute_client_weights(self.model.nnunet_trainer, self.client_id)
 
             # local training only for selected clients on selected data
             # selected clients via arg is_fedselect_selected_client
@@ -239,7 +239,7 @@ class Client:
 
             # update proxy validation dataset with new meta-margin scores (just for selected clients)
             if self.client_id in fl_strategy.selected_clients:
-                fl_strategy.update_proxy_validation_dataset(self.client_id)
+                fl_strategy.update_proxy_validation_dataset(self.model.nnunet_trainer, self.client_id)
 
         ##########################################
         # all other FL strategies
