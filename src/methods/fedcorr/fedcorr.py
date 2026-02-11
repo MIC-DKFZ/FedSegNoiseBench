@@ -275,7 +275,7 @@ class FedCorr(FedAvg):
 
         return output_whole, output_whole_highres, loss_whole
 
-    def lid_term_batched(self, X, k=20, batch_size=16, eps=1e-6):
+    def lid_term_batched(self, X, k=20, eps=1e-6):
         """
         Compute Local Intrinsic Dimensionality (LID) for a batch of samples.
 
@@ -285,13 +285,16 @@ class FedCorr(FedAvg):
         Args:
             X: Input data as list of tensors or stacked tensor of shape (N, C, ..., H, W)
             k: Number of nearest neighbors to consider (default: 20)
-            batch_size: Batch size for distance computation (default: 128)
             eps: Small epsilon value to avoid division by zero (default: 1e-6)
 
         Returns:
             Array of LID scores for each sample
         """
         logging.info("Computing LID scores in batched manner...")
+        # ensure batch size does not exceed dataloader batch size
+        default_batch_size = 16
+        batch_size = min(default_batch_size, self.clients[0].model.nnunet_trainer.batch_size)
+        
         # X is list of tensors, each (1, C, (D), H, W)
         if isinstance(X, list):
             X = torch.stack(X, dim=0)  # (N, C, (D), H, W)
