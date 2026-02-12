@@ -201,25 +201,33 @@ class FedSelect(FedAvg):
         """
         Perform client-weighted aggregation using computed client importance weights.
         """
-        _client_checkpoints = copy.deepcopy(client_checkpoints)
+        # keep direct reference (no deepcopy to avoid GPU OOM)
+        _client_checkpoints = client_checkpoints
 
         first_key = list(_client_checkpoints.keys())[0]
-        _server_model_weights = _client_checkpoints[first_key]
-        keys = list(_server_model_weights.keys())
+        first_client_weights = _client_checkpoints[first_key]
+        _server_model_weights = {
+            k: v.detach().clone() for k, v in first_client_weights.items()
+        }
+        keys = list(first_client_weights.keys())
 
         # Create address-to-key mapping
         address_key_dict = {}
         for k in keys:
-            address = _server_model_weights[k].data_ptr()
+            address = first_client_weights[k].data_ptr()
             if address not in address_key_dict:
                 address_key_dict[address] = [k]
             else:
                 address_key_dict[address].append(k)
 
         # Normalize client weights
-        total_weight = sum(self.client_weights.values())
+        aggregation_weights = {
+            cid: self.client_weights[cid] if cid in self.selected_clients else 0.0
+            for cid in _client_checkpoints.keys()
+        }
+        total_weight = sum(aggregation_weights.values())
         normalized_weights = {
-            cid: w / total_weight for cid, w in self.client_weights.items()
+            cid: w / total_weight for cid, w in aggregation_weights.items()
         }
 
         # Perform weighted aggregation
@@ -380,6 +388,8 @@ class FedSelect(FedAvg):
     def compute_client_weights(self, nnunet_trainer, client_id: int):
         """
         Compute client importance weight based on sample weights.
+        client weight re-computed each round after sample weights are updated,
+        used for client selection and aggregation.
 
         Args:
             client_id: Client identifier
