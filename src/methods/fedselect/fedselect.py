@@ -407,7 +407,7 @@ class FedSelect(FedAvg):
             f"FedSelect training phase (round {fl_round}): computing meta margin scores for client {client_id}"
         )
         # get net, loader, device, criterion from nnunet_trainer
-        net = nnunet_trainer.network
+        net = nnunet_trainer.network.to(nnunet_trainer.device)
         net.eval()
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
@@ -463,6 +463,7 @@ class FedSelect(FedAvg):
                     empty_cache(device)
 
         # GPU clean up
+        nnunet_trainer.network.to("cpu")
         del net, loader, criterion
         empty_cache(device)
 

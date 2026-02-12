@@ -1,4 +1,3 @@
-import copy
 import os
 import json
 
@@ -31,8 +30,8 @@ class FedAvg:
         * perform averaging based on pointers on the dict keys obtained with .data_ptr()
         * solution from https://github.com/MIC-DKFZ/nnUNet/issues/2553
         """
-        # create deepcopy of client model weights to not directly modify them
-        _client_checkpoints = copy.deepcopy(client_checkpoints)
+        # keep direct reference (no deepcopy to avoid GPU OOM)
+        _client_checkpoints = client_checkpoints
 
         # for sample-weighted averaging, get number of all samples of all clients
         num_samples_all_clients_list = [
@@ -41,14 +40,17 @@ class FedAvg:
         ]
         num_samples_all_clients = sum(num_samples_all_clients_list)
 
-        # initialize _server_model_weights with model weights of first client
+        # initialize _server_model_weights with model weights of first client (clone to avoid in-place edits)
         first_key = list(_client_checkpoints.keys())[0]
-        _server_model_weights = _client_checkpoints[first_key]
+        first_client_weights = _client_checkpoints[first_key]
+        _server_model_weights = {
+            k: v.detach().clone() for k, v in first_client_weights.items()
+        }
         # get addresses of keys
-        keys = list(_server_model_weights.keys())
+        keys = list(first_client_weights.keys())
         address_key_dict = {}
         for k in keys:
-            address = _server_model_weights[k].data_ptr()
+            address = first_client_weights[k].data_ptr()
             if address not in address_key_dict.keys():
                 address_key_dict[address] = [k]
             else:
