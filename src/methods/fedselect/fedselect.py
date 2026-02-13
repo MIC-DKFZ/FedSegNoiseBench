@@ -312,9 +312,9 @@ class FedSelect(FedAvg):
             logging.info(
                 f"FedSelect warmup phase (round {fl_round}): skipping sample weight computation"
             )
-            self.clients_sample_weights[client_id] = torch.ones(
-                len(nnunet_trainer.tr_keys), device=torch.device("cpu")
-            )
+            self.clients_sample_weights[client_id] = {
+                key: 1.0 for key in nnunet_trainer.tr_keys
+            }
             return
         # after warmup, compute sample weights using VNet
         logging.info(
@@ -334,8 +334,8 @@ class FedSelect(FedAvg):
         meta_model.eval()
 
         # forward pass through training data to compute sample losses
-        processed_batch_el_keys = {}
-        sample_weights = torch.ones(0, device="cpu")
+        processed_batch_el_keys = set()
+        sample_weights = {}
         with torch.no_grad():
             for batch_idx, batch in enumerate(loader):
                 if batch_idx >= nnunet_trainer.num_iterations_per_epoch:
@@ -347,7 +347,7 @@ class FedSelect(FedAvg):
                     key = batch["keys"][batch_element_idx]
 
                     # check if batch element already processed
-                    if key in processed_batch_el_keys.keys():
+                    if key in processed_batch_el_keys:
                         continue
 
                     # some target handling and data to device
@@ -370,19 +370,18 @@ class FedSelect(FedAvg):
                     ):
                         output = net(data)
                         l = criterion(output, target)
-                        processed_batch_el_keys[key] = l
 
                     # feed loss through meta model to get sample weight
                     weight = meta_model(l.unsqueeze(0).reshape(1, -1))
-                    weight = torch.reshape(weight, l.shape).unsqueeze(0).to("cpu")
-                    sample_weights = torch.cat((sample_weights, weight), -1)
+                    sample_weights[key] = float(weight.detach().mean().item())
+                    processed_batch_el_keys.add(key)
 
         self.clients_sample_weights[client_id] = sample_weights
 
         logging.info(
             f"FedSelect: computed sample weights for client {client_id}, total samples: {len(sample_weights)}"
         )
-        del net, loader, criterion, data, target, output, l, weight, sample_weights
+        del net, loader, criterion, data, target, output, l, weight
         empty_cache(device)
 
     def compute_client_weights(self, nnunet_trainer, client_id: int):
@@ -394,9 +393,11 @@ class FedSelect(FedAvg):
         Args:
             client_id: Client identifier
         """
-        self.client_weights[client_id] = self.clients_sample_weights[
-            client_id
-        ].sum().item() / len(nnunet_trainer.tr_keys)
+        sample_weights = self.clients_sample_weights.get(client_id, {})
+        total_weight = sum(sample_weights.values()) if sample_weights else 0.0
+        self.client_weights[client_id] = total_weight / max(
+            len(nnunet_trainer.tr_keys), 1
+        )
         logging.info(
             f"FedSelect: computed client weight for client {client_id}: {self.client_weights[client_id]:.4f}"
         )
