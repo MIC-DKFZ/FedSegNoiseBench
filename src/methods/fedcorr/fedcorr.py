@@ -285,6 +285,10 @@ class FedCorr(FedAvg):
                         loss_whole[key] = []
                     loss_whole[key].append(l.cpu())
 
+                    del data, target, output, l
+                    if device.type == "cuda":
+                        torch.cuda.empty_cache()
+
         # get highres outputs
         output_whole_highres = [out[0] for out in output_whole]
 
@@ -292,9 +296,12 @@ class FedCorr(FedAvg):
         for key in loss_whole.keys():
             loss_whole[key] = torch.mean(torch.stack(loss_whole[key]))
 
+        net = net.to("cpu")
+        torch.cuda.empty_cache()
+
         return output_whole, output_whole_highres, loss_whole
 
-    def lid_term_batched(self, X, k=20, eps=1e-6):
+    def lid_term_batched(self, X, k=20, eps=1e-6, ref_batch_size: int | None = None):
         """
         Compute Local Intrinsic Dimensionality (LID) for a batch of samples.
 
@@ -305,6 +312,7 @@ class FedCorr(FedAvg):
             X: Input data as list of tensors or stacked tensor of shape (N, C, ..., H, W)
             k: Number of nearest neighbors to consider (default: 20)
             eps: Small epsilon value to avoid division by zero (default: 1e-6)
+            ref_batch_size: Reference block size for GPU streaming (defaults to batch_size)
 
         Returns:
             Array of LID scores for each sample
@@ -326,33 +334,54 @@ class FedCorr(FedAvg):
         if N <= 1:
             return np.zeros((N,))
 
-        X = X.to(self.clients[0].model.nnunet_trainer.device, non_blocking=True)
-        X_flat = X.view(N, -1).float()
+        X_flat = X.view(N, -1).float().cpu()
 
         # Clamp k to avoid requesting more neighbors than exist (exclude self)
         k_eff = min(k, N - 1)
+        device = self.clients[0].model.nnunet_trainer.device
 
-        # Allocate only k-nearest neighbor distances instead of full N×N matrix
-        # This reduces memory from O(N²) to O(N×k)
-        k_distances = torch.zeros((N, k_eff), device=X_flat.device)
-
-        # Compute k-nearest neighbors in batches to save memory
-        for i in range(0, N, batch_size):
-            logging.info(
-                f"Computing distances for samples {i} to {min(i + batch_size, N)} / {N}"
+        if device.type != "cuda":
+            raise RuntimeError(
+                "LID computation requires CUDA; no GPU device available."
             )
-            X_i = X_flat[i : i + batch_size]
-            # Compute distances only for current batch (GPU)
-            d_block = torch.cdist(X_i, X_flat, p=2)
 
-            # For each sample in batch, extract only k+1 nearest neighbors
-            k_plus_one = k_eff + 1
-            d_small = torch.topk(d_block, k_plus_one, dim=1, largest=False).values
-            # Skip first (self with distance 0), keep next k
-            k_distances[i : i + d_small.shape[0]] = d_small[:, 1:k_plus_one]
+        # Stream reference blocks from CPU to GPU to avoid full N x N distance on GPU
+        k_distances = torch.full((N, k_eff), float("inf"), device=device)
+        ref_batch_size = batch_size if ref_batch_size is None else ref_batch_size
+
+        with torch.no_grad():
+            for i in range(0, N, batch_size):
+                logging.info(
+                    f"Computing distances for samples {i} to {min(i + batch_size, N)} / {N}"
+                )
+                X_i = X_flat[i : i + batch_size].to(device, non_blocking=True)
+                bq = X_i.shape[0]
+                topk_i = torch.full((bq, k_eff), float("inf"), device=device)
+
+                for j in range(0, N, ref_batch_size):
+                    X_j = X_flat[j : j + ref_batch_size].to(device, non_blocking=True)
+                    d_block = torch.cdist(X_i, X_j, p=2)
+
+                    # Exclude self distances when query and reference blocks overlap
+                    if j <= i + bq - 1 and (j + X_j.shape[0]) > i:
+                        for r in range(bq):
+                            gi = i + r
+                            if j <= gi < j + X_j.shape[0]:
+                                d_block[r, gi - j] = float("inf")
+
+                    # Keep running k nearest distances for this query block
+                    merged = torch.cat([topk_i, d_block], dim=1)
+                    topk_i = torch.topk(merged, k_eff, dim=1, largest=False).values
+
+                    del X_j, d_block, merged
+
+                del X_i
+                if device.type == "cuda":
+                    torch.cuda.empty_cache()
+
+                k_distances[i : i + bq] = topk_i
 
         # Compute LID scores from k-nearest neighbor distances
-        # v contains k nearest neighbor distances (sorted, excluding self)
         # LID = -k / sum(log(v_i / v_k)) where v_k is the k-th neighbor
         v_k = k_distances[:, -1].unsqueeze(1)
         ratio = k_distances / (v_k + eps)
