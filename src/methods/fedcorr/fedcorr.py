@@ -1,6 +1,7 @@
 import os
 import copy
 import ast
+import datetime
 from glob import glob
 from sklearn.mixture import GaussianMixture
 from tqdm import tqdm
@@ -166,7 +167,9 @@ class FedCorr(FedAvg):
 
         return finetune_rounds, fulltrain_rounds
 
-    def compute_proximal_loss_term(self, local_model_weights, c_id: int):
+    def compute_proximal_loss_term(
+        self, local_model_weights, c_id: int, device: torch.device
+    ):
         """
         Compute FedCorr's proximal loss term.
         Prox term = beta * mu * ||w_diff||^2 w/ w_diff = local_model_weights - global_model_weights
@@ -175,26 +178,36 @@ class FedCorr(FedAvg):
             glob_model_weights: Current global model weights.
         """
         # compute weight difference norm
-        local_model = copy.deepcopy(local_model_weights.state_dict())
-        w_diff = torch.tensor(0.0).to(next(iter(local_model.values())).device)
+        local_state = (
+            local_model_weights.state_dict()
+            if hasattr(local_model_weights, "state_dict")
+            else local_model_weights
+        )
+        global_state = (
+            self.global_fl_model_weights.state_dict()
+            if hasattr(self.global_fl_model_weights, "state_dict")
+            else self.global_fl_model_weights
+        )
+        w_diff = torch.tensor(0.0, device=device)
         # get addresses of keys
-        keys = list(local_model.keys())
+        keys = list(local_state.keys())
         address_key_dict = {}
         for k in keys:
-            address = local_model[k].data_ptr()
+            address = local_state[k].data_ptr()
             if address not in address_key_dict.keys():
                 address_key_dict[address] = [k]
             else:
                 address_key_dict[address].append(k)
         # compute w_diff
-        for a in address_key_dict.keys():
-            diff = (
-                local_model[address_key_dict[a][0]]
-                - self.global_fl_model_weights[
-                    address_key_dict[a][0].replace("_orig_mod.", "")
-                ]
-            )
-            w_diff += torch.pow(torch.norm(diff), 2)
+        with torch.no_grad():
+            for a in address_key_dict.keys():
+                key = address_key_dict[a][0]
+                global_key = key.replace("_orig_mod.", "")
+                local_tensor = local_state[key].to(device, non_blocking=True)
+                global_tensor = global_state[global_key].to(device, non_blocking=True)
+                diff = local_tensor - global_tensor
+                w_diff += torch.pow(torch.norm(diff), 2)
+                del local_tensor, global_tensor, diff
         w_diff = torch.sqrt(w_diff)
 
         # compute proximal term
@@ -203,6 +216,10 @@ class FedCorr(FedAvg):
             * self.clients_estimated_noisy_level[c_id]
             * w_diff
         )
+
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
+
         return prox_term
 
     def get_output_seg(self, nnunet_trainer):
@@ -219,6 +236,7 @@ class FedCorr(FedAvg):
 
         # get net, loader, device, criterion from nnunet_trainer
         net = nnunet_trainer.network
+        net = net.to(nnunet_trainer.device)
         net.eval()
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
@@ -246,6 +264,7 @@ class FedCorr(FedAvg):
                         else _target[batch_element_idx].unsqueeze(0)
                     )
                     data = data.to(device, non_blocking=True)
+                    data.float()
                     if isinstance(target, list):
                         target = [i.to(device, non_blocking=True) for i in target]
                     else:
@@ -290,21 +309,32 @@ class FedCorr(FedAvg):
         Returns:
             Array of LID scores for each sample
         """
+        start_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         logging.info("Computing LID scores in batched manner...")
+        logging.info(f"Time: {start_time}")
         # ensure batch size does not exceed dataloader batch size
         default_batch_size = 16
-        batch_size = min(default_batch_size, self.clients[0].model.nnunet_trainer.batch_size)
-        
+        batch_size = min(
+            default_batch_size, self.clients[0].model.nnunet_trainer.batch_size
+        )
+
         # X is list of tensors, each (1, C, (D), H, W)
         if isinstance(X, list):
             X = torch.stack(X, dim=0)  # (N, C, (D), H, W)
 
         N = X.size(0)
-        X_flat = X.view(N, -1).cpu().numpy()
+        if N <= 1:
+            return np.zeros((N,))
+
+        X = X.to(self.clients[0].model.nnunet_trainer.device, non_blocking=True)
+        X_flat = X.view(N, -1).float()
+
+        # Clamp k to avoid requesting more neighbors than exist (exclude self)
+        k_eff = min(k, N - 1)
 
         # Allocate only k-nearest neighbor distances instead of full N×N matrix
         # This reduces memory from O(N²) to O(N×k)
-        k_distances = np.zeros((N, k))
+        k_distances = torch.zeros((N, k_eff), device=X_flat.device)
 
         # Compute k-nearest neighbors in batches to save memory
         for i in range(0, N, batch_size):
@@ -312,27 +342,26 @@ class FedCorr(FedAvg):
                 f"Computing distances for samples {i} to {min(i + batch_size, N)} / {N}"
             )
             X_i = X_flat[i : i + batch_size]
-            # Compute distances only for current batch
-            d_block = cdist(X_i, X_flat, metric="euclidean")
+            # Compute distances only for current batch (GPU)
+            d_block = torch.cdist(X_i, X_flat, p=2)
 
             # For each sample in batch, extract only k+1 nearest neighbors
-            for j, distances_row in enumerate(d_block):
-                # Get k+1 smallest distances (including self at 0)
-                k_nearest = np.partition(distances_row, k)[: k + 1]
-                k_nearest_sorted = np.sort(k_nearest)
-                # Skip first (self with distance 0), keep next k
-                k_distances[i + j] = k_nearest_sorted[1 : k + 1]
+            k_plus_one = k_eff + 1
+            d_small = torch.topk(d_block, k_plus_one, dim=1, largest=False).values
+            # Skip first (self with distance 0), keep next k
+            k_distances[i : i + d_small.shape[0]] = d_small[:, 1:k_plus_one]
 
         # Compute LID scores from k-nearest neighbor distances
-        def compute_lid(v):
-            # v contains k nearest neighbor distances (sorted, excluding self)
-            # LID = -k / sum(log(v_i / v_k)) where v_k is the k-th neighbor
-            ratio = v / (v[-1] + eps)
-            log_sum = np.sum(np.log(ratio + eps))
-            return -k / (log_sum + eps)
+        # v contains k nearest neighbor distances (sorted, excluding self)
+        # LID = -k / sum(log(v_i / v_k)) where v_k is the k-th neighbor
+        v_k = k_distances[:, -1].unsqueeze(1)
+        ratio = k_distances / (v_k + eps)
+        log_sum = torch.sum(torch.log(ratio + eps), dim=1)
+        lids = -k_eff / (log_sum + eps)
 
-        lids = np.apply_along_axis(compute_lid, axis=1, arr=k_distances)
-        return lids
+        endtime = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        logging.info(f"Finished computing LID scores! Time: {endtime}")
+        return lids.detach().cpu().numpy()
 
     def set_lid(self, lid_values, c_id: int):
         """
