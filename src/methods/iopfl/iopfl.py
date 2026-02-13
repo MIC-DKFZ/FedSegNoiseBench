@@ -53,7 +53,12 @@ class IOPFL(FedAvg):
                 trajectory_path = fl_strategy_state["trajectory_paths"][
                     str(client.client_id)
                 ]
-                self.trajectory[client.client_id] = torch.load(trajectory_path)
+                logging.info(
+                    f"IOP-FL: Loading personalized trajectory model for client {client.client_id} from {trajectory_path}!"
+                )
+                self.trajectory[client.client_id] = torch.load(
+                    trajectory_path, map_location="cpu"
+                )
                 logging.info(
                     f"IOP-FL: Loaded personalized trajectory model for client {client.client_id} from {trajectory_path}!"
                 )
@@ -89,6 +94,13 @@ class IOPFL(FedAvg):
             # copy current trajectory
             current_trajectory = copy.deepcopy(self.trajectory[client_id])
 
+            # align devices between local weights and trajectory
+            target_device = self.clients[0].nnunet_trainer.device
+            current_trajectory = self._move_state_to_device(
+                current_trajectory, target_device
+            )
+            w_local = self._move_state_to_device(w_local, target_device)
+
             # get addresses of keys
             keys = list(current_trajectory.keys())
             address_key_dict = {}
@@ -108,6 +120,32 @@ class IOPFL(FedAvg):
 
             # update trajectory
             self.trajectory[client_id] = current_trajectory
+
+        # some GPU memory cleanup
+        del w_local, current_trajectory
+        torch.cuda.empty_cache()
+
+    @staticmethod
+    def _move_state_to_device(state: dict, device: torch.device):
+        # preserve shared storage by moving once per data_ptr
+        address_key_dict = {}
+        for key, value in state.items():
+            if not torch.is_tensor(value):
+                continue
+            address = value.data_ptr()
+            if address not in address_key_dict:
+                address_key_dict[address] = [key]
+            else:
+                address_key_dict[address].append(key)
+
+        for keys in address_key_dict.values():
+            source = state[keys[0]]
+            if source.device != device:
+                moved = source.to(device)
+                for key in keys:
+                    state[key] = moved
+
+        return state
 
     def save_state(self, exp_id: str, client_id: int = None):
         """
