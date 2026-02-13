@@ -95,7 +95,7 @@ class IOPFL(FedAvg):
             current_trajectory = copy.deepcopy(self.trajectory[client_id])
 
             # align devices between local weights and trajectory
-            target_device = self.clients[0].nnunet_trainer.device
+            target_device = self.clients[0].model.nnunet_trainer.device
             current_trajectory = self._move_state_to_device(
                 current_trajectory, target_device
             )
