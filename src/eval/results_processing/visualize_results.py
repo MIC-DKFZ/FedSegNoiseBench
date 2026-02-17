@@ -49,6 +49,15 @@ dataset_to_numclients = {
     "MMIA": 4,
     "MMIS": 4,
 }
+# Clean clients per dataset (for distinguishing in roc(X) plots)
+clean_clients_per_dataset = {
+    "LIDC": [0, 1],
+    "RIGA": [0],
+    "Gleason": [0],
+    "MouseTumor": [0, 1],
+    "MMIA": [0, 1],
+    "MMIS": [0, 1],
+}
 classwise_metric = "Dice"  # metric to extract per class
 class_line_marker = {
     1: {
@@ -2302,6 +2311,15 @@ def plot_boxplots_roc_per_client_bootstrapping(df_all: pd.DataFrame, classwise=F
     for patch, c in zip(bp["boxes"], colors):
         patch.set_facecolor(c)
         patch.set_alpha(0.75)
+
+    # Apply hatching to noisy clients in roc(X) plot
+    for patch, meta in zip(bp["boxes"], meta_info):
+        ds = meta["ds"]
+        client = meta["client"]
+        clean_clients = clean_clients_per_dataset.get(ds, [])
+        # If client is not in clean clients list, it's noisy - apply hatching
+        if client not in clean_clients:
+            patch.set_hatch("//")
 
     for median in bp["medians"]:
         median.set_color("black")
