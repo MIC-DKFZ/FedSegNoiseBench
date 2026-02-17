@@ -1165,6 +1165,230 @@ def plot_classwise_boxplots_clean_roc_noisy_bootstrapping(df_all: pd.DataFrame):
     fig.savefig(OUTPUT_DIR / "classwise_boxplots_clean_vs_roc(X)_vs_noisy_bootstrapping.png", dpi=200, bbox_inches='tight')
     print(f"Saved boxplot to {OUTPUT_DIR / 'classwise_boxplots_clean_vs_roc(X)_vs_noisy_bootstrapping.png'}")
 
+def plot_boxplots_clean_roa_roc_noisy_bootstrapping(df_all: pd.DataFrame, classwise=False):
+    """
+    Create boxplots with hierarchical structure:
+    - 6 columns for datasets
+    - Within each dataset: C sub-columns for each class (if classwise=True) or just one column (if classwise=False)
+    - Within each class: clean, roa(X), roc(X), and noisy boxplots
+    - Within each noise state: boxplot of all methods from bootstrapping results
+    """
+    noise_states = {"0": "clean", "roa(X)": "roa(X)", "roc(X)": "roc(X)", "100": "noisy"}
+    # data[dataset][algo][class][noise_state] = [dice_values]
+    data = {ds: {algo: {} for algo in target_algos} for ds in target_datasets}
+
+    for ds in target_datasets:
+        df_ds = df_all[df_all["Dataset_norm"] == ds]
+        if df_ds.empty:
+            print(f"{ds}: no data for boxplots")
+            continue
+
+        for algo in target_algos:
+            df_algo = df_ds[df_ds[algo_col] == algo]
+            if df_algo.empty:
+                continue
+            # only keep desired buckets
+            df_algo = df_algo[df_algo[noise_col].isin(noise_states.keys())]
+
+            exp_ids = df_algo["Experiment ID"].dropna().unique().tolist()
+            for exp_id in exp_ids:
+                exp_rows = df_algo[df_algo["Experiment ID"] == exp_id]
+                exp_paths = [p for p in nnUNet_results_all_exps if exp_id in p]
+                expected_clients = dataset_to_numclients.get(ds, None)
+                if expected_clients and len(exp_paths) != expected_clients:
+                    print(f"Skipping Exp_ID {exp_id} for {ds}/{algo}: expected {expected_clients} clients, found {len(exp_paths)}")
+                    continue
+                if len(exp_paths) == 0:
+                    print(f"No exp paths found for Exp_ID {exp_id} ({ds}/{algo})")
+                    continue
+
+                client_classwise_metrics = []
+                for exp_path in exp_paths:
+                    bootstrap_file = Path(exp_path) / "validation" / "bootstrap_evaluation_results.json"
+                    if not bootstrap_file.is_file():
+                        print(f"Missing bootstrap_evaluation_results.json at {bootstrap_file}")
+                        continue
+                    with open(bootstrap_file, "r") as f:
+                        results_summary = json.load(f)
+                    client_classwise_metrics.append(results_summary)
+                if not client_classwise_metrics:
+                    continue
+
+                for noise_val in exp_rows[noise_col].unique():
+                    state_key = noise_states[noise_val]
+                    for client_bootstrap_res in client_classwise_metrics:
+                        for class_label, metrics in client_bootstrap_res.items():
+                            if class_label == "stats":
+                                continue
+                            if class_label not in data[ds][algo]:
+                                data[ds][algo][class_label] = {noise_state: [] for noise_state in noise_states.values()}
+                            vals = metrics.get(classwise_metric, None)
+                            if vals is None:
+                                continue
+                            if isinstance(vals, list):
+                                data[ds][algo][class_label][state_key].extend(vals)
+                            else:
+                                data[ds][algo][class_label][state_key].append(vals)
+
+    # Optionally aggregate across classes
+    if not classwise:
+        for ds in target_datasets:
+            for algo in target_algos:
+                if not data.get(ds) or algo not in data[ds]:
+                    continue
+                agg = {noise_state: [] for noise_state in noise_states.values()}
+                for cl in data[ds][algo].keys():
+                    for state_key, vals in data[ds][algo][cl].items():
+                        agg[state_key].extend(vals)
+                data[ds][algo] = {"all": agg}
+
+    # Build boxplot structure (per dataset → class → noise state → algorithm)
+    algo_colors = {algo: plt.cm.tab10(i % 10) for i, algo in enumerate(target_algos)}
+    positions = []
+    box_data = []
+    colors = []
+    meta_info = []
+    dataset_boundaries = []
+    class_boundaries = []
+    noise_boundaries = []
+    label_positions = []
+    label_texts = []
+
+    pos = 0.0
+    gap_algo = 0.1
+    gap_noise = 0.05
+    gap_class = 0.0
+    gap_dataset = 0.0
+    bplot_width = 0.1
+
+    for ds in target_datasets:
+        if not data.get(ds):
+            continue
+
+        dataset_start = pos
+        dataset_has_data = False
+        class_labels_sorted = sorted(
+            {cl for algo_data in data[ds].values() for cl in algo_data.keys()},
+            key=lambda x: int(x) if isinstance(x, (int, str)) and str(x).replace('(', '').replace(')', '').split(',')[0].isdigit() else str(x)
+        )
+
+        for cl in class_labels_sorted:
+            class_has_data = False
+            class_positions = []
+            state_groups = {}
+            for state_key in ["clean", "roa(X)", "roc(X)", "noisy"]:
+                state_has_data = False
+                state_positions = []
+                for algo in target_algos:
+                    vals = data[ds].get(algo, {}).get(cl, {}).get(state_key, [])
+                    if not vals:
+                        continue
+                    positions.append(pos)
+                    box_data.append(vals)
+                    colors.append(algo_colors[algo])
+                    meta_info.append({"ds": ds, "class": cl, "state": state_key, "algo": algo, "n": len(vals)})
+                    state_positions.append(pos)
+                    class_positions.append(pos)
+                    pos += gap_algo
+                    state_has_data = True
+                    dataset_has_data = True
+                    class_has_data = True
+                if state_has_data:
+                    state_groups[state_key] = state_positions
+                    label_positions.append(np.mean(state_positions))
+                    label_texts.append(state_key)
+                    pos += gap_noise
+
+            if class_has_data:
+                state_keys_present = ["clean", "roa(X)", "roc(X)", "noisy"]
+                for i in range(len(state_keys_present) - 1):
+                    curr_state = state_keys_present[i]
+                    next_state = state_keys_present[i + 1]
+                    if curr_state in state_groups and next_state in state_groups:
+                        noise_sep = (max(state_groups[curr_state]) + min(state_groups[next_state])) / 2.0
+                        noise_boundaries.append(noise_sep)
+
+                class_boundaries.append(max(class_positions))
+                pos += gap_class
+
+        if dataset_has_data:
+            dataset_boundaries.append((dataset_start, positions[-1], ds))
+            pos += gap_dataset
+
+    if not box_data:
+        print("No bootstrapping boxplot data collected.")
+        return
+
+    # Create figure
+    fig, ax = plt.subplots(figsize=(max(12, len(target_datasets) * 2.5), 7))
+
+    bp = ax.boxplot(box_data, positions=positions, widths=bplot_width, patch_artist=True, showfliers=False)
+
+    for patch, c, meta in zip(bp['boxes'], colors, meta_info):
+        patch.set_facecolor(c)
+        patch.set_alpha(0.75)
+
+    for median, meta in zip(bp['medians'], meta_info):
+        median.set_linewidth(1.5)
+        median.set_color("black")
+        median.set_alpha(1.0)
+
+    for i, (whisker, meta) in enumerate(zip(bp['whiskers'], [meta_info[i // 2] for i in range(len(bp['whiskers']))])):
+        whisker.set_color("black")
+        whisker.set_alpha(1.0)
+
+    for i, (cap, meta) in enumerate(zip(bp['caps'], [meta_info[i // 2] for i in range(len(bp['caps']))])):
+        cap.set_color("black")
+        cap.set_alpha(1.0)
+
+    # Add vertical lines
+    for boundary in noise_boundaries:
+        ax.axvline(boundary, color="gray", linestyle=":", linewidth=0.8, alpha=0.6)
+
+    for boundary in class_boundaries:
+        ax.axvline(boundary, color="gray", linestyle="--", linewidth=0.8, alpha=0.7)
+
+    # Add dataset labels and separators
+    for ds_start, ds_end, ds_name in dataset_boundaries:
+        ds_center = (ds_start + ds_end) / 2.0
+        ax.text(ds_center, -0.15, ds_name, ha='center', va='top', fontsize=11, fontweight='bold',
+                transform=ax.get_xaxis_transform())
+        ax.axvline(ds_end + gap_dataset / 2.0, color="gray", linestyle="-", linewidth=1.0, alpha=0.5)
+
+    ax.set_xticks(label_positions)
+    ax.set_xticklabels(label_texts, rotation=0, ha='center', fontsize=9)
+    ax.set_ylabel(classwise_metric, fontsize=11)
+    xmin = min(positions) - bplot_width
+    xmax = max(positions) + bplot_width
+    ax.set_xlim(xmin, xmax)
+    ax.margins(x=0)
+    ax.set_ylim(0.0, 1.0)
+    prefix = "Class-wise" if classwise else "Overall"
+    suffix = "per dataset/class/algorithm" if classwise else "per dataset/algorithm"
+    ax.set_title(f"{prefix} Dice (bootstrapping): clean vs roa(X) vs roc(X) vs noisy {suffix}", fontsize=12, fontweight='bold')
+    ax.grid(axis="y", linestyle="--", alpha=0.5)
+
+    # Overlay mean markers
+    means = [np.mean(vals) if len(vals) else np.nan for vals in box_data]
+    for pos_i, mean, color in zip(positions, means, colors):
+        ax.scatter(pos_i, mean, marker='D', c=[color], edgecolors='k', zorder=4, s=30, linewidths=0.6, alpha=1.0)
+
+    for vals, m, meta in zip(box_data, means, meta_info):
+        if np.isnan(m):
+            continue
+        print(f"{meta['ds']} | class {meta['class']} | {meta['state']} | {meta['algo']}: "
+              f"mean={m:.4f} (n={meta['n']})")
+
+    algo_patches = [plt.matplotlib.patches.Patch(facecolor=algo_colors[a], alpha=0.75, label=a) for a in target_algos]
+    ax.legend(handles=algo_patches, loc="lower right", fontsize=10)
+
+    fig.tight_layout()
+    fig.subplots_adjust(bottom=0.18)
+    out_name = "classwise_boxplots_clean_vs_roa(X)_vs_roc(X)_vs_noisy_bootstrapping.png" if classwise else "boxplots_clean_vs_roa(X)_vs_roc(X)_vs_noisy_bootstrapping.png"
+    fig.savefig(OUTPUT_DIR / out_name, dpi=200, bbox_inches='tight')
+    print(f"Saved boxplot to {OUTPUT_DIR / out_name}")
+
+
 # # plot per algorithm
 # for algo in target_algos:
 #     plot_algorithm(df, algo)
@@ -1188,3 +1412,6 @@ plot_classwise_boxplots_clean_noiseratioall_noisy_bootstrapping(df)
 
 # boxplots clean vs roc(X) vs noisy per dataset/class across methods from bootstrapping
 plot_classwise_boxplots_clean_roc_noisy_bootstrapping(df)
+
+# boxplots clean vs roa(X) vs roc(X) vs noisy per dataset/class across methods from bootstrapping
+plot_boxplots_clean_roa_roc_noisy_bootstrapping(df, classwise=False)
