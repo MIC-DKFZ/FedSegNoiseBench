@@ -1804,6 +1804,608 @@ def plot_boxplots_clean_roa_roc_noisy_bootstrapping(
     print(f"Saved boxplot to {OUTPUT_DIR / out_name}")
 
 
+def plot_boxplots_roa_per_client_bootstrapping(df_all: pd.DataFrame, classwise=False):
+    """
+    Create boxplots comparing individual FL clients for roa(X) experiments:
+    - 6 columns for datasets
+    - Within each dataset: C sub-columns for each class (if classwise=True) or just one column (if classwise=False)
+    - Within each class: client boxplots for each algorithm
+    - Each boxplot represents one client's performance on that algorithm/dataset/class
+    """
+    noise_state = "roa(X)"
+    # data[dataset][algo][class][client_id] = [dice_values]
+    data = {ds: {algo: {} for algo in target_algos} for ds in target_datasets}
+
+    for ds in target_datasets:
+        df_ds = df_all[df_all["Dataset_norm"] == ds]
+        if df_ds.empty:
+            print(f"{ds}: no data for per-client roa(X) boxplots")
+            continue
+
+        for algo in target_algos:
+            df_algo = df_ds[df_ds[algo_col] == algo]
+            if df_algo.empty:
+                continue
+            # only keep roa(X) experiments
+            df_algo = df_algo[df_algo[noise_col] == noise_state]
+
+            exp_ids = df_algo["Experiment ID"].dropna().unique().tolist()
+            for exp_id in exp_ids:
+                exp_paths = [p for p in nnUNet_results_all_exps if exp_id in p]
+                expected_clients = dataset_to_numclients.get(ds, None)
+                if expected_clients and len(exp_paths) != expected_clients:
+                    print(
+                        f"Skipping Exp_ID {exp_id} for {ds}/{algo}: expected {expected_clients} clients, found {len(exp_paths)}"
+                    )
+                    continue
+                if len(exp_paths) == 0:
+                    print(f"No exp paths found for Exp_ID {exp_id} ({ds}/{algo})")
+                    continue
+
+                # Process each client
+                for client_idx, exp_path in enumerate(exp_paths):
+                    bootstrap_file = (
+                        Path(exp_path)
+                        / "validation"
+                        / "bootstrap_evaluation_results.json"
+                    )
+                    if not bootstrap_file.is_file():
+                        print(
+                            f"Missing bootstrap_evaluation_results.json at {bootstrap_file}"
+                        )
+                        continue
+                    with open(bootstrap_file, "r") as f:
+                        results_summary = json.load(f)
+
+                    # Extract per-class metrics for this client
+                    for class_label, metrics in results_summary.items():
+                        if class_label == "stats":
+                            continue
+                        if class_label not in data[ds][algo]:
+                            data[ds][algo][class_label] = {}
+
+                        # Use client_idx as key to track individual clients
+                        if client_idx not in data[ds][algo][class_label]:
+                            data[ds][algo][class_label][client_idx] = []
+
+                        vals = metrics.get(classwise_metric, None)
+                        if vals is None:
+                            continue
+                        if isinstance(vals, list):
+                            data[ds][algo][class_label][client_idx].extend(vals)
+                        else:
+                            data[ds][algo][class_label][client_idx].append(vals)
+
+    # Optionally aggregate across classes
+    if not classwise:
+        for ds in target_datasets:
+            for algo in target_algos:
+                if not data.get(ds) or algo not in data[ds]:
+                    continue
+                agg = {}
+                for cl in data[ds][algo].keys():
+                    for client_id, vals in data[ds][algo][cl].items():
+                        if client_id not in agg:
+                            agg[client_id] = []
+                        agg[client_id].extend(vals)
+                data[ds][algo] = {"all": agg}
+
+    # Build boxplot structure (per dataset → class → algorithm → client)
+    algo_colors = {algo: plt.cm.tab10(i % 10) for i, algo in enumerate(target_algos)}
+    positions = []
+    box_data = []
+    colors = []
+    meta_info = []
+    dataset_boundaries = []
+    class_boundaries = []
+    algo_boundaries = []
+    client_label_positions = []
+    client_label_texts = []
+
+    pos = 0.0
+    gap_client = 0.08  # gap between clients within algorithm
+    gap_algo = 0.15  # gap between algorithms within class
+    gap_class = 0.0  # gap between classes within dataset
+    gap_dataset = 0.0  # gap between datasets
+    bplot_width = 0.06
+
+    for ds in target_datasets:
+        if not data.get(ds):
+            continue
+
+        dataset_start = pos
+        dataset_has_data = False
+        class_labels_sorted = sorted(
+            {cl for algo_data in data[ds].values() for cl in algo_data.keys()},
+            key=lambda x: (
+                int(x)
+                if isinstance(x, (int, str))
+                and str(x).replace("(", "").replace(")", "").split(",")[0].isdigit()
+                else str(x)
+            ),
+        )
+
+        for cl in class_labels_sorted:
+            class_has_data = False
+            class_positions = []
+
+            for algo in target_algos:
+                algo_has_data = False
+                algo_positions = []
+                algo_label_pos = None
+
+                # Get clients for this algo/class
+                clients_dict = data[ds].get(algo, {}).get(cl, {})
+                if not clients_dict:
+                    continue
+
+                client_ids_sorted = sorted(clients_dict.keys())
+
+                for client_id in client_ids_sorted:
+                    vals = clients_dict[client_id]
+                    if not vals:
+                        continue
+
+                    positions.append(pos)
+                    box_data.append(vals)
+                    colors.append(algo_colors[algo])
+                    meta_info.append(
+                        {
+                            "ds": ds,
+                            "class": cl,
+                            "algo": algo,
+                            "client": client_id,
+                            "n": len(vals),
+                        }
+                    )
+                    # Track label position and text for this client
+                    client_label_positions.append(pos)
+                    client_label_texts.append(f"FL client {client_id}")
+                    algo_positions.append(pos)
+                    class_positions.append(pos)
+                    pos += gap_client
+                    algo_has_data = True
+                    dataset_has_data = True
+                    class_has_data = True
+
+                if algo_has_data:
+                    if algo_label_pos is None:
+                        algo_label_pos = np.mean(algo_positions)
+                    algo_boundaries.append(max(algo_positions) + gap_client / 2.0)
+                    pos += gap_algo
+
+            if class_has_data:
+                class_boundaries.append(max(class_positions))
+                pos += gap_class
+
+        if dataset_has_data:
+            dataset_boundaries.append((dataset_start, positions[-1], ds))
+            pos += gap_dataset
+
+    if not box_data:
+        print("No per-client roa(X) boxplot data collected.")
+        return
+
+    # Create figure
+    fig, ax = plt.subplots(figsize=(max(16, len(target_datasets) * 4), 7))
+
+    bp = ax.boxplot(
+        box_data,
+        positions=positions,
+        widths=bplot_width,
+        patch_artist=True,
+        showfliers=False,
+    )
+
+    for patch, c in zip(bp["boxes"], colors):
+        patch.set_facecolor(c)
+        patch.set_alpha(0.75)
+
+    for median in bp["medians"]:
+        median.set_color("black")
+        median.set_linewidth(1.5)
+        median.set_alpha(1.0)
+
+    for whisker in bp["whiskers"]:
+        whisker.set_color("black")
+        whisker.set_alpha(1.0)
+
+    for cap in bp["caps"]:
+        cap.set_color("black")
+        cap.set_alpha(1.0)
+
+    # Add vertical lines between algorithms
+    for boundary in algo_boundaries:
+        ax.axvline(boundary, color="gray", linestyle=":", linewidth=0.8, alpha=0.6)
+
+    # Dashed lines between classes
+    for boundary in class_boundaries:
+        ax.axvline(boundary, color="gray", linestyle="--", linewidth=0.8, alpha=0.7)
+
+    # Add dataset labels and separators
+    for ds_start, ds_end, ds_name in dataset_boundaries:
+        ds_center = (ds_start + ds_end) / 2.0
+        ax.text(
+            ds_center,
+            -0.15,
+            ds_name,
+            ha="center",
+            va="top",
+            fontsize=11,
+            fontweight="bold",
+            transform=ax.get_xaxis_transform(),
+        )
+        ax.axvline(
+            ds_end + gap_dataset / 2.0,
+            color="gray",
+            linestyle="-",
+            linewidth=1.0,
+            alpha=0.5,
+        )
+
+    ax.set_xticks(client_label_positions)
+    ax.set_xticklabels(client_label_texts, rotation=45, ha="right", fontsize=8)
+    ax.set_ylabel(classwise_metric, fontsize=11)
+    xmin = min(positions) - bplot_width
+    xmax = max(positions) + bplot_width
+    ax.set_xlim(xmin, xmax)
+    ax.margins(x=0)
+    ax.set_ylim(0.0, 1.0)
+    prefix = "Class-wise" if classwise else "Overall"
+    suffix = (
+        "per dataset/class/algorithm/client"
+        if classwise
+        else "per dataset/algorithm/client"
+    )
+    ax.set_title(
+        f"{prefix} Dice (bootstrapping) - roa(X): Per-client performance {suffix}",
+        fontsize=12,
+        fontweight="bold",
+    )
+    ax.grid(axis="y", linestyle="--", alpha=0.5)
+
+    # Overlay mean markers
+    means = [np.mean(vals) if len(vals) else np.nan for vals in box_data]
+    for pos_i, mean, color in zip(positions, means, colors):
+        ax.scatter(
+            pos_i,
+            mean,
+            marker="D",
+            c=[color],
+            edgecolors="k",
+            zorder=4,
+            s=25,
+            linewidths=0.6,
+            alpha=1.0,
+        )
+
+    # Print statistics per client/algo/class
+    for vals, m, meta in zip(box_data, means, meta_info):
+        if np.isnan(m):
+            continue
+        print(
+            f"{meta['ds']} | class {meta['class']} | {meta['algo']} | client {meta['client']}: "
+            f"mean={m:.4f} (n={meta['n']})"
+        )
+
+    # Legend by algorithm color
+    algo_patches = [
+        plt.matplotlib.patches.Patch(facecolor=algo_colors[a], alpha=0.75, label=a)
+        for a in target_algos
+    ]
+    ax.legend(handles=algo_patches, loc="lower right", fontsize=10)
+
+    fig.tight_layout()
+    fig.subplots_adjust(bottom=0.12)
+    out_name = (
+        "classwise_boxplots_roa(X)_per_client_bootstrapping.png"
+        if classwise
+        else "boxplots_roa(X)_per_client_bootstrapping.png"
+    )
+    fig.savefig(OUTPUT_DIR / out_name, dpi=200, bbox_inches="tight")
+    print(f"Saved per-client roa(X) boxplot to {OUTPUT_DIR / out_name}")
+
+
+def plot_boxplots_roc_per_client_bootstrapping(df_all: pd.DataFrame, classwise=False):
+    """
+    Create boxplots comparing individual FL clients for roc(X) experiments:
+    - 6 columns for datasets
+    - Within each dataset: C sub-columns for each class (if classwise=True) or just one column (if classwise=False)
+    - Within each class: client boxplots for each algorithm
+    - Each boxplot represents one client's performance on that algorithm/dataset/class
+    """
+    noise_state = "roc(X)"
+    # data[dataset][algo][class][client_id] = [dice_values]
+    data = {ds: {algo: {} for algo in target_algos} for ds in target_datasets}
+
+    for ds in target_datasets:
+        df_ds = df_all[df_all["Dataset_norm"] == ds]
+        if df_ds.empty:
+            print(f"{ds}: no data for per-client roc(X) boxplots")
+            continue
+
+        for algo in target_algos:
+            df_algo = df_ds[df_ds[algo_col] == algo]
+            if df_algo.empty:
+                continue
+            # only keep roc(X) experiments
+            df_algo = df_algo[df_algo[noise_col] == noise_state]
+
+            exp_ids = df_algo["Experiment ID"].dropna().unique().tolist()
+            for exp_id in exp_ids:
+                exp_paths = [p for p in nnUNet_results_all_exps if exp_id in p]
+                expected_clients = dataset_to_numclients.get(ds, None)
+                if expected_clients and len(exp_paths) != expected_clients:
+                    print(
+                        f"Skipping Exp_ID {exp_id} for {ds}/{algo}: expected {expected_clients} clients, found {len(exp_paths)}"
+                    )
+                    continue
+                if len(exp_paths) == 0:
+                    print(f"No exp paths found for Exp_ID {exp_id} ({ds}/{algo})")
+                    continue
+
+                # Process each client
+                for client_idx, exp_path in enumerate(exp_paths):
+                    bootstrap_file = (
+                        Path(exp_path)
+                        / "validation"
+                        / "bootstrap_evaluation_results.json"
+                    )
+                    if not bootstrap_file.is_file():
+                        print(
+                            f"Missing bootstrap_evaluation_results.json at {bootstrap_file}"
+                        )
+                        continue
+                    with open(bootstrap_file, "r") as f:
+                        results_summary = json.load(f)
+
+                    # Extract per-class metrics for this client
+                    for class_label, metrics in results_summary.items():
+                        if class_label == "stats":
+                            continue
+                        if class_label not in data[ds][algo]:
+                            data[ds][algo][class_label] = {}
+
+                        # Use client_idx as key to track individual clients
+                        if client_idx not in data[ds][algo][class_label]:
+                            data[ds][algo][class_label][client_idx] = []
+
+                        vals = metrics.get(classwise_metric, None)
+                        if vals is None:
+                            continue
+                        if isinstance(vals, list):
+                            data[ds][algo][class_label][client_idx].extend(vals)
+                        else:
+                            data[ds][algo][class_label][client_idx].append(vals)
+
+    # Optionally aggregate across classes
+    if not classwise:
+        for ds in target_datasets:
+            for algo in target_algos:
+                if not data.get(ds) or algo not in data[ds]:
+                    continue
+                agg = {}
+                for cl in data[ds][algo].keys():
+                    for client_id, vals in data[ds][algo][cl].items():
+                        if client_id not in agg:
+                            agg[client_id] = []
+                        agg[client_id].extend(vals)
+                data[ds][algo] = {"all": agg}
+
+    # Build boxplot structure (per dataset → class → algorithm → client)
+    algo_colors = {algo: plt.cm.tab10(i % 10) for i, algo in enumerate(target_algos)}
+    positions = []
+    box_data = []
+    colors = []
+    meta_info = []
+    dataset_boundaries = []
+    class_boundaries = []
+    algo_boundaries = []
+    client_label_positions = []
+    client_label_texts = []
+
+    pos = 0.0
+    gap_client = 0.08  # gap between clients within algorithm
+    gap_algo = 0.15  # gap between algorithms within class
+    gap_class = 0.0  # gap between classes within dataset
+    gap_dataset = 0.0  # gap between datasets
+    bplot_width = 0.06
+
+    for ds in target_datasets:
+        if not data.get(ds):
+            continue
+
+        dataset_start = pos
+        dataset_has_data = False
+        class_labels_sorted = sorted(
+            {cl for algo_data in data[ds].values() for cl in algo_data.keys()},
+            key=lambda x: (
+                int(x)
+                if isinstance(x, (int, str))
+                and str(x).replace("(", "").replace(")", "").split(",")[0].isdigit()
+                else str(x)
+            ),
+        )
+
+        for cl in class_labels_sorted:
+            class_has_data = False
+            class_positions = []
+
+            for algo in target_algos:
+                algo_has_data = False
+                algo_positions = []
+                algo_label_pos = None
+
+                # Get clients for this algo/class
+                clients_dict = data[ds].get(algo, {}).get(cl, {})
+                if not clients_dict:
+                    continue
+
+                client_ids_sorted = sorted(clients_dict.keys())
+
+                for client_id in client_ids_sorted:
+                    vals = clients_dict[client_id]
+                    if not vals:
+                        continue
+
+                    positions.append(pos)
+                    box_data.append(vals)
+                    colors.append(algo_colors[algo])
+                    meta_info.append(
+                        {
+                            "ds": ds,
+                            "class": cl,
+                            "algo": algo,
+                            "client": client_id,
+                            "n": len(vals),
+                        }
+                    )
+                    # Track label position and text for this client
+                    client_label_positions.append(pos)
+                    client_label_texts.append(f"FL client {client_id}")
+                    algo_positions.append(pos)
+                    class_positions.append(pos)
+                    pos += gap_client
+                    algo_has_data = True
+                    dataset_has_data = True
+                    class_has_data = True
+
+                if algo_has_data:
+                    if algo_label_pos is None:
+                        algo_label_pos = np.mean(algo_positions)
+                    algo_boundaries.append(max(algo_positions) + gap_client / 2.0)
+                    pos += gap_algo
+
+            if class_has_data:
+                class_boundaries.append(max(class_positions))
+                pos += gap_class
+
+        if dataset_has_data:
+            dataset_boundaries.append((dataset_start, positions[-1], ds))
+            pos += gap_dataset
+
+    if not box_data:
+        print("No per-client roc(X) boxplot data collected.")
+        return
+
+    # Create figure
+    fig, ax = plt.subplots(figsize=(max(16, len(target_datasets) * 4), 7))
+
+    bp = ax.boxplot(
+        box_data,
+        positions=positions,
+        widths=bplot_width,
+        patch_artist=True,
+        showfliers=False,
+    )
+
+    for patch, c in zip(bp["boxes"], colors):
+        patch.set_facecolor(c)
+        patch.set_alpha(0.75)
+
+    for median in bp["medians"]:
+        median.set_color("black")
+        median.set_linewidth(1.5)
+        median.set_alpha(1.0)
+
+    for whisker in bp["whiskers"]:
+        whisker.set_color("black")
+        whisker.set_alpha(1.0)
+
+    for cap in bp["caps"]:
+        cap.set_color("black")
+        cap.set_alpha(1.0)
+
+    # Add vertical lines between algorithms
+    for boundary in algo_boundaries:
+        ax.axvline(boundary, color="gray", linestyle=":", linewidth=0.8, alpha=0.6)
+
+    # Dashed lines between classes
+    for boundary in class_boundaries:
+        ax.axvline(boundary, color="gray", linestyle="--", linewidth=0.8, alpha=0.7)
+
+    # Add dataset labels and separators
+    for ds_start, ds_end, ds_name in dataset_boundaries:
+        ds_center = (ds_start + ds_end) / 2.0
+        ax.text(
+            ds_center,
+            -0.15,
+            ds_name,
+            ha="center",
+            va="top",
+            fontsize=11,
+            fontweight="bold",
+            transform=ax.get_xaxis_transform(),
+        )
+        ax.axvline(
+            ds_end + gap_dataset / 2.0,
+            color="gray",
+            linestyle="-",
+            linewidth=1.0,
+            alpha=0.5,
+        )
+
+    ax.set_xticks(client_label_positions)
+    ax.set_xticklabels(client_label_texts, rotation=45, ha="right", fontsize=8)
+    ax.set_ylabel(classwise_metric, fontsize=11)
+    xmin = min(positions) - bplot_width
+    xmax = max(positions) + bplot_width
+    ax.set_xlim(xmin, xmax)
+    ax.margins(x=0)
+    ax.set_ylim(0.0, 1.0)
+    prefix = "Class-wise" if classwise else "Overall"
+    suffix = (
+        "per dataset/algorithm/client" if classwise else "per dataset/algorithm/client"
+    )
+    ax.set_title(
+        f"{prefix} Dice (bootstrapping) - roc(X): Per-client performance {suffix}",
+        fontsize=12,
+        fontweight="bold",
+    )
+    ax.grid(axis="y", linestyle="--", alpha=0.5)
+
+    # Overlay mean markers
+    means = [np.mean(vals) if len(vals) else np.nan for vals in box_data]
+    for pos_i, mean, color in zip(positions, means, colors):
+        ax.scatter(
+            pos_i,
+            mean,
+            marker="D",
+            c=[color],
+            edgecolors="k",
+            zorder=4,
+            s=25,
+            linewidths=0.6,
+            alpha=1.0,
+        )
+
+    # Print statistics per client/algo/class
+    for vals, m, meta in zip(box_data, means, meta_info):
+        if np.isnan(m):
+            continue
+        print(
+            f"{meta['ds']} | class {meta['class']} | {meta['algo']} | client {meta['client']}: "
+            f"mean={m:.4f} (n={meta['n']})"
+        )
+
+    # Legend by algorithm color
+    algo_patches = [
+        plt.matplotlib.patches.Patch(facecolor=algo_colors[a], alpha=0.75, label=a)
+        for a in target_algos
+    ]
+    ax.legend(handles=algo_patches, loc="lower right", fontsize=10)
+
+    fig.tight_layout()
+    fig.subplots_adjust(bottom=0.12)
+    out_name = (
+        "classwise_boxplots_roc(X)_per_client_bootstrapping.png"
+        if classwise
+        else "boxplots_roc(X)_per_client_bootstrapping.png"
+    )
+    fig.savefig(OUTPUT_DIR / out_name, dpi=200, bbox_inches="tight")
+    print(f"Saved per-client roc(X) boxplot to {OUTPUT_DIR / out_name}")
+
+
 # # plot per algorithm
 # for algo in target_algos:
 #     plot_algorithm(df, algo)
@@ -1817,16 +2419,22 @@ def plot_boxplots_clean_roa_roc_noisy_bootstrapping(
 #     plot_dataset_per_class(df, ds)
 
 # boxplots clean vs noisy per dataset/class across methods
-plot_classwise_boxplots_clean_noisy(df)
+# plot_classwise_boxplots_clean_noisy(df)
 
-# boxplots clean vs noisy per dataset/class across methods from bootstrapping
-plot_classwise_boxplots_clean_noisy_bootstrapping(df)
+# # boxplots clean vs noisy per dataset/class across methods from bootstrapping
+# plot_classwise_boxplots_clean_noisy_bootstrapping(df)
 
-# boxplots clean vs roa(X) vs noisy per dataset/class across methods from bootstrapping
-plot_classwise_boxplots_clean_noiseratioall_noisy_bootstrapping(df)
+# # boxplots clean vs roa(X) vs noisy per dataset/class across methods from bootstrapping
+# plot_classwise_boxplots_clean_noiseratioall_noisy_bootstrapping(df)
 
-# boxplots clean vs roc(X) vs noisy per dataset/class across methods from bootstrapping
-plot_classwise_boxplots_clean_roc_noisy_bootstrapping(df)
+# # boxplots clean vs roc(X) vs noisy per dataset/class across methods from bootstrapping
+# plot_classwise_boxplots_clean_roc_noisy_bootstrapping(df)
 
-# boxplots clean vs roa(X) vs roc(X) vs noisy per dataset/class across methods from bootstrapping
-plot_boxplots_clean_roa_roc_noisy_bootstrapping(df, classwise=False)
+# # boxplots clean vs roa(X) vs roc(X) vs noisy per dataset/class across methods from bootstrapping
+# plot_boxplots_clean_roa_roc_noisy_bootstrapping(df, classwise=False)
+
+# boxplots roa(X) per client per dataset/class across methods from bootstrapping
+plot_boxplots_roa_per_client_bootstrapping(df, classwise=False)
+
+# boxplots roc(X) per client per dataset/class across methods from bootstrapping
+plot_boxplots_roc_per_client_bootstrapping(df, classwise=False)
