@@ -5,11 +5,13 @@ Paper: https://dl.acm.org/doi/epdf/10.1145/3711896.3737093
 """
 
 import copy
+import os
 import torch
 import torch.nn.functional as F
 import logging
 import random
 import heapq
+from glob import glob
 from torch.utils.data import WeightedRandomSampler, Dataset
 from torch.optim.sgd import SGD
 
@@ -134,6 +136,7 @@ class FedSelect(FedAvg):
         sample_select_ratio: float = None,
         meta_momentum: float = None,
         reward_data_size_frac: float = None,
+        fl_strategy_state: dict = None,
     ):
         """
         Initialize FedSelect strategy.
@@ -146,31 +149,174 @@ class FedSelect(FedAvg):
             sample_select_ratio: Ratio of samples to select per client (default: 0.6)
             meta_momentum: Momentum for meta-margin computation (default: 0.9)
             reward_data_size_frac: Fraction of reward/proxy validation dataset size (default: 0.1)
+            fl_strategy_state: Dictionary containing saved state for restart (default: None)
         """
         # Call parent FedAvg constructor
         super().__init__(clients=clients)
 
         self.name = "fedselect"
 
-        self.warmup_rounds = int(warmup_rounds_frac * num_rounds)
-        self.client_select_ratio = client_select_ratio
-        self.sample_select_ratio = sample_select_ratio
-        self.meta_momentum = meta_momentum
-        self.meta_lr = 1e-3  # default learning rate for VNet meta model
-        self.reward_data_size_frac = reward_data_size_frac
-
-        # Initialize per-client tracking
-        self.selected_clients = []  # Currently selected clients
+        # Load from saved state if available, otherwise use provided parameters
+        if fl_strategy_state is not None:
+            self.warmup_rounds = fl_strategy_state["warmup_rounds"]
+            self.client_select_ratio = fl_strategy_state["client_select_ratio"]
+            self.sample_select_ratio = fl_strategy_state["sample_select_ratio"]
+            self.meta_momentum = fl_strategy_state["meta_momentum"]
+            self.meta_lr = fl_strategy_state["meta_lr"]
+            self.reward_data_size_frac = fl_strategy_state["reward_data_size_frac"]
+            # Convert string keys back to integers (from JSON serialization)
+            self.selected_clients = [
+                int(cid) if isinstance(cid, str) else cid
+                for cid in fl_strategy_state.get("selected_clients", [])
+            ]
+            client_weights_raw = fl_strategy_state.get("client_weights", {})
+            self.client_weights = {
+                int(k) if isinstance(k, str) else k: v
+                for k, v in client_weights_raw.items()
+            }
+            logging.info(
+                f"FedSelect: Loading from saved state with warmup_rounds={self.warmup_rounds}"
+            )
+        else:
+            self.warmup_rounds = int(warmup_rounds_frac * num_rounds)
+            self.client_select_ratio = client_select_ratio
+            self.sample_select_ratio = sample_select_ratio
+            self.meta_momentum = meta_momentum
+            self.meta_lr = 1e-3  # default learning rate for VNet meta model
+            self.reward_data_size_frac = reward_data_size_frac
+            self.selected_clients = []  # Currently selected clients
+            self.client_weights = {i: 0.0 for i in range(len(clients))}
 
         # Initialize dictionaries for all clients using consistent indexing
         client_ids = range(len(self.clients))
-        self.meta_margin_pre = {c_id: {} for c_id in client_ids}
-        self.sample_total_loss_pre = {c_id: {} for c_id in client_ids}
+        # Load saved per-client state if available
+        if fl_strategy_state is not None:
+            meta_margin_raw = fl_strategy_state.get("meta_margin_pre", {})
+            sample_total_loss_raw = fl_strategy_state.get("sample_total_loss_pre", {})
+            sample_weights_raw = fl_strategy_state.get("clients_sample_weights", {})
+
+            def _coerce_client_keyed_dict(raw_dict):
+                coerced = {}
+                for k, v in raw_dict.items():
+                    try:
+                        k_int = int(k)
+                    except Exception:
+                        k_int = k
+                    coerced[k_int] = v if isinstance(v, dict) else {}
+                return coerced
+
+            meta_margin_loaded = _coerce_client_keyed_dict(meta_margin_raw)
+            sample_total_loss_loaded = _coerce_client_keyed_dict(sample_total_loss_raw)
+            sample_weights_loaded = _coerce_client_keyed_dict(sample_weights_raw)
+        else:
+            meta_margin_loaded = {}
+            sample_total_loss_loaded = {}
+            sample_weights_loaded = {}
+
+        self.meta_margin_pre = {
+            c_id: meta_margin_loaded.get(c_id, {}) for c_id in client_ids
+        }
+        self.sample_total_loss_pre = {
+            c_id: sample_total_loss_loaded.get(c_id, {}) for c_id in client_ids
+        }
         self.client_meta_models = {c_id: VNet() for c_id in client_ids}
-        self.clients_sample_weights = {c_id: None for c_id in client_ids}
-        self.client_weights = {c_id: 0.0 for c_id in client_ids}
+        self.clients_sample_weights = {
+            c_id: sample_weights_loaded.get(c_id, None) for c_id in client_ids
+        }
         self.clients_proxy_validation_dataloaders = {c_id: None for c_id in client_ids}
         self.client_meta_optimizers = {c_id: None for c_id in client_ids}
+
+        # Load meta models and optimizers from checkpoints if restarting
+        if fl_strategy_state is not None:
+            meta_model_paths = fl_strategy_state.get("meta_model_paths", {})
+            meta_optimizer_paths = fl_strategy_state.get("meta_optimizer_paths", {})
+
+            for c_id in client_ids:
+                # Load meta model if checkpoint exists
+                if (
+                    str(c_id) in meta_model_paths
+                    and meta_model_paths[str(c_id)] is not None
+                ) or (c_id in meta_model_paths and meta_model_paths[c_id] is not None):
+                    # Try both string and int keys
+                    model_path = meta_model_paths.get(
+                        str(c_id)
+                    ) or meta_model_paths.get(c_id)
+                    if model_path and os.path.exists(model_path):
+                        logging.info(
+                            f"FedSelect: Loading meta model for client {c_id} from {model_path}"
+                        )
+                        self.client_meta_models[c_id].load_state_dict(
+                            torch.load(
+                                model_path, map_location="cpu", weights_only=True
+                            )
+                        )
+                    elif model_path:
+                        logging.warning(
+                            f"FedSelect: Meta model checkpoint not found at {model_path}"
+                        )
+
+                # Load optimizer if checkpoint exists
+                if (
+                    str(c_id) in meta_optimizer_paths
+                    and meta_optimizer_paths[str(c_id)] is not None
+                ) or (
+                    c_id in meta_optimizer_paths
+                    and meta_optimizer_paths[c_id] is not None
+                ):
+                    # Try both string and int keys
+                    optimizer_path = meta_optimizer_paths.get(
+                        str(c_id)
+                    ) or meta_optimizer_paths.get(c_id)
+                    if optimizer_path and os.path.exists(optimizer_path):
+                        logging.info(
+                            f"FedSelect: Loading meta optimizer for client {c_id} from {optimizer_path}"
+                        )
+                        # Initialize optimizer first (will be properly set up during training)
+                        self.client_meta_optimizers[c_id] = torch.optim.Adam(
+                            self.client_meta_models[c_id].parameters(), lr=self.meta_lr
+                        )
+                        self.client_meta_optimizers[c_id].load_state_dict(
+                            torch.load(
+                                optimizer_path, map_location="cpu", weights_only=True
+                            )
+                        )
+                    elif optimizer_path:
+                        logging.warning(
+                            f"FedSelect: Meta optimizer checkpoint not found at {optimizer_path}"
+                        )
+
+        # Initialize fl_strategy_state dictionary (will be updated when save_state is called)
+        self.fl_strategy_state = {
+            "warmup_rounds": self.warmup_rounds,
+            "client_select_ratio": self.client_select_ratio,
+            "sample_select_ratio": self.sample_select_ratio,
+            "meta_momentum": self.meta_momentum,
+            "meta_lr": self.meta_lr,
+            "reward_data_size_frac": self.reward_data_size_frac,
+            "selected_clients": self.selected_clients,
+            "client_weights": self.client_weights,
+            "meta_margin_pre": self.meta_margin_pre,
+            "sample_total_loss_pre": self.sample_total_loss_pre,
+            "clients_sample_weights": self.clients_sample_weights,
+            "meta_model_paths": (
+                {
+                    int(k) if isinstance(k, str) else k: v
+                    for k, v in fl_strategy_state.get("meta_model_paths", {}).items()
+                }
+                if fl_strategy_state is not None
+                else {c_id: None for c_id in client_ids}
+            ),
+            "meta_optimizer_paths": (
+                {
+                    int(k) if isinstance(k, str) else k: v
+                    for k, v in fl_strategy_state.get(
+                        "meta_optimizer_paths", {}
+                    ).items()
+                }
+                if fl_strategy_state is not None
+                else {c_id: None for c_id in client_ids}
+            ),
+        }
 
         logging.info(
             f"Initialized FedSelect with warmup_rounds={self.warmup_rounds}, "
@@ -743,6 +889,12 @@ class FedSelect(FedAvg):
             for param_group in meta_optimizer.param_groups:
                 param_group["lr"] = current_meta_lr
 
+        # Ensure optimizer state tensors are on the same device as vnet
+        for state in meta_optimizer.state.values():
+            for k, v in state.items():
+                if torch.is_tensor(v) and v.device != device:
+                    state[k] = v.to(device)
+
         vnet.train()
         meta_loss_total = 0.0
 
@@ -886,3 +1038,56 @@ class FedSelect(FedAvg):
             self.client_meta_models[cid] = copy.deepcopy(meta_model)
             self.client_meta_optimizers[cid] = copy.deepcopy(optimizer)
         logging.info(f"FedSelect: Updated meta model and optimizer set for all clients")
+
+    def save_state(self, exp_id: str, client_id: int = None):
+        """
+        Save the current state of FedSelect method to experiment's cli args file.
+        Following the same pattern as IOP-FL: only save checkpoint for the specific client_id.
+        """
+
+        # Save meta model and optimizer checkpoints to experiment directory
+        # get exp directory
+        results_dir = os.getenv("nnUNet_results") or os.getcwd()
+        dataset_id = exp_id.split("_")[0].strip("D")
+        exp_dir = glob(
+            os.path.join(results_dir, f"Dataset{dataset_id}_*", "*", "*", exp_id)
+        )[0]
+        assert (
+            exp_dir is not None
+        ), f"Could not find experiment directory for exp_id {exp_id}!"
+
+        # Only save checkpoints for the specific client_id (like IOP-FL does)
+        for cid, meta_model in self.client_meta_models.items():
+            if meta_model is not None and cid == client_id:
+                model_path = os.path.join(
+                    exp_dir, f"fedselect_meta_model_client_{client_id}_checkpoint.pth"
+                )
+                torch.save(meta_model.state_dict(), model_path)
+                self.fl_strategy_state["meta_model_paths"][cid] = model_path
+
+            optimizer = self.client_meta_optimizers.get(cid)
+            if optimizer is not None and cid == client_id:
+                optimizer_path = os.path.join(
+                    exp_dir,
+                    f"fedselect_meta_optimizer_client_{client_id}_checkpoint.pth",
+                )
+                torch.save(optimizer.state_dict(), optimizer_path)
+                self.fl_strategy_state["meta_optimizer_paths"][cid] = optimizer_path
+
+        # set experiment id
+        self.experiment_id = exp_id
+
+        # update fl_strategy_state with latest per-client state
+        self.fl_strategy_state.update(
+            {
+                "selected_clients": self.selected_clients,
+                "client_weights": self.client_weights,
+                "meta_margin_pre": self.meta_margin_pre,
+                "sample_total_loss_pre": self.sample_total_loss_pre,
+                "clients_sample_weights": self.clients_sample_weights,
+            }
+        )
+
+        args_file = self.save_fl_strategy_state_to_file(self.fl_strategy_state, exp_id)
+
+        logging.info(f"Saved FedSelect state to {args_file}")

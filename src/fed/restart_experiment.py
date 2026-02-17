@@ -3,6 +3,7 @@ from pathlib import Path
 import sys
 import argparse
 import json
+import logging
 from glob import glob
 
 import torch
@@ -76,17 +77,55 @@ def get_experiment_args(exp_id: str):
             / "checkpoint_latest_t-1.pth"
         )
     )
-    checkpoints = {
-        i: {
-            "path": os.path.join(folder, "checkpoint_latest.pth"),
-            "checkpoint": torch.load(
-                os.path.join(folder, "checkpoint_latest.pth"),
+    checkpoints = {}
+    for i, folder in enumerate(result_folders):
+        try:
+            checkpoint_path = os.path.join(folder, "checkpoint_latest.pth")
+            checkpoint = torch.load(
+                checkpoint_path,
                 map_location="cpu",
                 weights_only=False,
-            ),
-        }
-        for i, folder in enumerate(result_folders)
-    }
+            )
+            checkpoints[i] = {
+                "path": checkpoint_path,
+                "checkpoint": checkpoint,
+            }
+        except Exception as e:
+            print(
+                f"WARNING: Failed to load checkpoint_latest.pth for client {i} from {folder}"
+            )
+            print(f"Error: {e}")
+            # Try to load checkpoint_latest_t-1.pth as fallback
+            t_minus_1_path = os.path.join(folder, "checkpoint_latest_t-1.pth")
+            if os.path.exists(t_minus_1_path):
+                try:
+                    checkpoint = torch.load(
+                        t_minus_1_path,
+                        map_location="cpu",
+                        weights_only=False,
+                    )
+                    checkpoints[i] = {
+                        "path": t_minus_1_path,
+                        "checkpoint": checkpoint,
+                    }
+                    print(
+                        f"Successfully loaded checkpoint_latest_t-1.pth for client {i} as fallback"
+                    )
+                except Exception as e2:
+                    print(
+                        f"ERROR: Also failed to load checkpoint_latest_t-1.pth for client {i}"
+                    )
+                    print(f"Error: {e2}")
+                    raise RuntimeError(
+                        f"Could not load any checkpoint for client {i}. "
+                        f"Both checkpoint_latest.pth and checkpoint_latest_t-1.pth are corrupted or missing. "
+                        f"Please check the checkpoint files or manually repair them."
+                    )
+            else:
+                raise RuntimeError(
+                    f"Could not load checkpoint_latest.pth for client {i} and checkpoint_latest_t-1.pth does not exist. "
+                    f"Please check the checkpoint files at {folder}."
+                )
     last_epochs = [ckpt["checkpoint"]["current_epoch"] for ckpt in checkpoints.values()]
     if not len(set(last_epochs)) == 1:
         # lowest last epoch across clients
@@ -150,6 +189,11 @@ def get_experiment_args(exp_id: str):
         "fedcorr_relabel_ratio",
         "fedcorr_relabel_confidence_thres",
         "fedcorr_proxterm_beta",
+        "fedselect_warmup_rounds_frac",
+        "fedselect_client_select_ratio",
+        "fedselect_sample_select_ratio",
+        "fedselect_meta_momentum",
+        "fedselect_reward_data_size_frac",
         "fl_strategy_state",
     ]
     (
@@ -176,8 +220,23 @@ def get_experiment_args(exp_id: str):
         fedcorr_relabel_ratio,
         fedcorr_relabel_confidence_thres,
         fedcorr_proxterm_beta,
+        fedselect_warmup_rounds_frac,
+        fedselect_client_select_ratio,
+        fedselect_sample_select_ratio,
+        fedselect_meta_momentum,
+        fedselect_reward_data_size_frac,
         fl_strategy_state,
     ) = [exp_cli_args.get(k) for k in keys]
+
+    # Ensure fl_strategy_state is a dict (handle string-serialized JSON if present)
+    if isinstance(fl_strategy_state, str):
+        try:
+            fl_strategy_state = json.loads(fl_strategy_state)
+        except Exception:
+            logging.warning(
+                f"Failed to parse fl_strategy_state as JSON: {fl_strategy_state}"
+            )
+            fl_strategy_state = None
 
     # get last checkpoint epoch to continue training from there
     last_epochs = [ckpt["checkpoint"]["current_epoch"] for ckpt in checkpoints.values()]
@@ -239,6 +298,11 @@ def get_experiment_args(exp_id: str):
         fedcorr_relabel_ratio,
         fedcorr_relabel_confidence_thres,
         fedcorr_proxterm_beta,
+        fedselect_warmup_rounds_frac,
+        fedselect_client_select_ratio,
+        fedselect_sample_select_ratio,
+        fedselect_meta_momentum,
+        fedselect_reward_data_size_frac,
         start_epoch,
         start_fl_round,
         fl_strategy_state,
@@ -276,6 +340,11 @@ def main(args):
         fedcorr_relabel_ratio,
         fedcorr_relabel_confidence_thres,
         fedcorr_proxterm_beta,
+        fedselect_warmup_rounds_frac,
+        fedselect_client_select_ratio,
+        fedselect_sample_select_ratio,
+        fedselect_meta_momentum,
+        fedselect_reward_data_size_frac,
         start_epoch,
         start_fl_round,
         fl_strategy_state,
@@ -283,7 +352,7 @@ def main(args):
 
     print(f"Restarting experiment '{args.exp_id}' with the following args:")
     print(
-        f"{dataset_ids=}\n{configuration=}\n{fold=}\n{plan=}\n{trainer=}\n{save_every=}\n{oversample_foreground_percent=}\n{class_sampling_probabilities=}\n{batch_element_class_probabilities=}\n{noise_ratio=}\n{num_clients=}\n{num_rounds=}\n{num_local_epochs=}\n{clean_validation_datasets=}\n{noisy_train_folders=}\n{noise_mitigation_method=}\n{feda3i_warmup_rounds_frac=}\n{feda3i_interw=}\n{feddm_gamma_hgd_smoothing=}\n{feddm_ratio_cac_pixelselection=}\n{feddm_cac_label_correction=}\n{feddm_loss=}\n{iopfl_alpha=}\n{fedcorr_preproc_rounds_frac=}\n{fedcorr_relabel_ratio=}\n{fedcorr_relabel_confidence_thres=}\n{fedcorr_proxterm_beta=}\n{start_epoch=}\n{start_fl_round=}\n"
+        f"{dataset_ids=}\n{configuration=}\n{fold=}\n{plan=}\n{trainer=}\n{save_every=}\n{oversample_foreground_percent=}\n{class_sampling_probabilities=}\n{batch_element_class_probabilities=}\n{noise_ratio=}\n{num_clients=}\n{num_rounds=}\n{num_local_epochs=}\n{clean_validation_datasets=}\n{noisy_train_folders=}\n{noise_mitigation_method=}\n{feda3i_warmup_rounds_frac=}\n{feda3i_interw=}\n{feddm_gamma_hgd_smoothing=}\n{feddm_ratio_cac_pixelselection=}\n{feddm_cac_label_correction=}\n{feddm_loss=}\n{iopfl_alpha=}\n{fedcorr_preproc_rounds_frac=}\n{fedcorr_relabel_ratio=}\n{fedcorr_relabel_confidence_thres=}\n{fedcorr_proxterm_beta=}\n{fedselect_warmup_rounds_frac=}\n{fedselect_client_select_ratio=}\n{fedselect_sample_select_ratio=}\n{fedselect_meta_momentum=}\n{fedselect_reward_data_size_frac=}\n{start_epoch=}\n{start_fl_round=}\n"
     )
 
     # setup clients
@@ -379,10 +448,37 @@ def main(args):
                 if noise_mitigation_method.lower() == "fedcorr"
                 else None
             ),
-            # FL strategy state implemented for FedCorr, FedA3I, IOPFL
+            # FedSelect
+            "fedselect_warmup_rounds_frac": (
+                fedselect_warmup_rounds_frac
+                if noise_mitigation_method.lower() == "fedselect"
+                else None
+            ),
+            "fedselect_client_select_ratio": (
+                fedselect_client_select_ratio
+                if noise_mitigation_method.lower() == "fedselect"
+                else None
+            ),
+            "fedselect_sample_select_ratio": (
+                fedselect_sample_select_ratio
+                if noise_mitigation_method.lower() == "fedselect"
+                else None
+            ),
+            "fedselect_meta_momentum": (
+                fedselect_meta_momentum
+                if noise_mitigation_method.lower() == "fedselect"
+                else None
+            ),
+            "fedselect_reward_data_size_frac": (
+                fedselect_reward_data_size_frac
+                if noise_mitigation_method.lower() == "fedselect"
+                else None
+            ),
+            # FL strategy state implemented for FedCorr, FedA3I, IOPFL, FedSelect
             "fl_strategy_state": (
                 fl_strategy_state
-                if noise_mitigation_method.lower() in ["fedcorr", "feda3i", "iopfl"]
+                if noise_mitigation_method.lower()
+                in ["fedcorr", "feda3i", "iopfl", "fedselect"]
                 else None
             ),
         },
