@@ -318,6 +318,25 @@ class FedSelect(FedAvg):
             ),
         }
 
+        # Rebuild proxy validation dataloaders from saved meta_margin_pre when restarting
+        if fl_strategy_state is not None:
+            for c_id in client_ids:
+                if self.meta_margin_pre.get(c_id):
+                    try:
+                        logging.info(
+                            f"FedSelect: Attempting to rebuild proxy validation dataloader for client {c_id}"
+                        )
+                        self.update_proxy_validation_dataset(
+                            nnunet_trainer=None, client_id=c_id
+                        )
+                    except Exception as e:
+                        logging.warning(
+                            f"FedSelect: Could not rebuild proxy validation dataloader for client {c_id} "
+                            f"during initialization (will be rebuilt when needed): {e}"
+                        )
+                        # Keep as None - will be rebuilt when train_meta_model is called
+                        self.clients_proxy_validation_dataloaders[c_id] = None
+
         logging.info(
             f"Initialized FedSelect with warmup_rounds={self.warmup_rounds}, "
             f"client_select_ratio={self.client_select_ratio}, "
@@ -836,11 +855,31 @@ class FedSelect(FedAvg):
         # Get proxy validation dataloader
         proxy_dataloader = self.clients_proxy_validation_dataloaders[client_id]
         if proxy_dataloader is None:
-            logging.warning(
-                f"FedSelect: No proxy validation dataloader for client {client_id}, "
-                "cannot train meta model"
-            )
-            return
+            # Try to rebuild from meta_margin_pre if available (e.g., after restart)
+            if self.meta_margin_pre.get(client_id):
+                logging.info(
+                    f"FedSelect: Proxy validation dataloader is None for client {client_id}, "
+                    "attempting to rebuild from meta_margin_pre"
+                )
+                try:
+                    nnunet_trainer = self.clients[client_id].model.nnunet_trainer
+                    self.update_proxy_validation_dataset(
+                        nnunet_trainer=nnunet_trainer, client_id=client_id
+                    )
+                    proxy_dataloader = self.clients_proxy_validation_dataloaders[
+                        client_id
+                    ]
+                except Exception as e:
+                    logging.warning(
+                        f"FedSelect: Failed to rebuild proxy validation dataloader for client {client_id}: {e}"
+                    )
+
+            if proxy_dataloader is None:
+                logging.warning(
+                    f"FedSelect: No proxy validation dataloader for client {client_id}, "
+                    "cannot train meta model"
+                )
+                return
 
         # Avoid functorch donated buffer issues with create_graph=True
         try:
