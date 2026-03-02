@@ -525,7 +525,7 @@ class FedSelect(FedAvg):
         self.clients_sample_weights[client_id] = sample_weights
 
         logging.info(
-            f"FedSelect: computed sample weights for client {client_id}, total samples: {len(sample_weights)}"
+            f"FedSelect: computed sample weights for client {client_id}, total samples: {len(sample_weights)}, example weights: {list(sample_weights.items())[:5]}"
         )
         del net, loader, criterion, data, target, output, l, weight
         empty_cache(device)
@@ -897,6 +897,18 @@ class FedSelect(FedAvg):
 
         vnet.train()
         meta_loss_total = 0.0
+        valid_meta_steps = 0
+        skipped_train_loss = 0
+        skipped_pseudo_step = 0
+        skipped_validation = 0
+        max_inner_grad_norm = 5.0
+        max_meta_grad_norm = 5.0
+
+        def _has_nonfinite_params(module: torch.nn.Module) -> bool:
+            for param in module.parameters():
+                if not torch.isfinite(param).all():
+                    return True
+            return False
 
         logging.info(
             f"FedSelect: Training meta model for client {client_id} "
@@ -920,6 +932,7 @@ class FedSelect(FedAvg):
                     pass
             local_model_copy.to(device)
             local_model_copy.train()
+            inner_step_success = False
 
             # Process ONE training batch to compute weighted loss and pseudo gradient step
             for train_batch_idx, train_batch in enumerate(train_loader):
@@ -939,13 +952,54 @@ class FedSelect(FedAvg):
                 ):
                     output = local_model_copy(data)
                     cost = criterion(output, target)
+                    if not torch.isfinite(cost).all():
+                        skipped_train_loss += 1
+                        logging.warning(
+                            f"FedSelect: non-finite train loss at stage=train_loss "
+                            f"client={client_id} round={fl_round} proxy_batch={proxy_batch_idx} "
+                            f"train_batch={train_batch_idx}. Skipping this proxy iteration."
+                        )
+                        del output, cost, data, target
+                        empty_cache(device)
+                        break
+
                     cost_v = cost.view(-1, 1)
+                    if not torch.isfinite(cost_v).all():
+                        skipped_train_loss += 1
+                        logging.warning(
+                            f"FedSelect: non-finite cost vector at stage=train_loss "
+                            f"client={client_id} round={fl_round} proxy_batch={proxy_batch_idx} "
+                            f"train_batch={train_batch_idx}. Skipping this proxy iteration."
+                        )
+                        del output, cost, cost_v, data, target
+                        empty_cache(device)
+                        break
 
                     # Compute importance weights using VNet
                     v_lambda = vnet(cost_v)
+                    if not torch.isfinite(v_lambda).all():
+                        skipped_train_loss += 1
+                        logging.warning(
+                            f"FedSelect: non-finite v_lambda at stage=train_loss "
+                            f"client={client_id} round={fl_round} proxy_batch={proxy_batch_idx} "
+                            f"train_batch={train_batch_idx}. Skipping this proxy iteration."
+                        )
+                        del output, cost, cost_v, v_lambda, data, target
+                        empty_cache(device)
+                        break
 
                     # Compute weighted loss
                     l_f_meta = torch.sum(cost_v * v_lambda) / len(cost_v)
+                    if not torch.isfinite(l_f_meta).all():
+                        skipped_train_loss += 1
+                        logging.warning(
+                            f"FedSelect: non-finite weighted meta loss at stage=train_loss "
+                            f"client={client_id} round={fl_round} proxy_batch={proxy_batch_idx} "
+                            f"train_batch={train_batch_idx}. Skipping this proxy iteration."
+                        )
+                        del output, cost, cost_v, v_lambda, l_f_meta, data, target
+                        empty_cache(device)
+                        break
 
                     # Compute gradients with create_graph=True to allow backprop through this step
                     grads = torch.autograd.grad(
@@ -956,6 +1010,38 @@ class FedSelect(FedAvg):
                         allow_unused=True,
                     )
 
+                valid_grads = [g for g in grads if g is not None]
+                if len(valid_grads) == 0:
+                    skipped_pseudo_step += 1
+                    logging.warning(
+                        f"FedSelect: no valid gradients at stage=pseudo_step "
+                        f"client={client_id} round={fl_round} proxy_batch={proxy_batch_idx} "
+                        f"train_batch={train_batch_idx}. Skipping this proxy iteration."
+                    )
+                    del output, cost, cost_v, v_lambda, l_f_meta, grads, data, target
+                    empty_cache(device)
+                    break
+
+                # compute grad norm to then clip grads
+                grad_norm = torch.norm(
+                    torch.stack([g.detach().float().norm(2) for g in valid_grads]), p=2
+                )
+                if not torch.isfinite(grad_norm):
+                    skipped_pseudo_step += 1
+                    logging.warning(
+                        f"FedSelect: non-finite grad norm at stage=pseudo_step "
+                        f"client={client_id} round={fl_round} proxy_batch={proxy_batch_idx} "
+                        f"train_batch={train_batch_idx}. Skipping this proxy iteration."
+                    )
+                    del output, cost, cost_v, v_lambda, l_f_meta, grads, grad_norm, data, target
+                    empty_cache(device)
+                    break
+                
+                # clip gradients to avoid extreme updates that can cause non-finite values in subsequent steps
+                clip_coef = min(1.0, max_inner_grad_norm / (grad_norm.item() + 1e-6))
+                if clip_coef < 1.0:
+                    grads = tuple((g * clip_coef) if g is not None else None for g in grads)
+
                 # Perform meta-SGD step (inner loop optimization)
                 pseudo_optimizer = MetaSGD(
                     local_model_copy,
@@ -964,10 +1050,27 @@ class FedSelect(FedAvg):
                     momentum=momentum_pseudo_optimizer,
                 )
                 pseudo_optimizer.meta_step(grads)
-                del output, cost, cost_v, v_lambda, l_f_meta, grads
+                if _has_nonfinite_params(local_model_copy):
+                    skipped_pseudo_step += 1
+                    logging.warning(
+                        f"FedSelect: non-finite params after stage=pseudo_step "
+                        f"client={client_id} round={fl_round} proxy_batch={proxy_batch_idx} "
+                        f"train_batch={train_batch_idx}. Skipping this proxy iteration."
+                    )
+                    del output, cost, cost_v, v_lambda, l_f_meta, grads, grad_norm, data, target
+                    empty_cache(device)
+                    break
+
+                inner_step_success = True
+                del output, cost, cost_v, v_lambda, l_f_meta, grads, grad_norm
                 del data, target
                 empty_cache(device)
                 break
+
+            if not inner_step_success:
+                del local_model_copy
+                empty_cache(device)
+                continue
 
             # Free memory
             empty_cache(device)
@@ -982,6 +1085,17 @@ class FedSelect(FedAvg):
             else:
                 target_val = _target_val.to(device, non_blocking=True)
 
+            if not torch.isfinite(data_val).all():
+                skipped_validation += 1
+                logging.warning(
+                    f"FedSelect: non-finite validation input at stage=validation_loss "
+                    f"client={client_id} round={fl_round} proxy_batch={proxy_batch_idx}. "
+                    "Skipping this proxy iteration."
+                )
+                del local_model_copy, data_val, target_val
+                empty_cache(device)
+                continue
+
             # feed through model and compute validation loss (meta-loss)
             with (
                 torch.autocast(device.type, enabled=True)
@@ -989,22 +1103,55 @@ class FedSelect(FedAvg):
                 else dummy_context()
             ):
                 y_g_hat = local_model_copy(data_val)
-                print(
-                    f"FedSelect: Meta-training iteration {proxy_batch_idx}, y_g_hat computed."
-                )
+                if not torch.isfinite(y_g_hat).all():
+                    skipped_validation += 1
+                    logging.warning(
+                        f"FedSelect: non-finite model output at stage=validation_loss "
+                        f"client={client_id} round={fl_round} proxy_batch={proxy_batch_idx}. "
+                        "Skipping this proxy iteration."
+                    )
+                    del y_g_hat, local_model_copy, data_val, target_val
+                    empty_cache(device)
+                    continue
+
                 l_g_meta = criterion(y_g_hat, target_val)
-                print(
-                    f"FedSelect: Meta-training iteration {proxy_batch_idx}, meta-loss computed: {l_g_meta.item():.4f}"
-                )
+                if not torch.isfinite(l_g_meta).all():
+                    skipped_validation += 1
+                    logging.warning(
+                        f"FedSelect: non-finite meta loss at stage=validation_loss "
+                        f"client={client_id} round={fl_round} proxy_batch={proxy_batch_idx}. "
+                        "Skipping this proxy iteration."
+                    )
+                    del y_g_hat, l_g_meta, local_model_copy, data_val, target_val
+                    empty_cache(device)
+                    continue
 
             # Backprop validation loss to update VNet
-            meta_optimizer.zero_grad()
+            meta_optimizer.zero_grad(set_to_none=True)
             l_g_meta.backward()
+
+            meta_grad_norm = torch.nn.utils.clip_grad_norm_(
+                vnet.parameters(), max_meta_grad_norm
+            )
+            if not torch.isfinite(meta_grad_norm):
+                skipped_validation += 1
+                logging.warning(
+                    f"FedSelect: non-finite VNet grad norm at stage=validation_loss "
+                    f"client={client_id} round={fl_round} proxy_batch={proxy_batch_idx}. "
+                    "Skipping optimizer step."
+                )
+                meta_optimizer.zero_grad(set_to_none=True)
+                del y_g_hat, data_val, target_val, l_g_meta, meta_grad_norm, local_model_copy
+                empty_cache(device)
+                continue
+
             meta_optimizer.step()
+            meta_loss_value = l_g_meta.item()
             del y_g_hat, data_val, target_val
             empty_cache(device)
 
-            meta_loss_total += l_g_meta.item()
+            meta_loss_total += meta_loss_value
+            valid_meta_steps += 1
             del local_model_copy, l_g_meta
             empty_cache(device)
 
@@ -1013,12 +1160,12 @@ class FedSelect(FedAvg):
         # # restore base model back to GPU for subsequent training steps
         # base_net.to(device)
 
-        avg_meta_loss = meta_loss_total / max(
-            len(proxy_dataloader.data_loader.indices), 1
-        )
+        avg_meta_loss = meta_loss_total / max(valid_meta_steps, 1)
         logging.info(
             f"FedSelect: Meta model training completed for client {client_id}, "
-            f"average meta loss: {avg_meta_loss:.4f}"
+            f"average meta loss: {avg_meta_loss:.4f}, valid_steps={valid_meta_steps}, "
+            f"skipped_train_loss={skipped_train_loss}, skipped_pseudo_step={skipped_pseudo_step}, "
+            f"skipped_validation={skipped_validation}"
         )
 
         # finally set updated vnet to all clients' meta model
