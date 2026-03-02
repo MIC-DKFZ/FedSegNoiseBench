@@ -910,6 +910,15 @@ class FedSelect(FedAvg):
                     return True
             return False
 
+        def _all_finite(value) -> bool:
+            if torch.is_tensor(value):
+                return torch.isfinite(value).all().item()
+            if isinstance(value, (list, tuple)):
+                return all(_all_finite(v) for v in value)
+            if isinstance(value, dict):
+                return all(_all_finite(v) for v in value.values())
+            return True
+
         logging.info(
             f"FedSelect: Training meta model for client {client_id} "
             f"(FL round {fl_round})"
@@ -1103,7 +1112,7 @@ class FedSelect(FedAvg):
                 else dummy_context()
             ):
                 y_g_hat = local_model_copy(data_val)
-                if not torch.isfinite(y_g_hat).all():
+                if not _all_finite(y_g_hat):
                     skipped_validation += 1
                     logging.warning(
                         f"FedSelect: non-finite model output at stage=validation_loss "
@@ -1115,7 +1124,7 @@ class FedSelect(FedAvg):
                     continue
 
                 l_g_meta = criterion(y_g_hat, target_val)
-                if not torch.isfinite(l_g_meta).all():
+                if not _all_finite(l_g_meta):
                     skipped_validation += 1
                     logging.warning(
                         f"FedSelect: non-finite meta loss at stage=validation_loss "
