@@ -86,20 +86,32 @@ class IOPFL(FedAvg):
         logging.info(
             f"IOP-FL: Computing personalized trajectory model for client {client_id}!"
         )
+        
+        target_device = self.clients[0].model.nnunet_trainer.device
+        
         if self.trajectory[client_id] is None:
             # initialize trajectory with local model weights after first local training
-            self.trajectory[client_id] = copy.deepcopy(w_local)
+            # move to CPU to save GPU memory
+            trajectory_cpu = copy.deepcopy(w_local)
+            trajectory_cpu = self._move_state_to_device(trajectory_cpu, torch.device("cpu"))
+            self.trajectory[client_id] = trajectory_cpu
         else:
             # compute trajectory update
-            # copy current trajectory
-            current_trajectory = copy.deepcopy(self.trajectory[client_id])
-
-            # align devices between local weights and trajectory
-            target_device = self.clients[0].model.nnunet_trainer.device
+            # Explicitly delete old trajectory reference before creating new one
+            old_trajectory = self.trajectory[client_id]
+            self.trajectory[client_id] = None  # Clear reference
+            
+            # Move old trajectory and w_local to GPU for computation
             current_trajectory = self._move_state_to_device(
-                current_trajectory, target_device
+                old_trajectory, target_device
             )
-            w_local = self._move_state_to_device(w_local, target_device)
+            w_local_gpu = self._move_state_to_device(
+                copy.deepcopy(w_local), target_device
+            )
+            
+            # Explicitly delete old_trajectory to free memory
+            del old_trajectory
+            torch.cuda.empty_cache()
 
             # get addresses of keys
             keys = list(current_trajectory.keys())
@@ -111,19 +123,28 @@ class IOPFL(FedAvg):
                 else:
                     address_key_dict[address].append(k)
 
-            # update trajectory weights per key
+            # update trajectory weights per key (in-place on GPU)
             for a in address_key_dict.keys():
                 current_trajectory[address_key_dict[a][0]] = (
                     self.iopfl_alpha * current_trajectory[address_key_dict[a][0]]
-                    + (1 - self.iopfl_alpha) * w_local[address_key_dict[a][0]]
+                    + (1 - self.iopfl_alpha) * w_local_gpu[address_key_dict[a][0]]
                 )
 
-            # update trajectory
-            self.trajectory[client_id] = current_trajectory
+            # Move updated trajectory back to CPU to save GPU memory
+            trajectory_cpu = self._move_state_to_device(
+                current_trajectory, torch.device("cpu")
+            )
+            
+            # Free GPU memory before storing
+            del current_trajectory, w_local_gpu
+            torch.cuda.empty_cache()
+            
+            # Store CPU version
+            self.trajectory[client_id] = trajectory_cpu
 
-        # some GPU memory cleanup
-        del w_local, current_trajectory
-        torch.cuda.empty_cache()
+        logging.info(
+            f"IOP-FL: Trajectory stored on CPU for client {client_id} to conserve GPU memory"
+        )
 
     @staticmethod
     def _move_state_to_device(state: dict, device: torch.device):
