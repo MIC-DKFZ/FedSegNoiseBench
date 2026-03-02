@@ -211,7 +211,7 @@ class Orchestrator:
                     self.fl_strategy.get_most_influential_client()
                 )
                 torch.cuda.empty_cache()
-                self.fl_strategy.train_meta_model(most_influential_client_id)
+                self.fl_strategy.train_meta_model(most_influential_client_id, fl_round)
             else:
                 raise NotImplementedError(
                     f"Federated learning strategy {self.fl_strategy.name} not implemented!"
