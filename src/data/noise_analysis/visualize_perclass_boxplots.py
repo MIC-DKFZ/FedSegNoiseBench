@@ -1,7 +1,7 @@
 """
-Per-class boxplot visualizations for noise analysis.
+Per-class violin plot visualizations for noise analysis.
 
-Creates boxplots comparing clean and noisy masks for various per-class metrics:
+Creates violin plots comparing clean and noisy masks for various per-class metrics:
 - Per-class Dice coefficient
 - Per-class NSD (Normalized Surface Distance)
 - Per-class HD95 (Hausdorff Distance 95%)
@@ -152,35 +152,53 @@ def plot_all_metrics_combined(
     fig = plt.figure(figsize=(20, 16))
     gs = GridSpec(3, 3, figure=fig, hspace=0.35, wspace=0.3)
     
-    # Helper function to add boxplot to subplot
-    def add_boxplot(ax, metric, ylabel, title):
-        """Add a single boxplot to subplot."""
+    # Helper function to add violin plot to subplot
+    def add_violinplot(ax, metric, ylabel, title):
+        """Add a single violin plot to subplot."""
         data_by_class = [df[df["class_id"] == cls][metric].dropna().values for cls in classes]
         
-        bp = ax.boxplot(
+        parts = ax.violinplot(
             data_by_class,
-            labels=[f"C{cls}" for cls in classes],
-            patch_artist=True,
+            positions=range(len(classes)),
+            widths=0.7,
             showmeans=True,
-            meanprops=dict(marker="D", markerfacecolor="red", markeredgecolor="black", markersize=6),
-            medianprops=dict(color="black", linewidth=1.5),
-            widths=0.6,
+            showmedians=True,
         )
         
+        # Color the violin bodies
         colors = [CLASS_COLORS[i % len(CLASS_COLORS)] for i in range(len(classes))]
-        for patch, color in zip(bp["boxes"], colors):
-            patch.set_facecolor(color)
-            patch.set_alpha(0.7)
+        for i, pc in enumerate(parts['bodies']):
+            pc.set_facecolor(colors[i])
+            pc.set_alpha(0.7)
+            pc.set_edgecolor('black')
+            pc.set_linewidth(0.5)
+        
+        # Style the median lines
+        parts['cmedians'].set_edgecolor('black')
+        parts['cmedians'].set_linewidth(1.5)
+        
+        # Style the mean lines (dashed red)
+        parts['cmeans'].set_edgecolor('red')
+        parts['cmeans'].set_linewidth(1.5)
+        parts['cmeans'].set_linestyle('--')
+        
+        # Style the whiskers and caps
+        for partname in ('cbars', 'cmins', 'cmaxes'):
+            if partname in parts:
+                parts[partname].set_edgecolor('black')
+                parts[partname].set_linewidth(1)
         
         ax.set_ylabel(ylabel, fontsize=10)
         ax.set_title(title, fontsize=11, fontweight="bold")
+        ax.set_xticks(range(len(classes)))
+        ax.set_xticklabels([f"C{cls}" for cls in classes])
         ax.grid(axis="y", alpha=0.3)
         ax.tick_params(axis="x", labelsize=9)
         ax.tick_params(axis="y", labelsize=9)
     
-    # Helper function for comparison plots
-    def add_comparison_boxplot(ax, metric_clean, metric_noisy, ylabel, title):
-        """Add side-by-side comparison boxplot."""
+    # Helper function for comparison plots (side-by-side violins)
+    def add_comparison_violinplot(ax, metric_clean, metric_noisy, ylabel, title):
+        """Add side-by-side comparison violin plot."""
         positions = []
         data_to_plot = []
         colors_list = []
@@ -196,19 +214,33 @@ def plot_all_metrics_combined(
             data_to_plot.extend([clean_data, noisy_data])
             colors_list.extend(["#3498db", "#e74c3c"])
         
-        bp = ax.boxplot(
+        parts = ax.violinplot(
             data_to_plot,
             positions=positions,
-            widths=0.7,
-            patch_artist=True,
+            widths=0.5,
             showmeans=True,
-            meanprops=dict(marker="D", markerfacecolor="yellow", markeredgecolor="black", markersize=5),
-            medianprops=dict(color="black", linewidth=1.5),
+            showmedians=True,
         )
         
-        for patch, color in zip(bp["boxes"], colors_list):
-            patch.set_facecolor(color)
-            patch.set_alpha(0.6)
+        # Color the violin bodies
+        for i, pc in enumerate(parts['bodies']):
+            pc.set_facecolor(colors_list[i])
+            pc.set_alpha(0.6)
+            pc.set_edgecolor('black')
+            pc.set_linewidth(0.5)
+        
+        # Style the median and mean lines
+        parts['cmedians'].set_edgecolor('black')
+        parts['cmedians'].set_linewidth(1.5)
+        parts['cmeans'].set_edgecolor('yellow')
+        parts['cmeans'].set_linewidth(1.5)
+        parts['cmeans'].set_linestyle('--')
+        
+        # Style whiskers and caps
+        for partname in ('cbars', 'cmins', 'cmaxes'):
+            if partname in parts:
+                parts[partname].set_edgecolor('black')
+                parts[partname].set_linewidth(1)
         
         ax.set_ylabel(ylabel, fontsize=10)
         ax.set_title(title, fontsize=11, fontweight="bold")
@@ -227,34 +259,34 @@ def plot_all_metrics_combined(
     
     # Row 0: Basic metrics (Dice, NSD, HD95)
     ax0 = fig.add_subplot(gs[0, 0])
-    add_boxplot(ax0, "dice", "Dice", "Per-Class Dice Coefficient")
+    add_violinplot(ax0, "dice", "Dice", "Per-Class Dice Coefficient")
     
     ax1 = fig.add_subplot(gs[0, 1])
-    add_boxplot(ax1, "nsd", "NSD", "Per-Class NSD")
+    add_violinplot(ax1, "nsd", "NSD", "Per-Class NSD")
     
     ax2 = fig.add_subplot(gs[0, 2])
-    add_boxplot(ax2, "hd95", "HD95 (mm)", "Per-Class HD95")
+    add_violinplot(ax2, "hd95", "HD95 (mm)", "Per-Class HD95")
     
     # Row 1: Relative volume diff, CC comparisons
     ax3 = fig.add_subplot(gs[1, 0])
-    add_boxplot(ax3, "relative_volume_diff", "Rel. Vol. Diff", "Relative Volume Difference")
+    add_violinplot(ax3, "relative_volume_diff", "Rel. Vol. Diff", "Relative Volume Difference")
     
     ax4 = fig.add_subplot(gs[1, 1])
-    add_comparison_boxplot(
+    add_comparison_violinplot(
         ax4, "num_cc_clean", "num_cc_noisy", "Num CC", "Num Connected Components: Clean vs Noisy"
     )
     
     ax5 = fig.add_subplot(gs[1, 2])
-    add_comparison_boxplot(
+    add_comparison_violinplot(
         ax5, "avg_vol_cc_clean", "avg_vol_cc_noisy", "Avg Vol (voxels)", "Avg CC Volume: Clean vs Noisy"
     )
     
     # Row 2: Delta metrics + overlap matrix
     ax6 = fig.add_subplot(gs[2, 0])
-    add_boxplot(ax6, "delta_num_cc", "Δ Num CC", "Delta Num CC (Noisy - Clean)")
+    add_violinplot(ax6, "delta_num_cc", "Δ Num CC", "Delta Num CC (Noisy - Clean)")
     
     ax7 = fig.add_subplot(gs[2, 1])
-    add_boxplot(ax7, "delta_avg_vol_cc", "Δ Avg Vol (voxels)", "Delta Avg Vol CC (Noisy - Clean)")
+    add_violinplot(ax7, "delta_avg_vol_cc", "Δ Avg Vol (voxels)", "Delta Avg Vol CC (Noisy - Clean)")
     
     # Overlap matrix in last position
     ax8 = fig.add_subplot(gs[2, 2])
@@ -308,36 +340,52 @@ def plot_requested_metrics_single_row(
     # Fixed-size canvas: row length stays constant across datasets
     fig, axes = plt.subplots(1, 5, figsize=(25, 5.2))
 
-    def add_boxplot(ax, metric, ylabel, title):
+    def add_violinplot(ax, metric, ylabel, title):
         data_by_class = [
             df[df["class_id"] == cls][metric].dropna().values for cls in classes
         ]
 
-        bp = ax.boxplot(
+        parts = ax.violinplot(
             data_by_class,
-            labels=[f"C{cls}" for cls in classes],
-            patch_artist=True,
+            positions=range(len(classes)),
+            widths=0.7,
             showmeans=True,
-            meanprops=dict(marker="D", markerfacecolor="red", markeredgecolor="black", markersize=5),
-            medianprops=dict(color="black", linewidth=1.5),
-            widths=0.6,
+            showmedians=True,
         )
-
+        
+        # Color the violin bodies
         colors = [CLASS_COLORS[i % len(CLASS_COLORS)] for i in range(len(classes))]
-        for patch, color in zip(bp["boxes"], colors):
-            patch.set_facecolor(color)
-            patch.set_alpha(0.7)
+        for i, pc in enumerate(parts['bodies']):
+            pc.set_facecolor(colors[i])
+            pc.set_alpha(0.7)
+            pc.set_edgecolor('black')
+            pc.set_linewidth(0.5)
+        
+        # Style the median and mean lines
+        parts['cmedians'].set_edgecolor('black')
+        parts['cmedians'].set_linewidth(1.5)
+        parts['cmeans'].set_edgecolor('red')
+        parts['cmeans'].set_linewidth(1.5)
+        parts['cmeans'].set_linestyle('--')
+        
+        # Style whiskers and caps
+        for partname in ('cbars', 'cmins', 'cmaxes'):
+            if partname in parts:
+                parts[partname].set_edgecolor('black')
+                parts[partname].set_linewidth(1)
 
         ax.set_ylabel(ylabel, fontsize=10)
         ax.set_title(title, fontsize=11, fontweight="bold")
+        ax.set_xticks(range(len(classes)))
+        ax.set_xticklabels([f"C{cls}" for cls in classes])
         ax.grid(axis="y", alpha=0.3)
         ax.tick_params(axis="x", labelsize=8)
         ax.tick_params(axis="y", labelsize=9)
 
-    add_boxplot(axes[0], "dice", "Dice", "Per-Class Dice")
-    add_boxplot(axes[1], "hd95", "HD95 (mm)", "Per-Class HD95")
-    add_boxplot(axes[2], "instance_precision", "Precision", "Per-Class Precision (Instance)")
-    add_boxplot(axes[3], "instance_recall", "Recall", "Per-Class Recall (Instance)")
+    add_violinplot(axes[0], "dice", "Dice", "Per-Class Dice")
+    add_violinplot(axes[1], "hd95", "HD95 (mm)", "Per-Class HD95")
+    add_violinplot(axes[2], "instance_precision", "Precision", "Per-Class Precision (Instance)")
+    add_violinplot(axes[3], "instance_recall", "Recall", "Per-Class Recall (Instance)")
 
     # Class confusion matrix (class overlap matrix)
     ax_cm = axes[4]
@@ -395,36 +443,52 @@ def plot_core_metrics_single_row(
     # Fixed-size canvas: row length stays constant across datasets
     fig, axes = plt.subplots(1, 5, figsize=(25, 5.2))
 
-    def add_boxplot(ax, metric, ylabel, title):
+    def add_violinplot(ax, metric, ylabel, title):
         data_by_class = [
             df[df["class_id"] == cls][metric].dropna().values for cls in classes
         ]
 
-        bp = ax.boxplot(
+        parts = ax.violinplot(
             data_by_class,
-            labels=[f"C{cls}" for cls in classes],
-            patch_artist=True,
+            positions=range(len(classes)),
+            widths=0.7,
             showmeans=True,
-            meanprops=dict(marker="D", markerfacecolor="red", markeredgecolor="black", markersize=5),
-            medianprops=dict(color="black", linewidth=1.5),
-            widths=0.6,
+            showmedians=True,
         )
-
+        
+        # Color the violin bodies
         colors = [CLASS_COLORS[i % len(CLASS_COLORS)] for i in range(len(classes))]
-        for patch, color in zip(bp["boxes"], colors):
-            patch.set_facecolor(color)
-            patch.set_alpha(0.7)
+        for i, pc in enumerate(parts['bodies']):
+            pc.set_facecolor(colors[i])
+            pc.set_alpha(0.7)
+            pc.set_edgecolor('black')
+            pc.set_linewidth(0.5)
+        
+        # Style the median and mean lines
+        parts['cmedians'].set_edgecolor('black')
+        parts['cmedians'].set_linewidth(1.5)
+        parts['cmeans'].set_edgecolor('red')
+        parts['cmeans'].set_linewidth(1.5)
+        parts['cmeans'].set_linestyle('--')
+        
+        # Style whiskers and caps
+        for partname in ('cbars', 'cmins', 'cmaxes'):
+            if partname in parts:
+                parts[partname].set_edgecolor('black')
+                parts[partname].set_linewidth(1)
 
         ax.set_ylabel(ylabel, fontsize=10)
         ax.set_title(title, fontsize=11, fontweight="bold")
+        ax.set_xticks(range(len(classes)))
+        ax.set_xticklabels([f"C{cls}" for cls in classes])
         ax.grid(axis="y", alpha=0.3)
         ax.tick_params(axis="x", labelsize=8)
         ax.tick_params(axis="y", labelsize=9)
 
-    add_boxplot(axes[0], "dice", "Dice", "Per-Class Dice")
-    add_boxplot(axes[1], "nsd", "NSD", "Per-Class NSD")
-    add_boxplot(axes[2], "hd95", "HD95 (mm)", "Per-Class HD95")
-    add_boxplot(
+    add_violinplot(axes[0], "dice", "Dice", "Per-Class Dice")
+    add_violinplot(axes[1], "nsd", "NSD", "Per-Class NSD")
+    add_violinplot(axes[2], "hd95", "HD95 (mm)", "Per-Class HD95")
+    add_violinplot(
         axes[3],
         "relative_volume_diff",
         "ΔV / V",
@@ -568,7 +632,7 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Per-class boxplot visualizations for noise analysis"
+        description="Per-class violin plot visualizations for noise analysis"
     )
     parser.add_argument(
         "--input_json",
