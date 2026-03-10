@@ -80,7 +80,7 @@ class GleasonXAIDataPreparer:
         return explanation2gleasongrade_mapping
 
     def init_generate_labels_task(self, label_mode, output_dir):
-        self.label_mode = label_mode
+        self.label_mode = "all_raters" if label_mode == "all" else label_mode
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         # also create subdirectories for each sub dataset
@@ -95,7 +95,14 @@ class GleasonXAIDataPreparer:
         self.convert_output_dir.mkdir(parents=True, exist_ok=True)
 
     def init_to_nnunet_raw_dataset_task(
-        self, dataset_ids, label_mode, labels_input_dir, images_input_dir, output_dir, split_mode="separate_sources", single_source=None
+        self,
+        dataset_ids,
+        label_mode,
+        labels_input_dir,
+        images_input_dir,
+        output_dir,
+        split_mode="separate_sources",
+        single_source=None,
     ):
         """Initialize task to create nnUNet raw datasets.
 
@@ -143,7 +150,12 @@ class GleasonXAIDataPreparer:
         )
 
     def _save_label_mask(
-        self, label_mask, tma_identifier, datasource, expected_size=None
+        self,
+        label_mask,
+        tma_identifier,
+        datasource,
+        expected_size=None,
+        output_filename=None,
     ):
         """Save label mask with optional size validation.
 
@@ -152,6 +164,8 @@ class GleasonXAIDataPreparer:
             tma_identifier: TMA identifier for the image
             datasource: Source dataset name
             expected_size: Optional (H, W) tuple to validate mask size
+            output_filename: Optional explicit filename (defaults to
+                "{tma_identifier}_{label_mode}_mask.png")
         """
         # Validate mask size if expected size is provided
         if expected_size is not None:
@@ -164,14 +178,34 @@ class GleasonXAIDataPreparer:
                 )
 
         # save label mask
-        output_path = (
-            self.output_dir
-            / datasource
-            / self.label_mode
-            / f"{tma_identifier}_{self.label_mode}_mask.png"
-        )
+        if output_filename is None:
+            output_filename = f"{tma_identifier}_{self.label_mode}_mask.png"
+        output_path = self.output_dir / datasource / self.label_mode / output_filename
         Image.fromarray(label_mask).save(output_path)
         print(f"Saved label mask to {output_path}")
+
+    def _build_label_mask_from_df(self, annotator_df, img_size):
+        """Create one segmentation mask from a dataframe slice of one rater."""
+        label_mask = np.zeros(img_size, dtype=np.uint8)
+
+        for _, grade_annotator_frame in annotator_df.groupby(
+            "grade", sort=True, observed=True
+        ):
+            for exp, coords in zip(
+                grade_annotator_frame["explanations"],
+                grade_annotator_frame["coords"],
+            ):
+                coords = np.array(eval(coords))
+                new_coords = np.int32(coords.T * img_size.reshape(-1, 1)[::-1, :])
+                label_slice = np.zeros(list(img_size), dtype=np.int8)
+
+                cv2.fillPoly(label_slice, [new_coords.T], color=1)
+
+                gleason_grade = self.explanation2gleasongrade_mapping[exp]
+                seg_label = self.gleasongrade2seglabel_mapping[str(gleason_grade)]
+                label_mask[label_slice > 0] = seg_label
+
+        return label_mask
 
     def _generate_random_rater_labels(self, tma_df, tma_raters_pairs):
         # randomly select a tma-rater pair
@@ -188,27 +222,7 @@ class GleasonXAIDataPreparer:
         img, datasource = self._load_image(selected_df.iloc[0]["TMA_identifier"])
         img_size = np.array(img.size)[::-1]  # (H, W)
 
-        # create label mask with grade_frame_order like the reference function
-        label_mask = np.zeros(img_size, dtype=np.uint8)
-
-        # Process by grade order (sort=True) to match grade_frame_order behavior
-        for grade_image, grade_annotator_frame in selected_df.groupby(
-            "grade", sort=True, observed=True
-        ):
-            for exp, coords in zip(
-                grade_annotator_frame["explanations"],
-                grade_annotator_frame["coords"],
-            ):
-                coords = np.array(eval(coords))
-                new_coords = np.int32(coords.T * img_size.reshape(-1, 1)[::-1, :])
-                label_slice = np.zeros(list(img_size), dtype=np.int8)
-
-                # cv2.fillPoly expects (W,H) coordinates
-                cv2.fillPoly(label_slice, [new_coords.T], color=1)
-
-                gleason_grade = self.explanation2gleasongrade_mapping[exp]
-                seg_label = self.gleasongrade2seglabel_mapping[str(gleason_grade)]
-                label_mask[label_slice > 0] = seg_label
+        label_mask = self._build_label_mask_from_df(selected_df, img_size)
 
         # save label mask with size validation
         self._save_label_mask(
@@ -232,18 +246,7 @@ class GleasonXAIDataPreparer:
                 & (tma_df["annotator"] == rater)
             ]
 
-            label_mask = np.zeros(img_size, dtype=np.uint8)
-            for exp, coords in zip(
-                rater_df["explanations"],
-                rater_df["coords"],
-            ):
-                coords = np.array(eval(coords))
-                new_coords = np.int32(coords.T * img_size.reshape(-1, 1)[::-1, :])
-                label_slice = np.zeros(list(img_size), dtype=np.int8)
-                cv2.fillPoly(label_slice, [new_coords.T], color=1)
-                gleason_grade = self.explanation2gleasongrade_mapping[exp]
-                seg_label = self.gleasongrade2seglabel_mapping[str(gleason_grade)]
-                label_mask[label_slice > 0] = seg_label
+            label_mask = self._build_label_mask_from_df(rater_df, img_size)
 
             rater_label_masks.append(label_mask)
 
@@ -268,6 +271,34 @@ class GleasonXAIDataPreparer:
             datasource,
             expected_size=tuple(img_size),
         )
+
+    def _generate_all_rater_labels(self, tma_df, tma_raters_pairs):
+        """Generate one label mask per rater for one TMA."""
+        img, datasource = self._load_image(tma_df.iloc[0]["TMA_identifier"])
+        img_size = np.array(img.size)[::-1]
+        tma_identifier = tma_df.iloc[0]["TMA_identifier"]
+
+        for _, row in tma_raters_pairs.iterrows():
+            rater = row["annotator"]
+            rater_df = tma_df[
+                (tma_df["TMA_identifier"] == row["TMA_identifier"])
+                & (tma_df["annotator"] == rater)
+            ]
+
+            label_mask = self._build_label_mask_from_df(rater_df, img_size)
+
+            safe_rater = "".join(
+                char if str(char).isalnum() else "_" for char in str(rater)
+            )
+            self._save_label_mask(
+                label_mask,
+                tma_identifier,
+                datasource,
+                expected_size=tuple(img_size),
+                output_filename=(
+                    f"{tma_identifier}_{self.label_mode}_annotator_{safe_rater}_mask.png"
+                ),
+            )
 
     def generate_labels(self):
         print(f"Generating labels in mode: {self.label_mode}")
@@ -294,6 +325,13 @@ class GleasonXAIDataPreparer:
                 self._generate_consensus_staple_labels(tma_df, tma_raters_pairs)
             elif self.label_mode == "random_rater":
                 self._generate_random_rater_labels(tma_df, tma_raters_pairs)
+            elif self.label_mode in ["all_raters", "all"]:
+                self._generate_all_rater_labels(tma_df, tma_raters_pairs)
+            else:
+                raise ValueError(
+                    f"Unknown generate_labels mode: {self.label_mode}. "
+                    "Supported modes: consensus_staple, random_rater, all_raters"
+                )
 
     def convert_images(self):
         """Convert all images to new format given convert_images_mode."""
@@ -497,7 +535,9 @@ class GleasonXAIDataPreparer:
 
         print(f"nnUNet raw datasets created in {self.nnunet_output_dir}")
 
-    def _compute_single_source_splits(self, datasource, single_source_splitting_strategy="least_freq_label_uniform"):
+    def _compute_single_source_splits(
+        self, datasource, single_source_splitting_strategy="least_freq_label_uniform"
+    ):
         """
         Computes splitting of a single source dataset into 3 FL clients.
         Splitting is done either randomly or using least frequent label uniform strategy.
@@ -506,7 +546,7 @@ class GleasonXAIDataPreparer:
         Args:
             datasource: The source dataset to split (e.g., 'tissue_array', 'harvard_dataverse', 'gleason2019')
             single_source_splitting_strategy: Strategy for splitting ('random', 'least_freq_label_uniform')
-        
+
         Returns:
             Dictionary mapping client indices to lists of TMA_identifiers.
         """
@@ -520,7 +560,7 @@ class GleasonXAIDataPreparer:
             with open(splits_file, "r") as f:
                 fl_client_splits = json.load(f)
             return fl_client_splits
-        
+
         if single_source_splitting_strategy == "random":
             # implement random splitting
             raise NotImplementedError("Random splitting not yet implemented.")
@@ -532,20 +572,26 @@ class GleasonXAIDataPreparer:
             label_files = list(labels_subdir.glob("*_mask.png"))
             # create dict with TMA_identifier as key and occuring labels as values
             tma_labels_dict = {}
-            for label_file in tqdm(label_files, desc=f"Loading labels for {datasource}"):
-                tma_identifier = label_file.stem.replace(f"_{self.nnunet_label_mode}_mask", "")
+            for label_file in tqdm(
+                label_files, desc=f"Loading labels for {datasource}"
+            ):
+                tma_identifier = label_file.stem.replace(
+                    f"_{self.nnunet_label_mode}_mask", ""
+                )
                 label_img = Image.open(label_file)
                 label_array = np.array(label_img)
                 unique_labels = np.unique(label_array)
                 tma_labels_dict[tma_identifier] = unique_labels.tolist()
-            
+
             # identify least frequent label across all TMAs
             label_counts = {}
             for labels in tma_labels_dict.values():
                 for label in labels:
                     label_counts[label] = label_counts.get(label, 0) + 1
             least_frequent_label = min(label_counts, key=label_counts.get)
-            print(f"Least frequent label in {datasource} is {least_frequent_label} with count {label_counts[least_frequent_label]}")
+            print(
+                f"Least frequent label in {datasource} is {least_frequent_label} with count {label_counts[least_frequent_label]}"
+            )
 
             # assign TMAs to clients to balance least frequent label
             fl_client_splits = {0: [], 1: [], 2: []}
@@ -553,12 +599,16 @@ class GleasonXAIDataPreparer:
             for tma_identifier, labels in tma_labels_dict.items():
                 if least_frequent_label in labels:
                     # assign to client with currently least count of least frequent label
-                    target_client = min(client_least_freq_counts, key=client_least_freq_counts.get)
+                    target_client = min(
+                        client_least_freq_counts, key=client_least_freq_counts.get
+                    )
                     fl_client_splits[target_client].append(tma_identifier)
                     client_least_freq_counts[target_client] += 1
                 else:
                     # assign to client with least total samples
-                    target_client = min(fl_client_splits, key=lambda k: len(fl_client_splits[k]))
+                    target_client = min(
+                        fl_client_splits, key=lambda k: len(fl_client_splits[k])
+                    )
                     fl_client_splits[target_client].append(tma_identifier)
 
             # save splits to file for future use
@@ -568,8 +618,9 @@ class GleasonXAIDataPreparer:
 
             return fl_client_splits
         else:
-            raise ValueError(f"Unknown single_source_splitting_strategy: {single_source_splitting_strategy}")
-
+            raise ValueError(
+                f"Unknown single_source_splitting_strategy: {single_source_splitting_strategy}"
+            )
 
     def to_nnunet_raw_dataset_single_source(self):
         """
@@ -604,9 +655,14 @@ class GleasonXAIDataPreparer:
 
             sample_count = 0
 
-            for tma_identifier in tqdm(tma_identifiers, desc=f"Processing {datasource} TMAs for client {client_idx}"):
+            for tma_identifier in tqdm(
+                tma_identifiers,
+                desc=f"Processing {datasource} TMAs for client {client_idx}",
+            ):
                 # Load image, split it in its channels and save it, and same with labels
-                img_file = self.nnunet_images_input_dir / datasource / f"{tma_identifier}.png"
+                img_file = (
+                    self.nnunet_images_input_dir / datasource / f"{tma_identifier}.png"
+                )
                 label_file = (
                     self.nnunet_labels_input_dir
                     / datasource
@@ -634,7 +690,7 @@ class GleasonXAIDataPreparer:
                         f"image {img_array.shape[:2]} vs label {label_array.shape[:2]}. "
                         f"Check mask generation."
                     )
-                
+
                 # Split into R, G, B channels
                 r_channel = img_array[:, :, 0]
                 g_channel = img_array[:, :, 1]
@@ -691,6 +747,7 @@ class GleasonXAIDataPreparer:
 
         print(f"nnUNet raw datasets created in {self.nnunet_output_dir}")
 
+
 def main(args):
     preparer = GleasonXAIDataPreparer(raw_data_dir=args.raw_data_dir)
 
@@ -742,7 +799,7 @@ if __name__ == "__main__":
         "--generate_labels_mode",
         type=str,
         required=False,
-        help="Mode for label generation: 'consensus_staple', 'random_rater', 'all', ...",
+        help="Mode for label generation: 'consensus_staple', 'random_rater', 'all_raters' (or alias 'all')",
     )
     parser.add_argument(
         "--generate_labels_output_dir",
