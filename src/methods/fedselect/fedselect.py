@@ -967,13 +967,14 @@ class FedSelect(FedAvg):
         )
         # Pre-allocate one model copy on GPU for reuse across all proxy iterations
         # (avoids repeated deepcopy + H2D transfer per iteration)
-        base_state_dict = copy.deepcopy(net_cpu.state_dict())
         local_model_copy = copy.deepcopy(net_cpu).to(device)
         if dynamo is not None:
             try:
                 local_model_copy = dynamo.disable(local_model_copy)
             except Exception:
                 pass
+        # Capture state dict AFTER dynamo wrapping to ensure key consistency
+        base_state_dict = copy.deepcopy(local_model_copy.state_dict())
 
         # Iterate through proxy validation batches (outer loop)
         for proxy_batch_idx, proxy_batch in enumerate(proxy_dataloader):
