@@ -634,9 +634,7 @@ class FedSelect(FedAvg):
                     sample_total_loss[key] = loss_value
                     processed_batch_el_keys[key] = loss_value
 
-                    # Clean up after each batch
                     del output, l, data, target
-                    empty_cache(device)
 
         # GPU clean up
         nnunet_trainer.network.to("cpu")
@@ -967,18 +965,22 @@ class FedSelect(FedAvg):
             len(proxy_dataloader.data_loader.indices)
             // proxy_dataloader.data_loader.batch_size
         )
+        # Pre-allocate one model copy on GPU for reuse across all proxy iterations
+        # (avoids repeated deepcopy + H2D transfer per iteration)
+        base_state_dict = copy.deepcopy(net_cpu.state_dict())
+        local_model_copy = copy.deepcopy(net_cpu).to(device)
+        if dynamo is not None:
+            try:
+                local_model_copy = dynamo.disable(local_model_copy)
+            except Exception:
+                pass
+
         # Iterate through proxy validation batches (outer loop)
         for proxy_batch_idx, proxy_batch in enumerate(proxy_dataloader):
             if proxy_batch_idx >= num_it_max:
                 break
-            # Create a copy of the local model for this meta-training iteration
-            local_model_copy = copy.deepcopy(net_cpu)
-            if dynamo is not None:
-                try:
-                    local_model_copy = dynamo.disable(local_model_copy)
-                except Exception:
-                    pass
-            local_model_copy.to(device)
+            # Reset model copy to initial state for this meta-training iteration
+            local_model_copy.load_state_dict(base_state_dict)
             local_model_copy.train()
             inner_step_success = False
 
@@ -1008,7 +1010,6 @@ class FedSelect(FedAvg):
                             f"train_batch={train_batch_idx}. Skipping this proxy iteration."
                         )
                         del output, cost, data, target
-                        empty_cache(device)
                         break
 
                     cost_v = cost.view(-1, 1)
@@ -1020,7 +1021,6 @@ class FedSelect(FedAvg):
                             f"train_batch={train_batch_idx}. Skipping this proxy iteration."
                         )
                         del output, cost, cost_v, data, target
-                        empty_cache(device)
                         break
 
                     # Compute importance weights using VNet
@@ -1033,7 +1033,6 @@ class FedSelect(FedAvg):
                             f"train_batch={train_batch_idx}. Skipping this proxy iteration."
                         )
                         del output, cost, cost_v, v_lambda, data, target
-                        empty_cache(device)
                         break
 
                     # Compute weighted loss
@@ -1046,7 +1045,6 @@ class FedSelect(FedAvg):
                             f"train_batch={train_batch_idx}. Skipping this proxy iteration."
                         )
                         del output, cost, cost_v, v_lambda, l_f_meta, data, target
-                        empty_cache(device)
                         break
 
                     # Compute gradients with create_graph=True to allow backprop through this step
@@ -1067,7 +1065,6 @@ class FedSelect(FedAvg):
                         f"train_batch={train_batch_idx}. Skipping this proxy iteration."
                     )
                     del output, cost, cost_v, v_lambda, l_f_meta, grads, data, target
-                    empty_cache(device)
                     break
 
                 # compute grad norm to then clip grads
@@ -1082,7 +1079,6 @@ class FedSelect(FedAvg):
                         f"train_batch={train_batch_idx}. Skipping this proxy iteration."
                     )
                     del output, cost, cost_v, v_lambda, l_f_meta, grads, grad_norm, data, target
-                    empty_cache(device)
                     break
                 
                 # clip gradients to avoid extreme updates that can cause non-finite values in subsequent steps
@@ -1106,22 +1102,15 @@ class FedSelect(FedAvg):
                         f"train_batch={train_batch_idx}. Skipping this proxy iteration."
                     )
                     del output, cost, cost_v, v_lambda, l_f_meta, grads, grad_norm, data, target
-                    empty_cache(device)
                     break
 
                 inner_step_success = True
                 del output, cost, cost_v, v_lambda, l_f_meta, grads, grad_norm
                 del data, target
-                empty_cache(device)
                 break
 
             if not inner_step_success:
-                del local_model_copy
-                empty_cache(device)
                 continue
-
-            # Free memory
-            empty_cache(device)
 
             # Evaluate on proxy validation batch
             # get data and target from proxy batch
@@ -1140,8 +1129,7 @@ class FedSelect(FedAvg):
                     f"client={client_id} round={fl_round} proxy_batch={proxy_batch_idx}. "
                     "Skipping this proxy iteration."
                 )
-                del local_model_copy, data_val, target_val
-                empty_cache(device)
+                del data_val, target_val
                 continue
 
             # feed through model and compute validation loss (meta-loss)
@@ -1158,8 +1146,7 @@ class FedSelect(FedAvg):
                         f"client={client_id} round={fl_round} proxy_batch={proxy_batch_idx}. "
                         "Skipping this proxy iteration."
                     )
-                    del y_g_hat, local_model_copy, data_val, target_val
-                    empty_cache(device)
+                    del y_g_hat, data_val, target_val
                     continue
 
                 l_g_meta = criterion(y_g_hat, target_val)
@@ -1170,8 +1157,7 @@ class FedSelect(FedAvg):
                         f"client={client_id} round={fl_round} proxy_batch={proxy_batch_idx}. "
                         "Skipping this proxy iteration."
                     )
-                    del y_g_hat, l_g_meta, local_model_copy, data_val, target_val
-                    empty_cache(device)
+                    del y_g_hat, l_g_meta, data_val, target_val
                     continue
 
             # Backprop validation loss to update VNet
@@ -1189,20 +1175,18 @@ class FedSelect(FedAvg):
                     "Skipping optimizer step."
                 )
                 meta_optimizer.zero_grad(set_to_none=True)
-                del y_g_hat, data_val, target_val, l_g_meta, meta_grad_norm, local_model_copy
-                empty_cache(device)
+                del y_g_hat, data_val, target_val, l_g_meta, meta_grad_norm
                 continue
 
             meta_optimizer.step()
             meta_loss_value = l_g_meta.item()
-            del y_g_hat, data_val, target_val
-            empty_cache(device)
+            del y_g_hat, data_val, target_val, l_g_meta
 
             meta_loss_total += meta_loss_value
             valid_meta_steps += 1
-            del local_model_copy, l_g_meta
-            empty_cache(device)
 
+        del local_model_copy, base_state_dict
+        empty_cache(device)
         vnet.eval()
 
         # # restore base model back to GPU for subsequent training steps
