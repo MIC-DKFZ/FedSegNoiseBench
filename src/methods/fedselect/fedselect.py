@@ -956,6 +956,18 @@ class FedSelect(FedAvg):
                 return all(_all_finite(v) for v in value.values())
             return True
 
+        def _restore_leaf_parameters(module: torch.nn.Module):
+            for child_module in module.children():
+                _restore_leaf_parameters(child_module)
+            for parameter_name, parameter in list(module._parameters.items()):
+                if parameter is None:
+                    continue
+                if not isinstance(parameter, torch.nn.Parameter) or not parameter.is_leaf:
+                    requires_grad = bool(getattr(parameter, "requires_grad", True))
+                    module._parameters[parameter_name] = torch.nn.Parameter(
+                        parameter.detach(), requires_grad=requires_grad
+                    )
+
         logging.info(
             f"FedSelect: Training meta model for client {client_id} "
             f"(FL round {fl_round})"
@@ -982,6 +994,7 @@ class FedSelect(FedAvg):
                 break
             # Reset model copy to initial state for this meta-training iteration
             local_model_copy.load_state_dict(base_state_dict)
+            _restore_leaf_parameters(local_model_copy)
             local_model_copy.train()
             inner_step_success = False
 
