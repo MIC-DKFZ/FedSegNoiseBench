@@ -110,6 +110,13 @@ class FedCorr(FedAvg):
                 self.LID_accumulative_client = {
                     int(k): v for k, v in self.LID_accumulative_client.items()
                 }
+            self.LID_client = {
+                int(k): (None if v is None else float(v))
+                for k, v in self.LID_client.items()
+            }
+            self.LID_accumulative_client = {
+                int(k): float(v) for k, v in self.LID_accumulative_client.items()
+            }
             if isinstance(self.loss_whole.keys().__iter__().__next__(), str):
                 self.loss_whole = {int(k): v for k, v in self.loss_whole.items()}
             if isinstance(
@@ -401,8 +408,11 @@ class FedCorr(FedAvg):
             c_id: Client ID
         """
         self.LID_whole[c_id] = lid_values
-        self.LID_client[c_id] = np.mean(lid_values)
-        self.LID_accumulative_client[c_id] += np.mean(lid_values)
+        lid_mean = float(np.mean(lid_values))
+        self.LID_client[c_id] = lid_mean
+        self.LID_accumulative_client[c_id] = (
+            float(self.LID_accumulative_client[c_id]) + lid_mean
+        )
 
     def set_loss(self, loss_values, c_id: int):
         """
