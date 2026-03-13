@@ -21,6 +21,10 @@ from nnunetv2.training.dataloading.data_loader_3d import nnUNetDataLoader3D
 from batchgenerators.dataloading.single_threaded_augmenter import (
     SingleThreadedAugmenter,
 )
+from batchgenerators.dataloading.nondet_multi_threaded_augmenter import (
+    NonDetMultiThreadedAugmenter,
+)
+from nnunetv2.utilities.default_n_proc_DA import get_allowed_n_proc_DA
 
 from methods.fedavg.fedavg import FedAvg
 
@@ -186,6 +190,11 @@ class FedSelect(FedAvg):
             self.reward_data_size_frac = reward_data_size_frac
             self.selected_clients = []  # Currently selected clients
             self.client_weights = {i: 0.0 for i in range(len(clients))}
+
+        self.analysis_max_batches = int(
+            os.getenv("FEDSELECT_ANALYSIS_MAX_BATCHES", "0")
+        )
+        self.fast_cudnn = os.getenv("FEDSELECT_FAST_CUDNN", "1") == "1"
 
         # Initialize dictionaries for all clients using consistent indexing
         client_ids = range(len(self.clients))
@@ -488,8 +497,7 @@ class FedSelect(FedAvg):
         # get net, loader, device, criterion from nnunet_trainer
         net = nnunet_trainer.network.to(nnunet_trainer.device)
         net.eval()
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
+        self._configure_analysis_backends(nnunet_trainer.device)
         loader = nnunet_trainer.dataloader_train
         device = nnunet_trainer.device
         criterion = nnunet_trainer.loss
@@ -501,31 +509,35 @@ class FedSelect(FedAvg):
         # forward pass through training data to compute sample losses
         processed_batch_el_keys = set()
         sample_weights = {}
-        with torch.no_grad():
+        max_batches = nnunet_trainer.num_iterations_per_epoch
+        if self.analysis_max_batches > 0:
+            max_batches = min(max_batches, self.analysis_max_batches)
+        with torch.inference_mode():
             for batch_idx, batch in enumerate(loader):
-                if batch_idx >= nnunet_trainer.num_iterations_per_epoch:
+                if batch_idx >= max_batches:
                     break
-                for batch_element_idx in range(len(batch["data"])):
-                    # get data, target, keys for this batch element
-                    data = batch["data"][batch_element_idx].unsqueeze(0)
-                    _target = batch["target"]
-                    key = batch["keys"][batch_element_idx]
+                data_batch = batch["data"].to(device, non_blocking=True)
+                _target = batch["target"]
+                if isinstance(_target, list):
+                    target_batch = [tg.to(device, non_blocking=True) for tg in _target]
+                else:
+                    target_batch = _target.to(device, non_blocking=True)
+
+                for batch_element_idx, key in enumerate(batch["keys"]):
 
                     # check if batch element already processed
                     if key in processed_batch_el_keys:
                         continue
 
-                    # some target handling and data to device
+                    data = data_batch[batch_element_idx : batch_element_idx + 1]
                     target = (
-                        [tg[batch_element_idx].unsqueeze(0) for tg in _target]
-                        if isinstance(_target, list)
-                        else _target[batch_element_idx].unsqueeze(0)
+                        [
+                            tg[batch_element_idx : batch_element_idx + 1]
+                            for tg in target_batch
+                        ]
+                        if isinstance(target_batch, list)
+                        else target_batch[batch_element_idx : batch_element_idx + 1]
                     )
-                    if isinstance(target, list):
-                        target = [i.to(device, non_blocking=True) for i in target]
-                    else:
-                        target = target.to(device, non_blocking=True)
-                    data = data.to(device, non_blocking=True)
 
                     # forward pass
                     with (
@@ -541,12 +553,19 @@ class FedSelect(FedAvg):
                     sample_weights[key] = float(weight.detach().mean().item())
                     processed_batch_el_keys.add(key)
 
+                    if len(processed_batch_el_keys) >= len(nnunet_trainer.tr_keys):
+                        break
+
+                del data_batch, target_batch
+                if len(processed_batch_el_keys) >= len(nnunet_trainer.tr_keys):
+                    break
+
         self.clients_sample_weights[client_id] = sample_weights
 
         logging.info(
             f"FedSelect: computed sample weights for client {client_id}, total samples: {len(sample_weights)}, example weights: {list(sample_weights.items())[:5]}"
         )
-        del net, loader, criterion, data, target, output, l, weight
+        del net, loader, criterion
         empty_cache(device)
 
     def compute_client_weights(self, nnunet_trainer, client_id: int):
@@ -585,8 +604,7 @@ class FedSelect(FedAvg):
         # get net, loader, device, criterion from nnunet_trainer
         net = nnunet_trainer.network.to(nnunet_trainer.device)
         net.eval()
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
+        self._configure_analysis_backends(nnunet_trainer.device)
         loader = nnunet_trainer.dataloader_train
         device = nnunet_trainer.device
         criterion = nnunet_trainer.loss
@@ -594,31 +612,35 @@ class FedSelect(FedAvg):
         # forward pass through training data to compute per-sample losses
         processed_batch_el_keys = {}
         sample_total_loss = {}
-        with torch.no_grad():
+        max_batches = nnunet_trainer.num_iterations_per_epoch
+        if self.analysis_max_batches > 0:
+            max_batches = min(max_batches, self.analysis_max_batches)
+        with torch.inference_mode():
             for batch_idx, batch in enumerate(loader):
-                if batch_idx >= nnunet_trainer.num_iterations_per_epoch:
+                if batch_idx >= max_batches:
                     break
-                for batch_element_idx in range(len(batch["data"])):
-                    # get data, target, keys for this batch element
-                    data = batch["data"][batch_element_idx].unsqueeze(0)
-                    _target = batch["target"]
-                    key = batch["keys"][batch_element_idx]
+                data_batch = batch["data"].to(device, non_blocking=True)
+                _target = batch["target"]
+                if isinstance(_target, list):
+                    target_batch = [tg.to(device, non_blocking=True) for tg in _target]
+                else:
+                    target_batch = _target.to(device, non_blocking=True)
+
+                for batch_element_idx, key in enumerate(batch["keys"]):
 
                     # check if batch element already processed
                     if key in processed_batch_el_keys:
                         continue
 
-                    # some target handling and data to device
+                    data = data_batch[batch_element_idx : batch_element_idx + 1]
                     target = (
-                        [tg[batch_element_idx].unsqueeze(0) for tg in _target]
-                        if isinstance(_target, list)
-                        else _target[batch_element_idx].unsqueeze(0)
+                        [
+                            tg[batch_element_idx : batch_element_idx + 1]
+                            for tg in target_batch
+                        ]
+                        if isinstance(target_batch, list)
+                        else target_batch[batch_element_idx : batch_element_idx + 1]
                     )
-                    if isinstance(target, list):
-                        target = [i.to(device, non_blocking=True) for i in target]
-                    else:
-                        target = target.to(device, non_blocking=True)
-                    data = data.to(device, non_blocking=True)
 
                     # forward pass
                     with (
@@ -636,8 +658,14 @@ class FedSelect(FedAvg):
 
                     del output, l, data, target
 
+                    if len(processed_batch_el_keys) >= len(nnunet_trainer.tr_keys):
+                        break
+
+                del data_batch, target_batch
+                if len(processed_batch_el_keys) >= len(nnunet_trainer.tr_keys):
+                    break
+
         # GPU clean up
-        nnunet_trainer.network.to("cpu")
         del net, loader, criterion
         empty_cache(device)
 
@@ -692,6 +720,22 @@ class FedSelect(FedAvg):
         normalized_tensor = (tensor - min_val) / (max_val - min_val)
         return normalized_tensor
 
+    def _configure_analysis_backends(self, device):
+        if device.type != "cuda":
+            return
+        if self.fast_cudnn:
+            torch.backends.cudnn.deterministic = False
+            torch.backends.cudnn.benchmark = True
+            if hasattr(torch.backends, "cuda") and hasattr(
+                torch.backends.cuda, "matmul"
+            ):
+                torch.backends.cuda.matmul.allow_tf32 = True
+            if hasattr(torch.backends, "cudnn"):
+                torch.backends.cudnn.allow_tf32 = True
+        else:
+            torch.backends.cudnn.deterministic = True
+            torch.backends.cudnn.benchmark = False
+
     def update_proxy_validation_dataset(
         self, nnunet_trainer=None, client_id: int = None
     ):
@@ -739,9 +783,7 @@ class FedSelect(FedAvg):
             nnunet_trainer = getattr(nnunet_trainer, "nnunet_trainer", None)
 
         if nnunet_trainer is not None and hasattr(nnunet_trainer, "dataloader_train"):
-            base_dataset = copy.deepcopy(
-                nnunet_trainer.dataloader_train.generator._data
-            )
+            base_dataset = copy.copy(nnunet_trainer.dataloader_train.generator._data)
         else:
             logging.warning(
                 f"FedSelect: No trainer provided for client {client_id}, "
@@ -767,7 +809,7 @@ class FedSelect(FedAvg):
             return None, 0.0
 
         # Create proxy validation dataset with selected identifiers
-        proxy_dataset = copy.deepcopy(base_dataset)
+        proxy_dataset = copy.copy(base_dataset)
         proxy_dataset.identifiers = top_k_identifiers
         if getattr(proxy_dataset, "identifiers_noise", None) is not None:
             proxy_dataset.identifiers_noise = {
@@ -820,7 +862,26 @@ class FedSelect(FedAvg):
                 transforms=val_transforms,
             )
 
-        proxy_dataloader = SingleThreadedAugmenter(dl_proxy, None)
+        allowed_num_processes = get_allowed_n_proc_DA()
+        proxy_num_processes = max(
+            0,
+            min(
+                allowed_num_processes,
+                int(os.getenv("FEDSELECT_PROXY_NPROC", "2")),
+            ),
+        )
+        if proxy_num_processes > 0:
+            proxy_dataloader = NonDetMultiThreadedAugmenter(
+                data_loader=dl_proxy,
+                transform=None,
+                num_processes=proxy_num_processes,
+                num_cached=max(3, proxy_num_processes),
+                seeds=None,
+                pin_memory=nnunet_trainer.device.type == "cuda",
+                wait_time=0.002,
+            )
+        else:
+            proxy_dataloader = SingleThreadedAugmenter(dl_proxy, None)
 
         # Compute total weight for selected samples
         total_value = sum(meta_margin[k] for k in top_k_keys if k in meta_margin)
@@ -962,7 +1023,10 @@ class FedSelect(FedAvg):
             for parameter_name, parameter in list(module._parameters.items()):
                 if parameter is None:
                     continue
-                if not isinstance(parameter, torch.nn.Parameter) or not parameter.is_leaf:
+                if (
+                    not isinstance(parameter, torch.nn.Parameter)
+                    or not parameter.is_leaf
+                ):
                     requires_grad = bool(getattr(parameter, "requires_grad", True))
                     module._parameters[parameter_name] = torch.nn.Parameter(
                         parameter.detach(), requires_grad=requires_grad
@@ -973,10 +1037,19 @@ class FedSelect(FedAvg):
             f"(FL round {fl_round})"
         )
 
-        num_it_max = (
-            len(proxy_dataloader.data_loader.indices)
-            // proxy_dataloader.data_loader.batch_size
-        )
+        proxy_data_loader = getattr(proxy_dataloader, "data_loader", None)
+        proxy_indices = getattr(proxy_data_loader, "indices", None)
+        proxy_batch_size = getattr(proxy_data_loader, "batch_size", 1)
+        if proxy_indices is not None:
+            num_it_max = max(1, len(proxy_indices) // max(proxy_batch_size, 1))
+        else:
+            num_it_max = max(
+                1,
+                int(
+                    self.reward_data_size_frac
+                    * max(len(self.meta_margin_pre.get(client_id, {})), 1)
+                ),
+            )
         # Pre-allocate one model copy on GPU for reuse across all proxy iterations
         # (avoids repeated deepcopy + H2D transfer per iteration)
         local_model_copy = copy.deepcopy(net_cpu).to(device)
@@ -1092,13 +1165,25 @@ class FedSelect(FedAvg):
                         f"client={client_id} round={fl_round} proxy_batch={proxy_batch_idx} "
                         f"train_batch={train_batch_idx}. Skipping this proxy iteration."
                     )
-                    del output, cost, cost_v, v_lambda, l_f_meta, grads, grad_norm, data, target
+                    del (
+                        output,
+                        cost,
+                        cost_v,
+                        v_lambda,
+                        l_f_meta,
+                        grads,
+                        grad_norm,
+                        data,
+                        target,
+                    )
                     break
-                
+
                 # clip gradients to avoid extreme updates that can cause non-finite values in subsequent steps
                 clip_coef = min(1.0, max_inner_grad_norm / (grad_norm.item() + 1e-6))
                 if clip_coef < 1.0:
-                    grads = tuple((g * clip_coef) if g is not None else None for g in grads)
+                    grads = tuple(
+                        (g * clip_coef) if g is not None else None for g in grads
+                    )
 
                 # Perform meta-SGD step (inner loop optimization)
                 pseudo_optimizer = MetaSGD(
@@ -1115,7 +1200,17 @@ class FedSelect(FedAvg):
                         f"client={client_id} round={fl_round} proxy_batch={proxy_batch_idx} "
                         f"train_batch={train_batch_idx}. Skipping this proxy iteration."
                     )
-                    del output, cost, cost_v, v_lambda, l_f_meta, grads, grad_norm, data, target
+                    del (
+                        output,
+                        cost,
+                        cost_v,
+                        v_lambda,
+                        l_f_meta,
+                        grads,
+                        grad_norm,
+                        data,
+                        target,
+                    )
                     break
 
                 inner_step_success = True
