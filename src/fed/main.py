@@ -14,6 +14,8 @@ print(f"{sys.path=}")
 from orchestrator import Orchestrator
 from client import Client
 import json
+import random
+import string
 
 
 def cli_args_to_file(args, experiment_id: str):
@@ -32,7 +34,8 @@ def cli_args_to_file(args, experiment_id: str):
 
 def main(args):
     # setup experiment id
-    experiment_id = f"{args.noise_mitigation_method.lower()}_noiseroa{args.noise_ratio}_fold{args.fold}_clients{args.num_clients}_flrounds{args.num_rounds}_localepochs{args.num_local_epochs}_{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    random_hash = "".join(random.choices(string.ascii_lowercase + string.digits, k=5))
+    experiment_id = f"{args.noise_mitigation_method.lower()}_noiseroa{args.noise_ratio}_fold{args.fold}_clients{args.num_clients}_flrounds{args.num_rounds}_localepochs{args.num_local_epochs}_{datetime.now().strftime('%Y%m%d-%H%M%S')}_{random_hash}"
 
     # # set up logging
     # setup_logging(args, experiment_id)
