@@ -328,7 +328,7 @@ class FedCorr(FedAvg):
         logging.info("Computing LID scores in batched manner...")
         logging.info(f"Time: {start_time}")
         # ensure batch size does not exceed dataloader batch size
-        default_batch_size = 16
+        default_batch_size = 1
         batch_size = min(
             default_batch_size, self.clients[0].model.nnunet_trainer.batch_size
         )
