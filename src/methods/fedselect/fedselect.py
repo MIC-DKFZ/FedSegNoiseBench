@@ -5,6 +5,7 @@ Paper: https://dl.acm.org/doi/epdf/10.1145/3711896.3737093
 """
 
 import copy
+import importlib.util
 import os
 import torch
 import torch.nn.functional as F
@@ -140,6 +141,7 @@ class FedSelect(FedAvg):
         sample_select_ratio: float = None,
         meta_momentum: float = None,
         reward_data_size_frac: float = None,
+        proxy_batch_size: int = None,
         fl_strategy_state: dict = None,
     ):
         """
@@ -153,12 +155,21 @@ class FedSelect(FedAvg):
             sample_select_ratio: Ratio of samples to select per client (default: 0.6)
             meta_momentum: Momentum for meta-margin computation (default: 0.9)
             reward_data_size_frac: Fraction of reward/proxy validation dataset size (default: 0.1)
+            proxy_batch_size: Batch size for proxy validation (default: None)
             fl_strategy_state: Dictionary containing saved state for restart (default: None)
         """
         # Call parent FedAvg constructor
         super().__init__(clients=clients)
 
         self.name = "fedselect"
+
+        def _coerce_positive_int_or_none(value):
+            if value is None:
+                return None
+            try:
+                return max(1, int(value))
+            except (TypeError, ValueError):
+                return None
 
         # Load from saved state if available, otherwise use provided parameters
         if fl_strategy_state is not None:
@@ -168,6 +179,9 @@ class FedSelect(FedAvg):
             self.meta_momentum = fl_strategy_state["meta_momentum"]
             self.meta_lr = fl_strategy_state["meta_lr"]
             self.reward_data_size_frac = fl_strategy_state["reward_data_size_frac"]
+            self.proxy_batch_size = _coerce_positive_int_or_none(
+                fl_strategy_state.get("proxy_batch_size", proxy_batch_size)
+            )
             # Convert string keys back to integers (from JSON serialization)
             self.selected_clients = [
                 int(cid) if isinstance(cid, str) else cid
@@ -188,6 +202,7 @@ class FedSelect(FedAvg):
             self.meta_momentum = meta_momentum
             self.meta_lr = 1e-3  # default learning rate for VNet meta model
             self.reward_data_size_frac = reward_data_size_frac
+            self.proxy_batch_size = _coerce_positive_int_or_none(proxy_batch_size)
             self.selected_clients = []  # Currently selected clients
             self.client_weights = {i: 0.0 for i in range(len(clients))}
 
@@ -195,6 +210,8 @@ class FedSelect(FedAvg):
             os.getenv("FEDSELECT_ANALYSIS_MAX_BATCHES", "0")
         )
         self.fast_cudnn = os.getenv("FEDSELECT_FAST_CUDNN", "1") == "1"
+        self.kornia_available = importlib.util.find_spec("kornia") is not None
+        self._kornia_hint_logged = False
 
         # Initialize dictionaries for all clients using consistent indexing
         client_ids = range(len(self.clients))
@@ -302,6 +319,7 @@ class FedSelect(FedAvg):
             "meta_momentum": self.meta_momentum,
             "meta_lr": self.meta_lr,
             "reward_data_size_frac": self.reward_data_size_frac,
+            "proxy_batch_size": self.proxy_batch_size,
             "selected_clients": self.selected_clients,
             "client_weights": self.client_weights,
             "meta_margin_pre": self.meta_margin_pre,
@@ -481,6 +499,12 @@ class FedSelect(FedAvg):
             client_id: Client identifier
             fl_round: Current FL round
         """
+        if self.kornia_available and not self._kornia_hint_logged:
+            logging.info(
+                "FedSelect: Kornia is available for potential GPU-side augmentations."
+            )
+            self._kornia_hint_logged = True
+
         # during warmup, assign uniform weights
         if fl_round < self.warmup_rounds:
             logging.info(
@@ -499,6 +523,11 @@ class FedSelect(FedAvg):
         net.eval()
         self._configure_analysis_backends(nnunet_trainer.device)
         loader = nnunet_trainer.dataloader_train
+        # Optimize dataloader workers and pin_memory for GPU
+        if hasattr(loader, 'num_workers'):
+            loader.num_workers = int(os.getenv("FEDSELECT_TRAIN_NUM_WORKERS", str(os.cpu_count() or 8)))
+        if hasattr(loader, 'pin_memory'):
+            loader.pin_memory = nnunet_trainer.device.type == "cuda"
         device = nnunet_trainer.device
         criterion = nnunet_trainer.loss
 
@@ -545,6 +574,7 @@ class FedSelect(FedAvg):
                         if device.type == "cuda"
                         else dummy_context()
                     ):
+                        # Ensure mixed precision is used for all relevant ops
                         output = net(data)
                         l = criterion(output, target)
 
@@ -836,7 +866,16 @@ class FedSelect(FedAvg):
             ignore_label=nnunet_trainer.label_manager.ignore_label,
         )
 
-        proxy_batch_size = 1  # min(nnunet_trainer.batch_size, len(top_k_identifiers))
+        default_proxy_batch_size = min(
+            max(1, int(nnunet_trainer.batch_size)), len(top_k_identifiers)
+        )
+        configured_proxy_batch_size = self.proxy_batch_size
+        if configured_proxy_batch_size is None:
+            proxy_batch_size = default_proxy_batch_size
+        else:
+            proxy_batch_size = min(
+                max(1, int(configured_proxy_batch_size)), len(top_k_identifiers)
+            )
         if dim == 2:
             dl_proxy = nnUNetDataLoader2D(
                 proxy_dataset,
@@ -867,9 +906,10 @@ class FedSelect(FedAvg):
             0,
             min(
                 allowed_num_processes,
-                int(os.getenv("FEDSELECT_PROXY_NPROC", "2")),
+                int(os.getenv("FEDSELECT_PROXY_NPROC", str(os.cpu_count() or 8))),
             ),
         )
+        # Use more processes for large/multi-channel datasets
         if proxy_num_processes > 0:
             proxy_dataloader = NonDetMultiThreadedAugmenter(
                 data_loader=dl_proxy,
@@ -1373,6 +1413,7 @@ class FedSelect(FedAvg):
                 "meta_margin_pre": self.meta_margin_pre,
                 "sample_total_loss_pre": self.sample_total_loss_pre,
                 "clients_sample_weights": self.clients_sample_weights,
+                "proxy_batch_size": self.proxy_batch_size,
             }
         )
 

@@ -67,6 +67,7 @@ class Orchestrator:
                 fl_args["fedselect_sample_select_ratio"],
                 fl_args["fedselect_meta_momentum"],
                 fl_args["fedselect_reward_data_size_frac"],
+                fl_args["fedselect_proxy_batch_size"],
                 fl_strategy_state=fl_args.get("fl_strategy_state", None),
             )
         else:

@@ -194,6 +194,7 @@ def get_experiment_args(exp_id: str):
         "fedselect_sample_select_ratio",
         "fedselect_meta_momentum",
         "fedselect_reward_data_size_frac",
+        "fedselect_proxy_batch_size",
         "fl_strategy_state",
     ]
     (
@@ -225,6 +226,7 @@ def get_experiment_args(exp_id: str):
         fedselect_sample_select_ratio,
         fedselect_meta_momentum,
         fedselect_reward_data_size_frac,
+        fedselect_proxy_batch_size,
         fl_strategy_state,
     ) = [exp_cli_args.get(k) for k in keys]
 
@@ -303,6 +305,7 @@ def get_experiment_args(exp_id: str):
         fedselect_sample_select_ratio,
         fedselect_meta_momentum,
         fedselect_reward_data_size_frac,
+        fedselect_proxy_batch_size,
         start_epoch,
         start_fl_round,
         fl_strategy_state,
@@ -345,6 +348,7 @@ def main(args):
         fedselect_sample_select_ratio,
         fedselect_meta_momentum,
         fedselect_reward_data_size_frac,
+        fedselect_proxy_batch_size,
         start_epoch,
         start_fl_round,
         fl_strategy_state,
@@ -352,7 +356,7 @@ def main(args):
 
     print(f"Restarting experiment '{args.exp_id}' with the following args:")
     print(
-        f"{dataset_ids=}\n{configuration=}\n{fold=}\n{plan=}\n{trainer=}\n{save_every=}\n{oversample_foreground_percent=}\n{class_sampling_probabilities=}\n{batch_element_class_probabilities=}\n{noise_ratio=}\n{num_clients=}\n{num_rounds=}\n{num_local_epochs=}\n{clean_validation_datasets=}\n{noisy_train_folders=}\n{noise_mitigation_method=}\n{feda3i_warmup_rounds_frac=}\n{feda3i_interw=}\n{feddm_gamma_hgd_smoothing=}\n{feddm_ratio_cac_pixelselection=}\n{feddm_cac_label_correction=}\n{feddm_loss=}\n{iopfl_alpha=}\n{fedcorr_preproc_rounds_frac=}\n{fedcorr_relabel_ratio=}\n{fedcorr_relabel_confidence_thres=}\n{fedcorr_proxterm_beta=}\n{fedselect_warmup_rounds_frac=}\n{fedselect_client_select_ratio=}\n{fedselect_sample_select_ratio=}\n{fedselect_meta_momentum=}\n{fedselect_reward_data_size_frac=}\n{start_epoch=}\n{start_fl_round=}\n"
+        f"{dataset_ids=}\n{configuration=}\n{fold=}\n{plan=}\n{trainer=}\n{save_every=}\n{oversample_foreground_percent=}\n{class_sampling_probabilities=}\n{batch_element_class_probabilities=}\n{noise_ratio=}\n{num_clients=}\n{num_rounds=}\n{num_local_epochs=}\n{clean_validation_datasets=}\n{noisy_train_folders=}\n{noise_mitigation_method=}\n{feda3i_warmup_rounds_frac=}\n{feda3i_interw=}\n{feddm_gamma_hgd_smoothing=}\n{feddm_ratio_cac_pixelselection=}\n{feddm_cac_label_correction=}\n{feddm_loss=}\n{iopfl_alpha=}\n{fedcorr_preproc_rounds_frac=}\n{fedcorr_relabel_ratio=}\n{fedcorr_relabel_confidence_thres=}\n{fedcorr_proxterm_beta=}\n{fedselect_warmup_rounds_frac=}\n{fedselect_client_select_ratio=}\n{fedselect_sample_select_ratio=}\n{fedselect_meta_momentum=}\n{fedselect_reward_data_size_frac=}\n{fedselect_proxy_batch_size=}\n{start_epoch=}\n{start_fl_round=}\n"
     )
 
     # setup clients
@@ -471,6 +475,11 @@ def main(args):
             ),
             "fedselect_reward_data_size_frac": (
                 fedselect_reward_data_size_frac
+                if noise_mitigation_method.lower() == "fedselect"
+                else None
+            ),
+            "fedselect_proxy_batch_size": (
+                fedselect_proxy_batch_size
                 if noise_mitigation_method.lower() == "fedselect"
                 else None
             ),

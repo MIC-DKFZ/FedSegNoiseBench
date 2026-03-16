@@ -170,6 +170,11 @@ def main(args):
                 if args.noise_mitigation_method.lower() == "fedselect"
                 else None
             ),
+            "fedselect_proxy_batch_size": (
+                args.fedselect_proxy_batch_size
+                if args.noise_mitigation_method.lower() == "fedselect"
+                else None
+            ),
         },
     )
 
@@ -198,6 +203,11 @@ def check_cli_args(args):
     assert args.save_every > 0 and args.save_every >= min(
         args.num_local_epochs, args.num_rounds
     ), "--save_every must be positive and larger than or equal to min(--num_local_epochs, --num_rounds)"
+
+    if args.fedselect_proxy_batch_size is not None:
+        assert (
+            args.fedselect_proxy_batch_size > 0
+        ), "--fedselect_proxy_batch_size must be a positive integer"
 
 
 if __name__ == "__main__":
@@ -387,6 +397,12 @@ if __name__ == "__main__":
         type=float,
         default=0.1,
         help="Fraction of proxy validation/reward dataset size in FedSelect (default: 0.1).",
+    )
+    parser.add_argument(
+        "--fedselect_proxy_batch_size",
+        type=int,
+        default=None,
+        help="Proxy validation batch size in FedSelect (default: None, uses trainer batch size).",
     )
 
     # other arguments
