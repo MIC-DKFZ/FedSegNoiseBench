@@ -20,14 +20,14 @@ raw_dataset_col = "Data"
 noise_col = "Noise"
 metric_col = "Mean(D_val)"
 
-target_algos = ["FedAvg", "FedA3I", "IOP-FL", "FedCorr"]
+target_algos = ["FedAvg", "FedA3I", "IOP-FL", "FedCorr", "FedSelect"]
 target_datasets = ["LIDC", "RIGA", "Gleason", "MouseTumor", "MMIA", "MMIS"]
 noise_order = ["0", "roa(X)", "roc(X)", "100"]  # plotting order
 
 # Include only results from these folds (fold numbers: 0, 1, 2, 3, 4)
 included_folds = [0, 1, 2]
 
-OUTPUT_DIR = Path("./results")
+OUTPUT_DIR = Path("./results/segmentation_results")
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # for reading results from experiment's summary.json
@@ -87,6 +87,25 @@ print(f"Loaded {len(df)} rows from Google Sheets.")
 # Basic cleaning for algorithm and dataset columns
 for c in [algo_col, raw_dataset_col]:
     df[c] = df[c].astype(str).str.strip()
+
+
+def normalize_algorithm(name: str) -> str:
+    n = str(name).strip().lower()
+    n_compact = re.sub(r"[\s_\-]+", "", n)
+    if n_compact == "fedavg":
+        return "FedAvg"
+    if n_compact == "feda3i":
+        return "FedA3I"
+    if n_compact == "iopfl":
+        return "IOP-FL"
+    if n_compact == "fedcorr":
+        return "FedCorr"
+    if n_compact == "fedselect":
+        return "FedSelect"
+    return str(name).strip()
+
+
+df[algo_col] = df[algo_col].apply(normalize_algorithm)
 
 # Clean metric column: replace comma decimal separators with dot, remove percent signs/spaces, and convert to float.
 # This ensures values like "0,01" become 0.01 and allows mean() to average across folds.
@@ -2448,8 +2467,8 @@ def plot_boxplots_roc_per_client_bootstrapping(df_all: pd.DataFrame, classwise=F
 # # boxplots clean vs roc(X) vs noisy per dataset/class across methods from bootstrapping
 # plot_classwise_boxplots_clean_roc_noisy_bootstrapping(df)
 
-# # boxplots clean vs roa(X) vs roc(X) vs noisy per dataset/class across methods from bootstrapping
-# plot_boxplots_clean_roa_roc_noisy_bootstrapping(df, classwise=False)
+# boxplots clean vs roa(X) vs roc(X) vs noisy per dataset/class across methods from bootstrapping
+plot_boxplots_clean_roa_roc_noisy_bootstrapping(df, classwise=False)
 
 # boxplots roa(X) per client per dataset/class across methods from bootstrapping
 plot_boxplots_roa_per_client_bootstrapping(df, classwise=False)
