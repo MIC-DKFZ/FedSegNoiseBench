@@ -211,8 +211,19 @@ class Orchestrator:
                 most_influential_client_id = (
                     self.fl_strategy.get_most_influential_client()
                 )
+                self._log_cuda_memory("FedSelect before trainer offload")
+                self._move_all_clients_trainers_to_device(torch.device("cpu"))
                 torch.cuda.empty_cache()
-                self.fl_strategy.train_meta_model(most_influential_client_id, fl_round)
+                self._log_cuda_memory("FedSelect after trainer offload+empty_cache")
+                try:
+                    self._log_cuda_memory("FedSelect before meta model training")
+                    self.fl_strategy.train_meta_model(
+                        most_influential_client_id, fl_round
+                    )
+                finally:
+                    self._move_all_clients_trainers_to_device(torch.device("cuda"))
+                    torch.cuda.empty_cache()
+                    self._log_cuda_memory("FedSelect after trainer restore+empty_cache")
             else:
                 raise NotImplementedError(
                     f"Federated learning strategy {self.fl_strategy.name} not implemented!"
@@ -306,4 +317,58 @@ class Orchestrator:
             ):
                 self.fl_strategy.global_fl_model_weights = copy.deepcopy(
                     self.server_model_weights
+                )
+
+    def _move_optimizer_state_to_device(self, optimizer, device: torch.device):
+        if optimizer is None:
+            return
+        for state in optimizer.state.values():
+            for key, value in state.items():
+                if torch.is_tensor(value):
+                    state[key] = value.to(device)
+
+    def _log_cuda_memory(self, tag: str):
+        if not torch.cuda.is_available():
+            return
+        device = torch.device("cuda")
+        try:
+            torch.cuda.synchronize(device)
+        except Exception:
+            pass
+        allocated_gib = torch.cuda.memory_allocated(device) / (1024**3)
+        reserved_gib = torch.cuda.memory_reserved(device) / (1024**3)
+        max_allocated_gib = torch.cuda.max_memory_allocated(device) / (1024**3)
+        free_bytes, total_bytes = torch.cuda.mem_get_info(device)
+        free_gib = free_bytes / (1024**3)
+        total_gib = total_bytes / (1024**3)
+        logging.info(
+            f"{tag}: cuda_allocated={allocated_gib:.2f} GiB, "
+            f"cuda_reserved={reserved_gib:.2f} GiB, "
+            f"cuda_max_allocated={max_allocated_gib:.2f} GiB, "
+            f"cuda_free={free_gib:.2f}/{total_gib:.2f} GiB"
+        )
+
+    def _move_all_clients_trainers_to_device(self, device: torch.device):
+        """
+        Move all available client nnUNet trainer modules/state to the target device.
+        This is used to free GPU memory before FedSelect meta-model training and to
+        restore trainer state afterwards.
+        """
+        for client in self.clients:
+            trainer = getattr(client.model, "nnunet_trainer", None)
+            if trainer is None:
+                continue
+            try:
+                if getattr(trainer, "network", None) is not None:
+                    trainer.network = trainer.network.to(device)
+                loss_module = getattr(trainer, "loss", None)
+                if hasattr(loss_module, "to"):
+                    trainer.loss = loss_module.to(device)
+                self._move_optimizer_state_to_device(
+                    getattr(trainer, "optimizer", None), device
+                )
+            except Exception as e:
+                logging.warning(
+                    f"Could not move trainer state for client {client.client_id} "
+                    f"to {device}: {e}"
                 )
