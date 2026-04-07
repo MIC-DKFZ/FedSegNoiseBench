@@ -41,6 +41,23 @@ python3 ./src/data/utils/nnunet_fed_preparation.py --dataset_ids "505 506 507 50
 
 ## Figure generation
 
+By default, the result-processing scripts that load `nnUNet` evaluation outputs for plots combine checkpoints from both of these roots:
+
+```
+/home/m391k/cluster-data/checkpoints/nnUNet_results
+/home/m391k/juwels/checkpoints/nnUNet_results
+```
+
+This currently applies to:
+
+- `src/eval/results_processing/visualize_results.py`
+- `src/eval/results_processing/visualize_ranking.py`
+- `src/eval/results_processing/partial_noisy_scenarios_global_comparison.py`
+- `src/eval/results_processing/roc_clean_vs_noisy_clients_global_comparison.py`
+
+The scripts merge experiment paths from both locations and deduplicate them before filtering to the configured folds.
+If you set the environment variable `nnUNet_results` or pass `--nnunet-results-root` to scripts that support it, that single path is used instead of the two default roots.
+
 Overall segmentation performance boxplots:
 ```
 python3 ./src/eval/results_processing/visualize_results.py
@@ -51,7 +68,12 @@ Overall ranking stability plots:
 python3 ./src/eval/results_processing/visualize_ranking.py --output-dir ./results/segmentation_results/ranking_stability
 ```
 
-Overall partial noise settings (roc, roa) comparison AND roc-clean vs roc-noisy clients comparison:
+Overall partial noise settings (`roa` vs `roc`) comparison:
+```
+python3 ./src/eval/results_processing/partial_noisy_scenarios_global_comparison.py --output-dir ./results/segmentation_results/partial_noise_comparison --figure paired_dot
+```
+
+Per-client -- roc-clean vs roc-noisy clients comparison:
 ```
 python3 ./src/eval/results_processing/roc_clean_vs_noisy_clients_global_comparison.py --output-dir ./results/segmentation_results/partial_noise_comparison --figure paired_dot
 ```

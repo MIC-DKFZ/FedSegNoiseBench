@@ -31,10 +31,17 @@ OUTPUT_DIR = Path("./results/segmentation_results")
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # for reading results from experiment's summary.json
-nnUNet_results = Path("/home/m391k/cluster-data/checkpoints/nnUNet_results")
-nnUNet_results_all_exps_raw = glob.glob(
-    str(nnUNet_results / "*" / "*" / "fold_*" / "*")
-)
+nnUNet_results_roots = [
+    Path("/home/m391k/cluster-data/checkpoints/nnUNet_results"),
+    Path("/home/m391k/juwels/checkpoints/nnUNet_results"),
+]
+nnUNet_results_all_exps_raw = []
+for nnUNet_results in nnUNet_results_roots:
+    nnUNet_results_all_exps_raw.extend(
+        glob.glob(str(nnUNet_results / "*" / "*" / "fold_*" / "*"))
+    )
+
+nnUNet_results_all_exps_raw = sorted(set(nnUNet_results_all_exps_raw))
 # Filter by included_folds
 nnUNet_results_all_exps = [
     p

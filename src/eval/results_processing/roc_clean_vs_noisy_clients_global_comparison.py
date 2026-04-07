@@ -27,7 +27,7 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Sequence
 
 import matplotlib
 
@@ -53,6 +53,10 @@ fold_col = "Fold"
 TARGET_ALGOS = ["FedAvg", "FedA3I", "IOP-FL", "FedCorr", "FedSelect"]
 TARGET_DATASETS = ["LIDC", "RIGA", "Gleason", "MouseTumor", "MMIA", "MMIS"]
 INCLUDED_FOLDS = [0, 1, 2]
+DEFAULT_NNUNET_RESULTS_ROOTS = [
+    Path("/home/m391k/cluster-data/checkpoints/nnUNet_results"),
+    Path("/home/m391k/juwels/checkpoints/nnUNet_results"),
+]
 
 OUTPUT_DIR = Path(
     "./results/segmentation_results/roc_clean_vs_noisy_clients_comparison"
@@ -127,10 +131,26 @@ def load_bootstrap_metric_vector(
     return np.nanmean(padded, axis=0)
 
 
-def build_experiment_path_index(nnunet_results_root: Path) -> List[Path]:
-    all_exp_paths_raw = glob.glob(str(nnunet_results_root / "*" / "*" / "fold_*" / "*"))
-    all_exp_paths = [Path(p) for p in all_exp_paths_raw]
+def build_experiment_path_index(nnunet_results_roots: Sequence[Path]) -> List[Path]:
+    all_exp_paths_raw: List[str] = []
+    for nnunet_results_root in nnunet_results_roots:
+        all_exp_paths_raw.extend(
+            glob.glob(str(nnunet_results_root / "*" / "*" / "fold_*" / "*"))
+        )
+
+    all_exp_paths = sorted({Path(p) for p in all_exp_paths_raw}, key=str)
     return [p for p in all_exp_paths if extract_fold_from_path(p) in INCLUDED_FOLDS]
+
+
+def resolve_nnunet_results_roots(cli_root: Optional[Path]) -> List[Path]:
+    if cli_root is not None:
+        return [Path(cli_root)]
+
+    env_root = os.environ.get("nnUNet_results")
+    if env_root:
+        return [Path(env_root)]
+
+    return DEFAULT_NNUNET_RESULTS_ROOTS.copy()
 
 
 def extract_fold_from_path(path: Path) -> Optional[int]:
@@ -412,7 +432,7 @@ def print_table(result: pd.DataFrame) -> None:
 
     print()
     print("=" * 120)
-    print("ROC client-group comparison: clean baseline vs roc clean/noisy clients")
+    print("roc client-group comparison: clean baseline vs roc clean/noisy clients")
     print("=" * 120)
     print(display.to_string(index=False))
     print()
@@ -841,7 +861,7 @@ def plot_comparison_paired_dot(
             fontsize=10,
         )
 
-    ax.set_xlabel("ROC client group per method", fontsize=11, labelpad=22)
+    ax.set_xlabel("roc client group per method", fontsize=11, labelpad=22)
     ax.set_ylabel(r"$\Delta Dice$(clean, roc client group)", fontsize=11)
     ax.grid(axis="y", alpha=0.3, linestyle="--")
 
@@ -905,18 +925,31 @@ def main() -> None:
         default="paired_dot",
         help="Generate figure: scatter_plot, paired_dot, no_figure.",
     )
+    parser.add_argument(
+        "--nnunet-results-root",
+        type=Path,
+        default=None,
+        help=(
+            "Root directory of nnUNet results. If not set, uses $nnUNet_results "
+            "environment variable or searches these defaults: "
+            f"{', '.join(str(p) for p in DEFAULT_NNUNET_RESULTS_ROOTS)}."
+        ),
+    )
     args = parser.parse_args()
 
     out_dir: Path = args.output_dir
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    nnunet_results_root = Path("/home/m391k/cluster-data/checkpoints/nnUNet_results")
-    print(f"Using nnUNet results root: {nnunet_results_root}")
+    nnunet_results_roots = resolve_nnunet_results_roots(args.nnunet_results_root)
+    print(
+        "Using nnUNet results roots: "
+        + ", ".join(str(root) for root in nnunet_results_roots)
+    )
 
     df = load_sheet()
 
     print("Building checkpoint index...")
-    all_exp_paths = build_experiment_path_index(nnunet_results_root)
+    all_exp_paths = build_experiment_path_index(nnunet_results_roots)
     print(f"Found {len(all_exp_paths)} checkpoint paths in folds {INCLUDED_FOLDS}.")
 
     print("Loading bootstrap Dice vectors...")

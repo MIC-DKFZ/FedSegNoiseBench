@@ -64,6 +64,31 @@ DEFAULT_OUTPUT_DIR = OUTPUT_DIR / "ranking_stability"
 DEFAULT_SUMMARY_CSV = DEFAULT_OUTPUT_DIR / "ranking_stability_summary.csv"
 DEFAULT_BLOB_SCALE = 2200.0
 DEFAULT_DPI = 220
+DEFAULT_NNUNET_RESULTS_ROOTS = [
+    DEFAULT_NNUNET_RESULTS_ROOT,
+    Path("/home/m391k/juwels/checkpoints/nnUNet_results"),
+]
+
+
+def resolve_nnunet_results_roots(cli_root: Optional[Path]) -> List[Path]:
+    if cli_root is not None:
+        return [Path(cli_root)]
+
+    env_root = os.environ.get("nnUNet_results")
+    if env_root:
+        return [Path(env_root)]
+
+    return DEFAULT_NNUNET_RESULTS_ROOTS.copy()
+
+
+def build_experiment_path_index_for_roots(
+    nnunet_results_roots: Sequence[Path],
+) -> List[Path]:
+    all_exp_paths: List[Path] = []
+    for root in nnunet_results_roots:
+        all_exp_paths.extend(build_experiment_path_index(Path(root)))
+
+    return sorted(set(all_exp_paths), key=str)
 
 
 def load_bootstrap_metric_vector(
@@ -764,14 +789,13 @@ def main() -> None:
             "Example: --datasets LIDC RIGA Gleason MouseTumor MMIA MMIS"
         ),
     )
-    _env_root = os.environ.get("nnUNet_results")
     parser.add_argument(
         "--nnunet-results-root",
         type=Path,
-        default=Path(_env_root) if _env_root else DEFAULT_NNUNET_RESULTS_ROOT,
+        default=None,
         help=(
-            "Root directory of nnUNet results (default: $nnUNet_results env var, "
-            f"fallback: {DEFAULT_NNUNET_RESULTS_ROOT})"
+            "Root directory of nnUNet results. If not set, uses $nnUNet_results "
+            f"or searches these defaults: {', '.join(str(p) for p in DEFAULT_NNUNET_RESULTS_ROOTS)}"
         ),
     )
     args = parser.parse_args()
@@ -783,7 +807,12 @@ def main() -> None:
     df = load_and_preprocess_results()
     df = filter_records_to_included_folds(df)
     df = filter_records_to_selected_datasets(df, selected_datasets)
-    all_exp_paths = build_experiment_path_index(Path(args.nnunet_results_root))
+    nnunet_results_roots = resolve_nnunet_results_roots(args.nnunet_results_root)
+    print(
+        "Using nnUNet results roots: "
+        + ", ".join(str(root) for root in nnunet_results_roots)
+    )
+    all_exp_paths = build_experiment_path_index_for_roots(nnunet_results_roots)
     client_vectors_df = collect_client_bootstrap_vectors(df, all_exp_paths)
 
     if client_vectors_df.empty:

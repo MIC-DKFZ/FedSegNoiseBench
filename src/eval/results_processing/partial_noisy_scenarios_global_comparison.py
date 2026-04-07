@@ -32,7 +32,7 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Sequence
 
 import matplotlib
 
@@ -59,6 +59,10 @@ mean_dice_col = "Mean(D_val)"
 TARGET_ALGOS = ["FedAvg", "FedA3I", "IOP-FL", "FedCorr", "FedSelect"]
 TARGET_DATASETS = ["LIDC", "RIGA", "Gleason", "MouseTumor", "MMIA", "MMIS"]
 INCLUDED_FOLDS = [0, 1, 2]
+DEFAULT_NNUNET_RESULTS_ROOTS = [
+    Path("/home/m391k/cluster-data/checkpoints/nnUNet_results"),
+    Path("/home/m391k/juwels/checkpoints/nnUNet_results"),
+]
 
 OUTPUT_DIR = Path("./results/segmentation_results/partial_noise_comparison")
 
@@ -171,14 +175,30 @@ def load_bootstrap_metric_vector(
     return result_arr
 
 
-def build_experiment_path_index(nnunet_results_root: Path) -> List[Path]:
-    """Index all experiment paths by fold."""
-    all_exp_paths_raw = glob.glob(str(nnunet_results_root / "*" / "*" / "fold_*" / "*"))
-    all_exp_paths = [Path(p) for p in all_exp_paths_raw]
+def build_experiment_path_index(nnunet_results_roots: Sequence[Path]) -> List[Path]:
+    """Index all experiment paths by fold across one or more roots."""
+    all_exp_paths_raw: List[str] = []
+    for nnunet_results_root in nnunet_results_roots:
+        all_exp_paths_raw.extend(
+            glob.glob(str(nnunet_results_root / "*" / "*" / "fold_*" / "*"))
+        )
+
+    all_exp_paths = sorted({Path(p) for p in all_exp_paths_raw}, key=str)
     filtered_exp_paths = [
         p for p in all_exp_paths if extract_fold_from_path(p) in INCLUDED_FOLDS
     ]
     return filtered_exp_paths
+
+
+def resolve_nnunet_results_roots(cli_root: Optional[Path]) -> List[Path]:
+    if cli_root is not None:
+        return [Path(cli_root)]
+
+    env_root = os.environ.get("nnUNet_results")
+    if env_root:
+        return [Path(env_root)]
+
+    return DEFAULT_NNUNET_RESULTS_ROOTS.copy()
 
 
 def extract_fold_from_path(path: Path) -> Optional[int]:
@@ -1123,7 +1143,8 @@ def main() -> None:
         default=None,
         help=(
             "Root directory of nnUNet results. If not set, uses $nnUNet_results "
-            "environment variable or /home/m391k/cluster-data/checkpoints/nnUNet_results."
+            "environment variable or searches these defaults: "
+            f"{', '.join(str(p) for p in DEFAULT_NNUNET_RESULTS_ROOTS)}."
         ),
     )
     args = parser.parse_args()
@@ -1131,18 +1152,11 @@ def main() -> None:
     out_dir: Path = args.output_dir
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Determine nnUNet results root
-    if args.nnunet_results_root:
-        nnunet_results_root = args.nnunet_results_root
-    else:
-        env_root = os.environ.get("nnUNet_results")
-        nnunet_results_root = (
-            Path(env_root)
-            if env_root
-            else Path("/home/m391k/cluster-data/checkpoints/nnUNet_results")
-        )
-
-    print(f"Using nnUNet results root: {nnunet_results_root}")
+    nnunet_results_roots = resolve_nnunet_results_roots(args.nnunet_results_root)
+    print(
+        "Using nnUNet results roots: "
+        + ", ".join(str(root) for root in nnunet_results_roots)
+    )
 
     # ------------------------------------------------------------------
     # 1. Load sheet to get structure and experiment IDs
@@ -1153,7 +1167,7 @@ def main() -> None:
     # 2. Build checkpoint index
     # ------------------------------------------------------------------
     print(f"Building checkpoint index...")
-    all_exp_paths = build_experiment_path_index(nnunet_results_root)
+    all_exp_paths = build_experiment_path_index(nnunet_results_roots)
     print(f"Found {len(all_exp_paths)} checkpoint paths in folds {INCLUDED_FOLDS}.")
 
     # ------------------------------------------------------------------
@@ -1161,7 +1175,7 @@ def main() -> None:
     # ------------------------------------------------------------------
     print(f"Loading bootstrap Dice vectors...")
     bootstrap_vectors = load_bootstrap_dice_per_cell(
-        df, all_exp_paths, nnunet_results_root
+        df, all_exp_paths, nnunet_results_roots
     )
     print(
         f"Loaded bootstrap vectors for {len(bootstrap_vectors)} (algo, dataset, noise) cells."
