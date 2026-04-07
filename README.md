@@ -38,3 +38,20 @@ python3 ./src/data/utils/nnunet_fed_preparation.py --dataset_ids "505 506 507 50
 
 3. Clean the environment:
 ```make clean```
+
+## Figure generation
+
+Overall segmentation performance boxplots:
+```
+python3 ./src/eval/results_processing/visualize_results.py
+```
+
+Overall ranking stability plots:
+```
+python3 ./src/eval/results_processing/visualize_ranking.py --output-dir ./results/segmentation_results/ranking_stability
+```
+
+Overall partial noise settings (roc, roa) comparison AND roc-clean vs roc-noisy clients comparison:
+```
+python3 ./src/eval/results_processing/roc_clean_vs_noisy_clients_global_comparison.py --output-dir ./results/segmentation_results/partial_noise_comparison --figure paired_dot
+```
