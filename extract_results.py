@@ -6,6 +6,7 @@ import argparse
 def extract_info(job_id, directory):
     err_file = os.path.join(directory, f"{job_id}.err")
     log_file = os.path.join(directory, f"{job_id}.log")
+    out_file = os.path.join(directory, f"{job_id}.out")
 
     # Extract experiment_id from .err file
     experiment_id = None
@@ -16,13 +17,18 @@ def extract_info(job_id, directory):
                 experiment_id = match.group(1).strip()
                 break
 
-    # Extract all Mean Validation Dice values from .log file
+    # Extract all Mean Validation Dice values from .log or .out file
     mean_dice = []
-    with open(log_file, "r") as f:
-        for line in f:
-            match = re.search(r"Mean Validation Dice:\s*([\d\.Ee+-]+)", line)
-            if match:
-                mean_dice.append(match.group(1).replace(".", ","))
+    result_files = [path for path in (log_file, out_file) if os.path.exists(path)]
+    if not result_files:
+        raise FileNotFoundError(f"Neither {log_file} nor {out_file} exists.")
+
+    for result_file in result_files:
+        with open(result_file, "r") as f:
+            for line in f:
+                match = re.search(r"Mean Validation Dice:\s*([\d\.Ee+-]+)", line)
+                if match:
+                    mean_dice.append(match.group(1).replace(".", ","))
 
     return experiment_id, mean_dice
 
