@@ -62,13 +62,16 @@ OUTPUT_DIR = Path(
     "./results/segmentation_results/roc_clean_vs_noisy_clients_comparison"
 )
 
+# Dataset-specific client IDs that are known to be clean in the ROC scenario
+# Note: all datasets apart from RIGA encode their clients with IDs starting from 0,
+# but RIGA doesn't so we have to fall back to the Dataset-IDs of the nnUNet dataset per client
 CLEAN_CLIENTS_PER_DATASET: Dict[str, List[int]] = {
-    "LIDC": [0, 1],
-    "RIGA": [0],
-    "Gleason": [0],
-    "MouseTumor": [0, 1],
-    "MMIA": [0, 1],
-    "MMIS": [0, 1],
+    "LIDC": [0, 1, 41, 42],
+    "RIGA": [0, 300],
+    "Gleason": [0, 436],
+    "MouseTumor": [0, 1, 500, 501],
+    "MMIA": [0, 1, 600, 601],
+    "MMIS": [0, 1, 700, 701],
 }
 
 ALGO_COLORS = {
@@ -163,6 +166,11 @@ def extract_client_id_from_path(path: Path) -> Optional[int]:
     if m:
         return int(m.group(1))
     m = re.search(r"client(\d+)", str(path))
+    if m:
+        return int(m.group(1))
+    # RIGA and some other datasets may encode the client in the dataset folder
+    # name, e.g. Dataset300_RIGA-BinRushed_annotator_majority.
+    m = re.search(r"Dataset(\d+)_", str(path))
     if m:
         return int(m.group(1))
     return None
