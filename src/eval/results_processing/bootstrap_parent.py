@@ -38,7 +38,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--force",
         action="store_true",
-        help="Force re-evaluation even if results exist.",
+        help="Force full re-evaluation even if bootstrap results already exist. Without this flag, only missing metrics are added.",
         default=False,
     )
     args = parser.parse_args()
