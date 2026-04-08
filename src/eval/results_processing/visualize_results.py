@@ -85,6 +85,15 @@ class_line_marker = {
 boxplot_clean_color = "#4c72b0"
 boxplot_noisy_color = "#dd8452"
 
+
+def get_exp_paths_with_bootstrap(exp_id: str) -> list[str]:
+    return [
+        p
+        for p in nnUNet_results_all_exps
+        if exp_id in p
+        and (Path(p) / "validation" / "bootstrap_evaluation_results.json").is_file()
+    ]
+
 # -------------------------------------------------------------------
 # Load and pre-process
 # -------------------------------------------------------------------
@@ -376,15 +385,17 @@ def plot_classwise_boxplots_clean_noisy(df_all: pd.DataFrame):
             exp_ids = df_algo["Experiment ID"].dropna().unique().tolist()
             for exp_id in exp_ids:
                 exp_rows = df_algo[df_algo["Experiment ID"] == exp_id]
-                exp_paths = [p for p in nnUNet_results_all_exps if exp_id in p]
+                exp_paths = get_exp_paths_with_bootstrap(exp_id)
                 expected_clients = dataset_to_numclients.get(ds, None)
                 if expected_clients and len(exp_paths) != expected_clients:
                     print(
-                        f"Skipping Exp_ID {exp_id} for {ds}/{algo}: expected {expected_clients} clients, found {len(exp_paths)}"
+                        f"Skipping Exp_ID {exp_id} for {ds}/{algo}: expected {expected_clients} clients with bootstrap results, found {len(exp_paths)}"
                     )
                     continue
                 if len(exp_paths) == 0:
-                    print(f"No exp paths found for Exp_ID {exp_id} ({ds}/{algo})")
+                    print(
+                        f"No experiment paths with bootstrap results found for Exp_ID {exp_id} ({ds}/{algo})"
+                    )
                     continue
 
                 client_classwise_metrics = []
@@ -643,15 +654,17 @@ def plot_classwise_boxplots_clean_noisy_bootstrapping(df_all: pd.DataFrame):
             exp_ids = df_algo["Experiment ID"].dropna().unique().tolist()
             for exp_id in exp_ids:
                 exp_rows = df_algo[df_algo["Experiment ID"] == exp_id]
-                exp_paths = [p for p in nnUNet_results_all_exps if exp_id in p]
+                exp_paths = get_exp_paths_with_bootstrap(exp_id)
                 expected_clients = dataset_to_numclients.get(ds, None)
                 if expected_clients and len(exp_paths) != expected_clients:
                     print(
-                        f"Skipping Exp_ID {exp_id} for {ds}/{algo}: expected {expected_clients} clients, found {len(exp_paths)}"
+                        f"Skipping Exp_ID {exp_id} for {ds}/{algo}: expected {expected_clients} clients with bootstrap results, found {len(exp_paths)}"
                     )
                     continue
                 if len(exp_paths) == 0:
-                    print(f"No exp paths found for Exp_ID {exp_id} ({ds}/{algo})")
+                    print(
+                        f"No experiment paths with bootstrap results found for Exp_ID {exp_id} ({ds}/{algo})"
+                    )
                     continue
 
                 client_classwise_metrics = []
@@ -926,15 +939,17 @@ def plot_classwise_boxplots_clean_noiseratioall_noisy_bootstrapping(
             exp_ids = df_algo["Experiment ID"].dropna().unique().tolist()
             for exp_id in exp_ids:
                 exp_rows = df_algo[df_algo["Experiment ID"] == exp_id]
-                exp_paths = [p for p in nnUNet_results_all_exps if exp_id in p]
+                exp_paths = get_exp_paths_with_bootstrap(exp_id)
                 expected_clients = dataset_to_numclients.get(ds, None)
                 if expected_clients and len(exp_paths) != expected_clients:
                     print(
-                        f"Skipping Exp_ID {exp_id} for {ds}/{algo}: expected {expected_clients} clients, found {len(exp_paths)}"
+                        f"Skipping Exp_ID {exp_id} for {ds}/{algo}: expected {expected_clients} clients with bootstrap results, found {len(exp_paths)}"
                     )
                     continue
                 if len(exp_paths) == 0:
-                    print(f"No exp paths found for Exp_ID {exp_id} ({ds}/{algo})")
+                    print(
+                        f"No experiment paths with bootstrap results found for Exp_ID {exp_id} ({ds}/{algo})"
+                    )
                     continue
 
                 client_classwise_metrics = []
@@ -1245,15 +1260,17 @@ def plot_classwise_boxplots_clean_roc_noisy_bootstrapping(df_all: pd.DataFrame):
             exp_ids = df_algo["Experiment ID"].dropna().unique().tolist()
             for exp_id in exp_ids:
                 exp_rows = df_algo[df_algo["Experiment ID"] == exp_id]
-                exp_paths = [p for p in nnUNet_results_all_exps if exp_id in p]
+                exp_paths = get_exp_paths_with_bootstrap(exp_id)
                 expected_clients = dataset_to_numclients.get(ds, None)
                 if expected_clients and len(exp_paths) != expected_clients:
                     print(
-                        f"Skipping Exp_ID {exp_id} for {ds}/{algo}: expected {expected_clients} clients, found {len(exp_paths)}"
+                        f"Skipping Exp_ID {exp_id} for {ds}/{algo}: expected {expected_clients} clients with bootstrap results, found {len(exp_paths)}"
                     )
                     continue
                 if len(exp_paths) == 0:
-                    print(f"No exp paths found for Exp_ID {exp_id} ({ds}/{algo})")
+                    print(
+                        f"No experiment paths with bootstrap results found for Exp_ID {exp_id} ({ds}/{algo})"
+                    )
                     continue
 
                 client_classwise_metrics = []
@@ -1569,15 +1586,17 @@ def plot_boxplots_clean_roa_roc_noisy_bootstrapping(
             exp_ids = df_algo["Experiment ID"].dropna().unique().tolist()
             for exp_id in exp_ids:
                 exp_rows = df_algo[df_algo["Experiment ID"] == exp_id]
-                exp_paths = [p for p in nnUNet_results_all_exps if exp_id in p]
+                exp_paths = get_exp_paths_with_bootstrap(exp_id)
                 expected_clients = dataset_to_numclients.get(ds, None)
                 if expected_clients and len(exp_paths) != expected_clients:
                     print(
-                        f"Skipping Exp_ID {exp_id} for {ds}/{algo}: expected {expected_clients} clients, found {len(exp_paths)}"
+                        f"Skipping Exp_ID {exp_id} for {ds}/{algo}: expected {expected_clients} clients with bootstrap results, found {len(exp_paths)}"
                     )
                     continue
                 if len(exp_paths) == 0:
-                    print(f"No exp paths found for Exp_ID {exp_id} ({ds}/{algo})")
+                    print(
+                        f"No experiment paths with bootstrap results found for Exp_ID {exp_id} ({ds}/{algo})"
+                    )
                     continue
 
                 client_classwise_metrics = []
@@ -1866,15 +1885,17 @@ def plot_boxplots_roa_per_client_bootstrapping(df_all: pd.DataFrame, classwise=F
 
             exp_ids = df_algo["Experiment ID"].dropna().unique().tolist()
             for exp_id in exp_ids:
-                exp_paths = [p for p in nnUNet_results_all_exps if exp_id in p]
+                exp_paths = get_exp_paths_with_bootstrap(exp_id)
                 expected_clients = dataset_to_numclients.get(ds, None)
                 if expected_clients and len(exp_paths) != expected_clients:
                     print(
-                        f"Skipping Exp_ID {exp_id} for {ds}/{algo}: expected {expected_clients} clients, found {len(exp_paths)}"
+                        f"Skipping Exp_ID {exp_id} for {ds}/{algo}: expected {expected_clients} clients with bootstrap results, found {len(exp_paths)}"
                     )
                     continue
                 if len(exp_paths) == 0:
-                    print(f"No exp paths found for Exp_ID {exp_id} ({ds}/{algo})")
+                    print(
+                        f"No experiment paths with bootstrap results found for Exp_ID {exp_id} ({ds}/{algo})"
+                    )
                     continue
 
                 # Process each client
@@ -2168,15 +2189,17 @@ def plot_boxplots_roc_per_client_bootstrapping(df_all: pd.DataFrame, classwise=F
 
             exp_ids = df_algo["Experiment ID"].dropna().unique().tolist()
             for exp_id in exp_ids:
-                exp_paths = [p for p in nnUNet_results_all_exps if exp_id in p]
+                exp_paths = get_exp_paths_with_bootstrap(exp_id)
                 expected_clients = dataset_to_numclients.get(ds, None)
                 if expected_clients and len(exp_paths) != expected_clients:
                     print(
-                        f"Skipping Exp_ID {exp_id} for {ds}/{algo}: expected {expected_clients} clients, found {len(exp_paths)}"
+                        f"Skipping Exp_ID {exp_id} for {ds}/{algo}: expected {expected_clients} clients with bootstrap results, found {len(exp_paths)}"
                     )
                     continue
                 if len(exp_paths) == 0:
-                    print(f"No exp paths found for Exp_ID {exp_id} ({ds}/{algo})")
+                    print(
+                        f"No experiment paths with bootstrap results found for Exp_ID {exp_id} ({ds}/{algo})"
+                    )
                     continue
 
                 # Process each client

@@ -188,10 +188,15 @@ def collect_client_bootstrap_vectors(
     )
 
     for algo, dataset, noise_scenario, exp_id in records:
-        exp_paths = [p for p in all_exp_paths if exp_id in str(p)]
+        exp_paths = [
+            p
+            for p in all_exp_paths
+            if exp_id in str(p)
+            and (p / "validation" / "bootstrap_evaluation_results.json").is_file()
+        ]
         if not exp_paths:
             print(
-                f"No checkpoint paths found for Exp_ID {exp_id} ({dataset}/{algo}/{noise_scenario})."
+                f"No checkpoint paths with bootstrap results found for Exp_ID {exp_id} ({dataset}/{algo}/{noise_scenario})."
             )
             continue
 

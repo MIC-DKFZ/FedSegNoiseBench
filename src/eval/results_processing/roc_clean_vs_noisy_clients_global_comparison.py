@@ -156,6 +156,17 @@ def resolve_nnunet_results_roots(cli_root: Optional[Path]) -> List[Path]:
     return DEFAULT_NNUNET_RESULTS_ROOTS.copy()
 
 
+def get_exp_paths_with_bootstrap(
+    all_exp_paths: List[Path], exp_id: str
+) -> List[Path]:
+    return [
+        p
+        for p in all_exp_paths
+        if exp_id in str(p)
+        and (p / "validation" / "bootstrap_evaluation_results.json").is_file()
+    ]
+
+
 def extract_fold_from_path(path: Path) -> Optional[int]:
     m = re.search(r"/fold_(\d+)/", str(path))
     return int(m.group(1)) if m else None
@@ -273,7 +284,7 @@ def load_bootstrap_vectors(
             per_fold_vectors: Dict[int, List[np.ndarray]] = {}
 
             for exp_id in exp_ids:
-                exp_paths = [p for p in all_exp_paths if exp_id in str(p)]
+                exp_paths = get_exp_paths_with_bootstrap(all_exp_paths, exp_id)
                 for exp_path in exp_paths:
                     fold = extract_fold_from_path(exp_path)
                     if fold is None or fold not in INCLUDED_FOLDS:
@@ -312,7 +323,7 @@ def load_bootstrap_vectors(
             clean_client_ids = set(CLEAN_CLIENTS_PER_DATASET.get(dataset, []))
 
             for exp_id in exp_ids:
-                exp_paths = [p for p in all_exp_paths if exp_id in str(p)]
+                exp_paths = get_exp_paths_with_bootstrap(all_exp_paths, exp_id)
                 for exp_path in exp_paths:
                     fold = extract_fold_from_path(exp_path)
                     if fold is None or fold not in INCLUDED_FOLDS:

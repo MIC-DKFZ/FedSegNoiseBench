@@ -201,6 +201,17 @@ def resolve_nnunet_results_roots(cli_root: Optional[Path]) -> List[Path]:
     return DEFAULT_NNUNET_RESULTS_ROOTS.copy()
 
 
+def get_exp_paths_with_bootstrap(
+    all_exp_paths: List[Path], exp_id: str
+) -> List[Path]:
+    return [
+        p
+        for p in all_exp_paths
+        if exp_id in str(p)
+        and (p / "validation" / "bootstrap_evaluation_results.json").is_file()
+    ]
+
+
 def extract_fold_from_path(path: Path) -> Optional[int]:
     m = re.search(r"/fold_(\d+)/", str(path))
     return int(m.group(1)) if m else None
@@ -338,7 +349,7 @@ def load_bootstrap_dice_per_cell(
 
         for exp_id in exp_ids:
             # Find checkpoint paths matching this exp_id
-            exp_paths = [p for p in all_exp_paths if exp_id in str(p)]
+            exp_paths = get_exp_paths_with_bootstrap(all_exp_paths, exp_id)
             if not exp_paths:
                 continue
 
