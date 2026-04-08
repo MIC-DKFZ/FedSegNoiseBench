@@ -38,6 +38,13 @@ def load_noise_analysis(json_file: str) -> Dict:
 # Fixed color palette for classes: blue, orange, green, violet
 CLASS_COLORS = ["#1f77b4", "#ff7f0e", "#2ca02c", "#9467bd"]
 
+# Central style control for the single-row summary figures.
+BASE_FONT_SIZE = 16
+TITLE_FONT_SIZE = BASE_FONT_SIZE
+TICK_FONT_SIZE = BASE_FONT_SIZE
+ANNOTATION_FONT_SIZE = BASE_FONT_SIZE # - 1
+HEATMAP_CMAP = "Blues"
+
 
 def extract_perclass_data(results: Dict) -> pd.DataFrame:
     """
@@ -329,8 +336,8 @@ def plot_requested_metrics_single_row(
     output_path: str,
 ):
     """
-    Create a single-row figure with 5 subplots:
-    Dice, HD95, Instance Precision, Instance Recall, and class confusion matrix.
+    Create a single-row figure with 4 subplots:
+    Dice, HD95, Instance F1, and class confusion matrix.
 
     The total figure width is fixed so the row length is identical
     across datasets, independent of the number of classes.
@@ -338,7 +345,7 @@ def plot_requested_metrics_single_row(
     classes = sorted(df["class_id"].unique())
 
     # Fixed-size canvas: row length stays constant across datasets
-    fig, axes = plt.subplots(1, 5, figsize=(25, 5.2))
+    fig, axes = plt.subplots(1, 4, figsize=(27, 5.4), gridspec_kw={"width_ratios": [1, 1, 1, 1.2]})
 
     def add_violinplot(ax, metric, ylabel, title):
         data_by_class = [
@@ -374,29 +381,28 @@ def plot_requested_metrics_single_row(
                 parts[partname].set_edgecolor('black')
                 parts[partname].set_linewidth(1)
 
-        ax.set_ylabel(ylabel, fontsize=10)
-        ax.set_title(title, fontsize=11, fontweight="bold")
+        ax.set_ylabel(ylabel, fontsize=BASE_FONT_SIZE)
+        ax.set_title(title, fontsize=TITLE_FONT_SIZE, fontweight="bold")
         ax.set_xticks(range(len(classes)))
-        ax.set_xticklabels([f"C{cls}" for cls in classes])
+        ax.set_xticklabels([f"Class {cls}" for cls in classes], fontsize=TICK_FONT_SIZE)
         ax.grid(axis="y", alpha=0.3)
-        ax.tick_params(axis="x", labelsize=8)
-        ax.tick_params(axis="y", labelsize=9)
+        ax.tick_params(axis="x", labelsize=TICK_FONT_SIZE)
+        ax.tick_params(axis="y", labelsize=TICK_FONT_SIZE)
 
-    add_violinplot(axes[0], "dice", "Dice", "Per-Class Dice")
-    add_violinplot(axes[1], "hd95", "HD95 (mm)", "Per-Class HD95")
-    add_violinplot(axes[2], "instance_precision", "Precision", "Per-Class Precision (Instance)")
-    add_violinplot(axes[3], "instance_recall", "Recall", "Per-Class Recall (Instance)")
+    add_violinplot(axes[0], "dice", "Dice", "Class-wise Dice\n(Consensus vs Noisy)")
+    add_violinplot(axes[1], "hd95", "HD95 (mm)", "Class-wise HD95\n(Consensus vs Noisy)")
+    add_violinplot(axes[2], "instance_f1", "Instance F1", "Class-wise Instance F1\n(Consensus vs Noisy)")
 
     # Class confusion matrix (class overlap matrix)
-    ax_cm = axes[4]
-    im = ax_cm.imshow(overlap_matrix, cmap="YlOrRd", vmin=0, vmax=1, aspect="equal")
+    ax_cm = axes[3]
+    im = ax_cm.imshow(overlap_matrix, cmap=HEATMAP_CMAP, vmin=0, vmax=1, aspect="equal")
     ax_cm.set_xticks(range(len(sorted_classes)))
     ax_cm.set_yticks(range(len(sorted_classes)))
-    ax_cm.set_xticklabels([f"C{c}" for c in sorted_classes], fontsize=8)
-    ax_cm.set_yticklabels([f"C{c}" for c in sorted_classes], fontsize=8)
-    ax_cm.set_xlabel("Noisy Class", fontsize=9)
-    ax_cm.set_ylabel("Clean Class", fontsize=9)
-    ax_cm.set_title("Class Confusion Matrix", fontsize=11, fontweight="bold")
+    ax_cm.set_xticklabels([f"C{c}" for c in sorted_classes], fontsize=TICK_FONT_SIZE)
+    ax_cm.set_yticklabels([f"C{c}" for c in sorted_classes], fontsize=TICK_FONT_SIZE)
+    ax_cm.set_xlabel("Noisy Classes", fontsize=BASE_FONT_SIZE)
+    ax_cm.set_ylabel("Consensus Classes", fontsize=BASE_FONT_SIZE)
+    ax_cm.set_title("Class Confusion Matrix\n(Consensus vs Noisy)", fontsize=TITLE_FONT_SIZE, fontweight="bold")
 
     for i in range(len(sorted_classes)):
         for j in range(len(sorted_classes)):
@@ -406,19 +412,14 @@ def plot_requested_metrics_single_row(
                 f"{overlap_matrix[i, j]:.2f}",
                 ha="center",
                 va="center",
-                color="black",
-                fontsize=7,
+                color="#0b1f2a" if overlap_matrix[i, j] < 0.62 else "white",
+                fontsize=ANNOTATION_FONT_SIZE,
             )
 
     cbar = plt.colorbar(im, ax=ax_cm, fraction=0.046, pad=0.04)
-    cbar.set_label("Overlap", fontsize=8)
+    cbar.set_label("Overlap", fontsize=BASE_FONT_SIZE)
+    cbar.ax.tick_params(labelsize=TICK_FONT_SIZE)
 
-    fig.suptitle(
-        "Per-Class Metrics: Dice + HD95 + Instance Precision/Recall + Class Confusion",
-        fontsize=14,
-        fontweight="bold",
-        y=1.02,
-    )
     plt.tight_layout()
     plt.savefig(output_path, dpi=600, bbox_inches="tight")
     plt.close()

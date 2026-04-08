@@ -41,6 +41,45 @@ python3 ./src/data/utils/nnunet_fed_preparation.py --dataset_ids "505 506 507 50
 
 ## Figure generation
 
+### Data analysis results figures
+
+#### Multi-rater label analysis
+To visualize the variability among the raters leading to label noise, we visualize:
+- class-wise Fleiss' Kappa scores among the rater's masks
+- class-wise mean Dice scores of consensus masks vs each of the rater's masks (mean over raters)
+- class-wise mean HD95 scores of consensus masks vs each of the rater's masks (mean over raters)
+- class-wise instance-level mean F1 score of consensus masks vs each of the rater's masks (mean over raters)
+- mean Class-confusion matrix of consensus masks vs each of the rater's masks (mean over raters)
+
+Generate plot via:
+```
+python3 ./src/data/data_analysis/visualize_multirater_consensus_violin.py --input_json ./results/consensus_analysis/<YOUR-DATASET>/multirater_consensus.json --output_png ./results/consensus_analysis/<YOUR-DATASET>/fk_dice_hd95_if1_clsconf.png
+```
+
+#### Consensus- vs. noisy label analysis
+To visualize the degree and type of label noise, we compare the noisy label masks against their consensus counterpart:
+- class-wise Dice scores of consensus masks vs noisy mask
+- class-wise HD95 scores of consensus masks vs noisy mask
+- class-wise instance-level F1 score of consensus masks vs noisy mask
+- Class-confusion matrix of consensus masks vs noisy mask
+
+Generate plot via:
+```
+python3 ./src/data/data_analysis/visualize_perclass_boxplots.py --input_json ./results/noise_analysis/noise_analysis_results_clean<DATASET-IDS-OF-YOUR-DATASET>.json --output_dir ./results/noise_analysis/<YOUR-DATASET>/
+```
+
+To visualize scatter points manifesting different label noise types, we plot:
+- HD95 to capture contour differences
+- instance-level F1 score to capture missing/additional labels
+- class-confusion score to capture swapped labels
+
+Generate plot via:
+```
+python3 ./src/data/data_analysis/visualize_hd95_f1_confusion.py --json_path ./results/noise_analysis/noise_analysis_results_clean<DATASET-IDS-OF-YOUR-DATASET>.json --output ./results/noise_analysis/<YOUR-DATASET>/hd95_vs_f1_vs_confusion.png --level instance --figsize 11 9
+```
+
+### Segmentation results figures
+
 By default, the result-processing scripts that load `nnUNet` evaluation outputs for plots combine checkpoints from both of these roots:
 
 ```

@@ -18,6 +18,13 @@ import numpy as np
 import pandas as pd
 
 
+BASE_FONT_SIZE = 16
+TITLE_FONT_SIZE = BASE_FONT_SIZE
+TICK_FONT_SIZE = BASE_FONT_SIZE
+ANNOTATION_FONT_SIZE = BASE_FONT_SIZE # - 2
+DEFAULT_CONFUSION_CMAP = "Blues"
+
+
 def is_finite_number(value) -> bool:
     """Check if a value can be interpreted as a finite float."""
     if value is None:
@@ -137,7 +144,7 @@ def plot_hd95_vs_f1_confusion(
     level: str = "voxel",
     figsize=(10, 8),
     marker_size: int = 80,
-    cmap: str = "YlOrRd",
+    cmap: str = DEFAULT_CONFUSION_CMAP,
     add_labels: bool = False,
 ):
     """
@@ -208,7 +215,8 @@ def plot_hd95_vs_f1_confusion(
             scatter_for_colorbar = binary_scatter
 
     cbar = fig.colorbar(scatter_for_colorbar, ax=ax)
-    cbar.set_label("Confusion score\n(class swapping)", fontsize=10)
+    cbar.set_label("Class Confusion score", fontsize=BASE_FONT_SIZE, fontweight="bold")
+    cbar.ax.tick_params(labelsize=TICK_FONT_SIZE)
 
     # Add sample labels if requested
     if add_labels:
@@ -218,28 +226,30 @@ def plot_hd95_vs_f1_confusion(
                 (row[x_col], row[y_col]),
                 xytext=(5, 5),
                 textcoords="offset points",
-                fontsize=7,
+                fontsize=ANNOTATION_FONT_SIZE,
                 alpha=0.7,
                 ha="left",
             )
 
     ax.set_xlabel(
-        "HD95 (contour disagreement distance)", fontsize=11, fontweight="bold"
+        "HD95 (mm)", fontsize=BASE_FONT_SIZE, fontweight="bold"
     )
-    ax.set_ylabel("F1 score (fg vs bg)", fontsize=11, fontweight="bold")
+    ax.set_ylabel("Instance F1", fontsize=BASE_FONT_SIZE, fontweight="bold")
     label_suffix = " with labels" if add_labels else ""
-    ax.set_title(
-        f"{level_title}: F1 vs HD95 (color = confusion){label_suffix}",
-        fontsize=13,
-        fontweight="bold",
-        pad=15,
-    )
+    # ax.set_title(
+    #     # f"{level_title}: HD95 vs F1 vs Class confusion{label_suffix}",
+    #     f"HD95 vs F1 vs Class confusion{label_suffix}",
+    #     fontsize=TITLE_FONT_SIZE,
+    #     fontweight="bold",
+    #     pad=15,
+    # )
 
     ax.grid(True, alpha=0.3, linestyle="--")
     ax.set_ylim(-0.05, 1.05)
+    ax.tick_params(axis="both", labelsize=TICK_FONT_SIZE)
 
     if len(multiclass_data) > 0 or len(binary_data) > 0:
-        ax.legend(loc="best", fontsize=10, framealpha=0.95)
+        ax.legend(loc="best", fontsize=TICK_FONT_SIZE, framealpha=0.95)
 
     os.makedirs(
         os.path.dirname(output_path) if os.path.dirname(output_path) else ".",
@@ -312,7 +322,7 @@ def main():
     parser.add_argument(
         "--cmap",
         type=str,
-        default="YlOrRd",
+        default=DEFAULT_CONFUSION_CMAP,
         help="Colormap for confusion score",
     )
     args = parser.parse_args()
