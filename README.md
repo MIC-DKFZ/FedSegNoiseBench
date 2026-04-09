@@ -53,7 +53,9 @@ To visualize the variability among the raters leading to label noise, we visuali
 
 Generate plot via:
 ```
-python3 ./src/data/data_analysis/visualize_multirater_consensus_violin.py --input_json ./results/consensus_analysis/<YOUR-DATASET>/multirater_consensus.json --output_png ./results/consensus_analysis/<YOUR-DATASET>/fk_dice_hd95_if1_clsconf.png
+python3 ./src/data/data_analysis/visualize_multirater_consensus_violin.py \
+    --input_json ./results/consensus_analysis/<YOUR-DATASET>/multirater_consensus.json \
+    --output_png ./results/consensus_analysis/<YOUR-DATASET>/fk_dice_hd95_if1_clsconf.png 
 ```
 
 #### Consensus- vs. noisy label analysis
@@ -65,7 +67,12 @@ To visualize the degree and type of label noise, we compare the noisy label mask
 
 Generate plot via:
 ```
-python3 ./src/data/data_analysis/visualize_perclass_boxplots.py --input_json ./results/noise_analysis/noise_analysis_results_clean<DATASET-IDS-OF-YOUR-DATASET>.json --output_dir ./results/noise_analysis/<YOUR-DATASET>/
+python3 ./src/data/data_analysis/visualize_perclass_boxplots.py \
+    --input_json ./results/noise_analysis/noise_analysis_results_clean<DATASET-IDS-OF-YOUR-DATASET>.json \
+    --output_dir ./results/noise_analysis/<YOUR-DATASET>/ \
+    --requested_row_width 27 \
+    --requested_row_height 5.4 \
+    --requested_row_keep_ratio
 ```
 
 To visualize scatter points manifesting different label noise types, we plot:

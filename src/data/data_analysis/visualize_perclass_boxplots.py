@@ -44,6 +44,16 @@ TITLE_FONT_SIZE = BASE_FONT_SIZE
 TICK_FONT_SIZE = BASE_FONT_SIZE
 ANNOTATION_FONT_SIZE = BASE_FONT_SIZE # - 1
 HEATMAP_CMAP = "Blues"
+REQUESTED_ROW_DEFAULT_WIDTH = 27.0
+REQUESTED_ROW_DEFAULT_HEIGHT = 5.4
+
+
+def resolve_requested_row_figsize(
+    width: float = REQUESTED_ROW_DEFAULT_WIDTH,
+    height: float = REQUESTED_ROW_DEFAULT_HEIGHT,
+) -> tuple[float, float]:
+    """Resolve figsize for the requested-metrics single-row plot."""
+    return (width, height)
 
 
 def extract_perclass_data(results: Dict) -> pd.DataFrame:
@@ -334,6 +344,8 @@ def plot_requested_metrics_single_row(
     overlap_matrix: np.ndarray,
     sorted_classes: List[int],
     output_path: str,
+    figsize: tuple[float, float] | None = None,
+    keep_ratio: bool = False,
 ):
     """
     Create a single-row figure with 4 subplots:
@@ -344,8 +356,30 @@ def plot_requested_metrics_single_row(
     """
     classes = sorted(df["class_id"].unique())
 
-    # Fixed-size canvas: row length stays constant across datasets
-    fig, axes = plt.subplots(1, 4, figsize=(27, 5.4), gridspec_kw={"width_ratios": [1, 1, 1, 1.2]})
+    if figsize is None:
+        figsize = (REQUESTED_ROW_DEFAULT_WIDTH, REQUESTED_ROW_DEFAULT_HEIGHT)
+
+    if keep_ratio:
+        fig = plt.figure(figsize=figsize)
+        gs = fig.add_gridspec(
+            1,
+            7,
+            width_ratios=[1, 2 / 3, 1, 2 / 3, 1, 2 / 3, 1.2],
+            wspace=0.0,
+        )
+        axes = [
+            fig.add_subplot(gs[0, 0]),
+            fig.add_subplot(gs[0, 2]),
+            fig.add_subplot(gs[0, 4]),
+            fig.add_subplot(gs[0, 6]),
+        ]
+    else:
+        fig, axes = plt.subplots(
+            1,
+            4,
+            figsize=figsize,
+            gridspec_kw={"width_ratios": [1, 1, 1, 1.2]},
+        )
 
     def add_violinplot(ax, metric, ylabel, title):
         data_by_class = [
@@ -617,12 +651,18 @@ def main(args):
         os.path.join(args.output_dir, "01_core_metrics_single_row.png"),
     )
 
-    print("Generating single-row requested metrics (Dice, HD95, Precision, Recall, Confusion)...")
+    print("Generating single-row requested metrics (Dice, HD95, Instance F1, Confusion)...")
+    requested_row_figsize = resolve_requested_row_figsize(
+        width=args.requested_row_width,
+        height=args.requested_row_height,
+    )
     plot_requested_metrics_single_row(
         df,
         overlap_matrix,
         sorted_classes,
         os.path.join(args.output_dir, "02_requested_metrics_single_row.png"),
+        figsize=requested_row_figsize,
+        keep_ratio=args.requested_row_keep_ratio,
     )
     
     # Print statistics
@@ -646,6 +686,33 @@ if __name__ == "__main__":
         type=str,
         default="./results/noise_perclass_boxplots",
         help="Directory to save visualization outputs (default: ./results/noise_perclass_boxplots)",
+    )
+    parser.add_argument(
+        "--requested_row_width",
+        type=float,
+        default=REQUESTED_ROW_DEFAULT_WIDTH,
+        help=(
+            "Width of 02_requested_metrics_single_row.png in inches "
+            f"(default: {REQUESTED_ROW_DEFAULT_WIDTH}, matching the multirater-consensus figure width)"
+        ),
+    )
+    parser.add_argument(
+        "--requested_row_height",
+        type=float,
+        default=REQUESTED_ROW_DEFAULT_HEIGHT,
+        help=(
+            "Height of 02_requested_metrics_single_row.png in inches "
+            f"(default: {REQUESTED_ROW_DEFAULT_HEIGHT})"
+        ),
+    )
+    parser.add_argument(
+        "--requested_row_keep_ratio",
+        action="store_true",
+        help=(
+            "If set, keep the lower row's subplot proportions aligned with the upper "
+            "multirater-consensus figure and distribute the remaining width as equal "
+            "spacing between panels. If not set, the panels stretch to use all available space."
+        ),
     )
     
     args = parser.parse_args()
