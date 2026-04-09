@@ -99,6 +99,43 @@ def extract_perclass_data(results: Dict) -> pd.DataFrame:
     return df
 
 
+def extract_requested_row_data(results: Dict) -> pd.DataFrame:
+    """
+    Extract the sample-level metrics used in the requested single-row figure.
+
+    HD95 and Instance F1 intentionally match the scatter plot in
+    visualize_hd95_f1_confusion.py:
+    - overall_metrics.mean_hd95
+    - foreground_vs_background_metrics.instance_level_prf.f1
+    """
+    data = []
+
+    for sample_id, result in results.items():
+        overall_metrics = result.get("overall_metrics", {})
+        fg_bg_metrics = result.get("foreground_vs_background_metrics", {})
+        fg_bg_instance_prf = fg_bg_metrics.get("instance_level_prf", {})
+
+        mean_hd95 = overall_metrics.get("mean_hd95", np.nan)
+        if not np.isfinite(mean_hd95):
+            mean_hd95 = np.nan
+
+        record = {
+            "sample_id": sample_id,
+            "mean_dice": overall_metrics.get("mean_dice", np.nan),
+            "mean_hd95": mean_hd95,
+            "fgbg_instance_f1": fg_bg_instance_prf.get("f1", np.nan),
+        }
+        data.append(record)
+
+    return pd.DataFrame(data)
+
+
+def finite_series_values(series: pd.Series) -> np.ndarray:
+    """Return only finite numeric values from a pandas Series."""
+    values = pd.to_numeric(series, errors="coerce").to_numpy(dtype=float)
+    return values[np.isfinite(values)]
+
+
 def extract_overlap_matrices(results: Dict) -> Tuple[np.ndarray, List[int]]:
     """
     Extract and aggregate class overlap matrices.
@@ -381,9 +418,9 @@ def plot_requested_metrics_single_row(
             gridspec_kw={"width_ratios": [1, 1, 1, 1.2]},
         )
 
-    def add_violinplot(ax, metric, ylabel, title):
+    def add_perclass_violinplot(ax, metric, ylabel, title):
         data_by_class = [
-            df[df["class_id"] == cls][metric].dropna().values for cls in classes
+            finite_series_values(df[df["class_id"] == cls][metric]) for cls in classes
         ]
 
         parts = ax.violinplot(
@@ -423,9 +460,24 @@ def plot_requested_metrics_single_row(
         ax.tick_params(axis="x", labelsize=TICK_FONT_SIZE)
         ax.tick_params(axis="y", labelsize=TICK_FONT_SIZE)
 
-    add_violinplot(axes[0], "dice", "Dice", "Class-wise Dice\n(Consensus vs Noisy)")
-    add_violinplot(axes[1], "hd95", "HD95 (mm)", "Class-wise HD95\n(Consensus vs Noisy)")
-    add_violinplot(axes[2], "instance_f1", "Instance F1", "Class-wise Instance F1\n(Consensus vs Noisy)")
+    add_perclass_violinplot(
+        axes[0],
+        "dice",
+        "Dice",
+        "Class-wise Dice\n(Consensus vs Noisy)",
+    )
+    add_perclass_violinplot(
+        axes[1],
+        "hd95",
+        "HD95 (mm)",
+        "Class-wise HD95\n(Consensus vs Noisy)",
+    )
+    add_perclass_violinplot(
+        axes[2],
+        "instance_f1",
+        "Instance F1",
+        "Class-wise Instance F1\n(Consensus vs Noisy)",
+    )
 
     # Class confusion matrix (class overlap matrix)
     ax_cm = axes[3]
