@@ -29,12 +29,12 @@ except ImportError:
 CLASS_COLORS = ["#1f77b4", "#ff7f0e", "#2ca02c", "#9467bd"]
 
 # Central style control for the whole figure.
-BASE_FONT_SIZE = 16
+BASE_FONT_SIZE = 20
 TITLE_FONT_SIZE = BASE_FONT_SIZE # + 1
 TICK_FONT_SIZE = BASE_FONT_SIZE # - 1
 ANNOTATION_FONT_SIZE = BASE_FONT_SIZE # - 1
 HEATMAP_CMAP = "Blues"
-# DEFAULT_MAX_SAMPLES = 100
+# DEFAULT_MAX_SAMPLES = 50
 DEFAULT_MAX_SAMPLES = None
 
 METRICS_TO_PLOT = [
@@ -47,6 +47,24 @@ METRICS_TO_PLOT = [
         "mean_dice",
         "Dice",
         "Class-wise Dice\n(Consensus vs Raters)",
+    ),
+    (
+        "mean_hd95",
+        "HD95 (mm)",
+        "Class-wise HD95\n(Consensus vs Raters)",
+    ),
+    (
+        "mean_instance_level_f1",
+        "Instance F1",
+        "Class-wise Instance F1\n(Consensus vs Raters)",
+    ),
+]
+
+QUESTION1_METRICS_TO_PLOT = [
+    (
+        "fleiss_kappa",
+        "Fleiss' Kappa",
+        "Class-wise Fleiss' Kappa\n(Among Raters)",
     ),
     (
         "mean_hd95",
@@ -286,6 +304,7 @@ def _add_violin_subplot(
     metric: str,
     ylabel: str,
     title: str,
+    ylabelpad: float | None = None,
 ):
     """Add one class-wise violin subplot."""
     valid_classes, data_by_class = _prepare_metric_data_by_class(df, classes, metric)
@@ -302,6 +321,8 @@ def _add_violin_subplot(
         )
         ax.set_title(title, fontsize=TITLE_FONT_SIZE, fontweight="bold")
         ax.set_ylabel(ylabel, fontsize=BASE_FONT_SIZE)
+        if ylabelpad is not None:
+            ax.set_ylabel(ylabel, fontsize=BASE_FONT_SIZE, labelpad=ylabelpad)
         ax.set_xticks([])
         ax.grid(axis="y", alpha=0.3)
         return
@@ -338,6 +359,8 @@ def _add_violin_subplot(
 
     ax.set_title(title, fontsize=TITLE_FONT_SIZE, fontweight="bold")
     ax.set_ylabel(ylabel, fontsize=BASE_FONT_SIZE)
+    if ylabelpad is not None:
+        ax.set_ylabel(ylabel, fontsize=BASE_FONT_SIZE, labelpad=ylabelpad)
     ax.set_xticks(positions)
     ax.set_xticklabels([f"Class {c}" for c in valid_classes], fontsize=TICK_FONT_SIZE)
     ax.grid(axis="y", alpha=0.3)
@@ -431,10 +454,124 @@ def plot_multirater_consensus_violin_row(
     print(f"✓ Saved single-row violin plot to: {output_path}")
 
 
+def _add_confusion_heatmap_subplot(
+    ax,
+    confusion_matrix: np.ndarray,
+    confusion_classes: List[int],
+):
+    """Add the class confusion heatmap subplot."""
+    if confusion_matrix.size == 0:
+        ax.text(
+            0.5,
+            0.5,
+            "No valid data",
+            transform=ax.transAxes,
+            ha="center",
+            va="center",
+            fontsize=BASE_FONT_SIZE,
+        )
+        ax.set_title(
+            "Class Confusion Matrix\n(Consensus vs Raters)",
+            fontsize=TITLE_FONT_SIZE,
+            fontweight="bold",
+        )
+        ax.set_xticks([])
+        ax.set_yticks([])
+        return
+
+    im = ax.imshow(confusion_matrix, cmap=HEATMAP_CMAP, vmin=0.0, vmax=1.0)
+    ax.set_title(
+        "Class Confusion Matrix\n(Consensus vs Raters)",
+        fontsize=TITLE_FONT_SIZE,
+        fontweight="bold",
+    )
+    ax.set_xticks(range(len(confusion_classes)))
+    ax.set_yticks(range(len(confusion_classes)))
+    ax.set_xticklabels([f"C{c}" for c in confusion_classes], fontsize=TICK_FONT_SIZE)
+    ax.set_yticklabels([f"C{c}" for c in confusion_classes], fontsize=TICK_FONT_SIZE)
+    ax.set_xlabel("Rater classes", fontsize=BASE_FONT_SIZE)
+    ax.set_ylabel("Consensus classes", fontsize=BASE_FONT_SIZE)
+
+    for i in range(confusion_matrix.shape[0]):
+        for j in range(confusion_matrix.shape[1]):
+            ax.text(
+                j,
+                i,
+                f"{confusion_matrix[i, j]:.2f}",
+                ha="center",
+                va="center",
+                fontsize=ANNOTATION_FONT_SIZE,
+                color="#0b1f2a" if confusion_matrix[i, j] < 0.62 else "white",
+            )
+
+    cbar = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    cbar.set_label("Overlap", fontsize=BASE_FONT_SIZE)
+    cbar.ax.tick_params(labelsize=TICK_FONT_SIZE)
+
+
+def plot_multirater_consensus_question1_grid(
+    df: pd.DataFrame,
+    confusion_matrix: np.ndarray,
+    confusion_classes: List[int],
+    output_path: str,
+):
+    """Create a 2x2 figure for question 1: kappa, HD95, F1, confusion."""
+    classes = sorted(df["class_id"].unique())
+    if not classes:
+        raise ValueError("No class IDs found in extracted data.")
+
+    fig, axes = plt.subplots(2, 2, figsize=(11.8, 10.8), constrained_layout=True)
+    fig.set_constrained_layout_pads(w_pad=0.03, h_pad=0.04, wspace=0.06, hspace=0.08)
+    axes = axes.flatten()
+
+    for idx, (ax, (metric, ylabel, title)) in enumerate(
+        zip(axes[:3], QUESTION1_METRICS_TO_PLOT)
+    ):
+        is_right_column = idx == 1
+        ylabelpad = 4 if is_right_column else None
+        _add_violin_subplot(
+            ax,
+            df,
+            classes,
+            metric,
+            ylabel,
+            title,
+            ylabelpad=ylabelpad,
+        )
+        ax.set_box_aspect(1)
+        if is_right_column:
+            ax.yaxis.set_label_position("right")
+            ax.yaxis.tick_right()
+            ax.tick_params(axis="y", labelsize=TICK_FONT_SIZE, pad=4)
+
+    _add_confusion_heatmap_subplot(axes[3], confusion_matrix, confusion_classes)
+    axes[3].yaxis.set_label_position("right")
+    axes[3].yaxis.tick_right()
+    axes[3].set_ylabel("Consensus classes", fontsize=BASE_FONT_SIZE, labelpad=4)
+    axes[3].set_box_aspect(1)
+
+    os.makedirs(
+        os.path.dirname(output_path) if os.path.dirname(output_path) else ".",
+        exist_ok=True,
+    )
+    plt.savefig(output_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+    print(f"✓ Saved 2x2 question-1 grid plot to: {output_path}")
+
+
 def default_output_path(input_json: str) -> str:
     """Derive default output path next to the input JSON."""
     input_path = Path(input_json)
     return str(input_path.parent / "multirater_consensus_perclass_violin.png")
+
+
+def question1_grid_output_path(row_output_path: str) -> str:
+    """Derive the 2x2 question-1 output path from the row output path."""
+    output_path = Path(row_output_path)
+    return str(
+        output_path.with_name(f"{output_path.stem}_question1_2x2{output_path.suffix}")
+    )
 
 
 def main(args):
@@ -458,6 +595,12 @@ def main(args):
     output_path = args.output_png or default_output_path(args.input_json)
     plot_multirater_consensus_violin_row(
         df, confusion_matrix, confusion_classes, output_path
+    )
+    plot_multirater_consensus_question1_grid(
+        df,
+        confusion_matrix,
+        confusion_classes,
+        question1_grid_output_path(output_path),
     )
 
 
