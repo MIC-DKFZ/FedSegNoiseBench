@@ -2,6 +2,7 @@ import subprocess
 import pandas as pd
 from tqdm import tqdm
 import argparse
+import re
 
 
 def run_bootstrap_eval(experiment_id, force=False):
@@ -23,10 +24,37 @@ def run_bootstrap_eval(experiment_id, force=False):
         print(f"Completed experiment_id {experiment_id}")
 
 
-def main(df, force=False):
+def extract_fold_from_experiment_id(experiment_id):
+    """Extract fold number from experiment ID like ..._fold2_..."""
+    match = re.search(r"fold(\d+)", str(experiment_id))
+    return int(match.group(1)) if match else None
+
+
+def main(df, force=False, selected_folds=None):
     """Find experiment_ids and run bootstrap for each experiment."""
     # get experiment_ids of df for rows with ID set
     experiment_ids = df[df["ID"].notna()]["Experiment ID"].dropna().unique().tolist()
+
+    if selected_folds:
+        filtered_experiment_ids = []
+        skipped_without_fold = 0
+        for exp_id in experiment_ids:
+            fold = extract_fold_from_experiment_id(exp_id)
+            if fold is None:
+                skipped_without_fold += 1
+                continue
+            if fold in selected_folds:
+                filtered_experiment_ids.append(exp_id)
+
+        experiment_ids = filtered_experiment_ids
+        print(
+            f"Restricted to folds {sorted(selected_folds)}. "
+            f"Found {len(experiment_ids)} matching experiments."
+        )
+        if skipped_without_fold:
+            print(
+                f"Skipped {skipped_without_fold} experiment IDs because no fold could be inferred."
+            )
 
     print(f"Found {len(experiment_ids)} experiments")
     for exp_id in tqdm(experiment_ids, desc="Running bootstrap evaluations"):
@@ -41,6 +69,13 @@ if __name__ == "__main__":
         help="Force full re-evaluation even if bootstrap results already exist. Without this flag, only missing metrics are added.",
         default=False,
     )
+    parser.add_argument(
+        "--folds",
+        type=int,
+        nargs="+",
+        default=None,
+        help="Optional list of folds to run, e.g. --folds 0 1 2",
+    )
     args = parser.parse_args()
 
     # google sheet details
@@ -51,4 +86,4 @@ if __name__ == "__main__":
     )
     gsheet_df = pd.read_csv(csv_url)
 
-    main(gsheet_df, force=args.force)
+    main(gsheet_df, force=args.force, selected_folds=args.folds)
