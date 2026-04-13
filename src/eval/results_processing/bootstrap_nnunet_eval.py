@@ -68,6 +68,7 @@ def _compute_bootstrap_stats(bootstrap_results: Dict[str, Dict[str, List[float]]
     for label, metrics in bootstrap_results.items():
         for metric_name, values in metrics.items():
             values_arr = np.asarray(values, dtype=float)
+            values_arr = values_arr[np.isfinite(values_arr)]
             if values_arr.size == 0:
                 bootstrap_stats[label][metric_name] = {
                     "mean": np.nan,
@@ -220,13 +221,19 @@ def bootstrap_evaluate(
                     val = all_case_metrics[case_name]["metrics"][label].get(metric_name)
                     if val is None:
                         continue
-                    if not np.isnan(val):
+                    try:
+                        val = float(val)
+                    except (TypeError, ValueError):
+                        continue
+                    if np.isfinite(val):
                         metric_values.append(val)
 
                 if metric_values:
                     bootstrap_results[label_key][metric_name].append(
                         float(np.mean(metric_values))
                     )
+                else:
+                    bootstrap_results[label_key][metric_name].append(np.nan)
 
     bootstrap_stats = _compute_bootstrap_stats(bootstrap_results)
     _print_bootstrap_stats(bootstrap_stats)
