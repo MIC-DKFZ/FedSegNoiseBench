@@ -16,13 +16,17 @@ from typing import Dict, List
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 
-BASE_FONT_SIZE = 16
+BASE_FONT_SIZE = 22
 TITLE_FONT_SIZE = BASE_FONT_SIZE
 TICK_FONT_SIZE = BASE_FONT_SIZE
 ANNOTATION_FONT_SIZE = BASE_FONT_SIZE # - 2
 DEFAULT_CONFUSION_CMAP = "Blues"
+DEFAULT_SCATTER_FIG_WIDTH = 12.4
+# Match the combined height of the two 5.4-inch violin rows on the left.
+DEFAULT_SCATTER_FIG_HEIGHT = 10.8
 
 
 def is_finite_number(value) -> bool:
@@ -142,10 +146,11 @@ def plot_hd95_vs_f1_confusion(
     df: pd.DataFrame,
     output_path: str,
     level: str = "voxel",
-    figsize=(10, 8),
+    figsize=(DEFAULT_SCATTER_FIG_WIDTH, DEFAULT_SCATTER_FIG_HEIGHT),
     marker_size: int = 80,
     cmap: str = DEFAULT_CONFUSION_CMAP,
     add_labels: bool = False,
+    max_points: int | None = None,
 ):
     """
     Create a single 2D scatter plot with:
@@ -171,6 +176,9 @@ def plot_hd95_vs_f1_confusion(
     valid_data = df.dropna(subset=[x_col, y_col, color_col])
     if len(valid_data) == 0:
         raise ValueError(f"No valid data for {level_title} analysis")
+
+    if max_points is not None and max_points > 0:
+        valid_data = valid_data.head(max_points).copy()
 
     print(f"Plotting {len(valid_data)} samples")
 
@@ -214,10 +222,6 @@ def plot_hd95_vs_f1_confusion(
         if scatter_for_colorbar is None:
             scatter_for_colorbar = binary_scatter
 
-    cbar = fig.colorbar(scatter_for_colorbar, ax=ax)
-    cbar.set_label("Class Confusion score", fontsize=BASE_FONT_SIZE, fontweight="bold")
-    cbar.ax.tick_params(labelsize=TICK_FONT_SIZE)
-
     # Add sample labels if requested
     if add_labels:
         for idx, row in valid_data.iterrows():
@@ -234,7 +238,7 @@ def plot_hd95_vs_f1_confusion(
     ax.set_xlabel(
         "HD95 (mm)", fontsize=BASE_FONT_SIZE, fontweight="bold"
     )
-    ax.set_ylabel("Instance F1", fontsize=BASE_FONT_SIZE, fontweight="bold")
+    ax.set_ylabel("Instance F1 (all fg classes vs bg)", fontsize=BASE_FONT_SIZE, fontweight="bold")
     label_suffix = " with labels" if add_labels else ""
     # ax.set_title(
     #     # f"{level_title}: HD95 vs F1 vs Class confusion{label_suffix}",
@@ -247,6 +251,17 @@ def plot_hd95_vs_f1_confusion(
     ax.grid(True, alpha=0.3, linestyle="--")
     ax.set_ylim(-0.05, 1.05)
     ax.tick_params(axis="both", labelsize=TICK_FONT_SIZE)
+    # Keep the actual scatter axes square while the outer figure can remain wider
+    # to accommodate the legend and colorbar.
+    ax.set_box_aspect(1)
+
+    # Append a dedicated colorbar axes so the colorbar height matches
+    # the square scatter axes height instead of the full subplot slot.
+    divider = make_axes_locatable(ax)
+    cax = divider.append_axes("right", size="4%", pad=0.12)
+    cbar = fig.colorbar(scatter_for_colorbar, cax=cax)
+    cbar.set_label("Class Confusion score", fontsize=BASE_FONT_SIZE, fontweight="bold")
+    cbar.ax.tick_params(labelsize=TICK_FONT_SIZE)
 
     if len(multiclass_data) > 0 or len(binary_data) > 0:
         ax.legend(loc="best", fontsize=TICK_FONT_SIZE, framealpha=0.95)
@@ -308,10 +323,13 @@ def main():
     )
     parser.add_argument(
         "--figsize",
-        type=int,
+        type=float,
         nargs=2,
-        default=[10, 8],
-        help="Figure size: width height",
+        default=[DEFAULT_SCATTER_FIG_WIDTH, DEFAULT_SCATTER_FIG_HEIGHT],
+        help=(
+            "Figure size: width height. Default height matches the two stacked "
+            "5.4-inch violin figures together, while the scatter axes are kept square."
+        ),
     )
     parser.add_argument(
         "--marker_size",
@@ -324,6 +342,15 @@ def main():
         type=str,
         default=DEFAULT_CONFUSION_CMAP,
         help="Colormap for confusion score",
+    )
+    parser.add_argument(
+        "--max_points",
+        type=int,
+        default=None,
+        help=(
+            "Optional maximum number of valid points to plot, useful for debugging. "
+            "Uses the first N valid samples."
+        ),
     )
     args = parser.parse_args()
 
@@ -346,6 +373,7 @@ def main():
                 marker_size=args.marker_size,
                 cmap=args.cmap,
                 add_labels=add_labels,
+                max_points=args.max_points,
             )
         print()  # blank line between level groups
 

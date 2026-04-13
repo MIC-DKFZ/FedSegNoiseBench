@@ -82,7 +82,11 @@ To visualize scatter points manifesting different label noise types, we plot:
 
 Generate plot via:
 ```
-python3 ./src/data/data_analysis/visualize_hd95_f1_confusion.py --json_path ./results/noise_analysis/noise_analysis_results_clean<DATASET-IDS-OF-YOUR-DATASET>.json --output ./results/noise_analysis/<YOUR-DATASET>/hd95_vs_f1_vs_confusion.png --level instance --figsize 11 9
+python3 ./src/data/data_analysis/visualize_hd95_f1_confusion.py \
+    --json_path /results/noise_analysis/noise_analysis_results_clean<DATASET-IDS-OF-YOUR-DATASET>.json \
+    --output ./results/noise_analysis/<YOUR-DATASET>/hd95_vs_f1_vs_confusion.png \
+    --level instance \
+    --figsize 12.4 10.8
 ```
 
 ### Segmentation results figures
