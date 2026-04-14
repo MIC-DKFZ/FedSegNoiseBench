@@ -11,7 +11,6 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from matplotlib.lines import Line2D
 
 try:
     from .ranking import (
@@ -46,10 +45,12 @@ except ImportError:
 
 
 NOISE_ORDER = ["clean", "roa", "roc", "noisy"]
+SUPPORTED_METRICS = ("Dice", "HD95", "InstanceF1", "ClassConfusion")
+LOWER_IS_BETTER_METRICS = {"HD95", "ClassConfusion"}
 NOISE_LABELS = {
     "clean": "clean",
-    "roa": "roa(X)",
-    "roc": "roc(X)",
+    "roa": "roa(p)",
+    "roc": "roc(p)",
     "noisy": "noisy",
     "all": "overall",
 }
@@ -62,8 +63,13 @@ ALGO_COLORS = {
 }
 DEFAULT_OUTPUT_DIR = OUTPUT_DIR / "ranking_stability"
 DEFAULT_SUMMARY_CSV = DEFAULT_OUTPUT_DIR / "ranking_stability_summary.csv"
-DEFAULT_BLOB_SCALE = 2200.0
-DEFAULT_DPI = 220
+DEFAULT_BLOB_SCALE = 1200.0
+DEFAULT_DPI = 200
+PLOT_LABEL_FONTSIZE = 14
+PLOT_TICK_FONTSIZE = 14
+PANEL_TITLE_FONTSIZE = 14
+PLOT_HEIGHT = 3.8
+PANEL_WIDTH = 3.6
 DEFAULT_NNUNET_RESULTS_ROOTS = [
     DEFAULT_NNUNET_RESULTS_ROOT,
     Path("/home/m391k/juwels/checkpoints/nnUNet_results"),
@@ -176,7 +182,7 @@ def average_vectors(vectors: Sequence[np.ndarray]) -> Optional[np.ndarray]:
 
 
 def collect_client_bootstrap_vectors(
-    df: pd.DataFrame, all_exp_paths: List[Path]
+    df: pd.DataFrame, all_exp_paths: List[Path], metric_name: str
 ) -> pd.DataFrame:
     rows = []
     bootstrap_cache: Dict[Path, Optional[np.ndarray]] = {}
@@ -222,7 +228,7 @@ def collect_client_bootstrap_vectors(
             bootstrap_file = exp_path / "validation" / "bootstrap_evaluation_results.json"
             if bootstrap_file not in bootstrap_cache:
                 bootstrap_cache[bootstrap_file] = load_bootstrap_metric_vector(
-                    bootstrap_file, classwise_metric
+                    bootstrap_file, metric_name
                 )
 
             bootstrap_vector = bootstrap_cache[bootstrap_file]
@@ -351,6 +357,7 @@ def filter_records_to_selected_datasets(
 
 def compute_rank_matrices(
     vectors_by_algorithm: Dict[str, np.ndarray],
+    metric_name: str,
 ) -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame]]:
     valid: Dict[str, np.ndarray] = {}
     for algo, vec in vectors_by_algorithm.items():
@@ -373,7 +380,11 @@ def compute_rank_matrices(
     if score_df.empty:
         return None, None
 
-    rank_df = score_df.rank(axis=1, method="min", ascending=False).astype(int)
+    rank_df = score_df.rank(
+        axis=1,
+        method="min",
+        ascending=metric_name in LOWER_IS_BETTER_METRICS,
+    ).astype(int)
     return score_df, rank_df
 
 
@@ -382,11 +393,12 @@ def summarize_rank_group(
     dataset: str,
     noise_scenario: str,
     group_df: pd.DataFrame,
+    metric_name: str,
 ) -> List[Dict[str, object]]:
     vectors_by_algorithm = {
         row.algorithm: row.bootstrap_vector for row in group_df.itertuples(index=False)
     }
-    score_df, rank_df = compute_rank_matrices(vectors_by_algorithm)
+    score_df, rank_df = compute_rank_matrices(vectors_by_algorithm, metric_name)
     if score_df is None or rank_df is None:
         return []
 
@@ -440,7 +452,7 @@ def summarize_rank_group(
 
 
 def build_rank_frequency_summary(
-    cell_vectors_df: pd.DataFrame, dataset_order: Sequence[str]
+    cell_vectors_df: pd.DataFrame, dataset_order: Sequence[str], metric_name: str
 ) -> pd.DataFrame:
     rows: List[Dict[str, object]] = []
 
@@ -461,6 +473,7 @@ def build_rank_frequency_summary(
                     dataset=dataset,
                     noise_scenario=noise_scenario,
                     group_df=group_df,
+                    metric_name=metric_name,
                 )
             )
 
@@ -479,6 +492,7 @@ def build_rank_frequency_summary(
                     dataset="ALL",
                     noise_scenario=noise_scenario,
                     group_df=group_df,
+                    metric_name=metric_name,
                 )
             )
 
@@ -490,6 +504,7 @@ def build_rank_frequency_summary(
                 dataset="ALL",
                 noise_scenario="all",
                 group_df=overall_df,
+                metric_name=metric_name,
             )
         )
 
@@ -512,25 +527,6 @@ def build_rank_frequency_summary(
     return out
 
 
-def frequency_legend_handles(blob_scale: float) -> List[Line2D]:
-    handles = []
-    for freq in [0.25, 0.50, 0.75, 1.00]:
-        handles.append(
-            Line2D(
-                [0],
-                [0],
-                marker="o",
-                linestyle="",
-                markerfacecolor="black",
-                markeredgecolor="black",
-                alpha=0.65,
-                markersize=max(np.sqrt(blob_scale * freq) / 3.0, 3.0),
-                label=f"{int(freq * 100)}",
-            )
-        )
-    return handles
-
-
 def plot_blob_panel(
     ax: plt.Axes,
     summary_df: pd.DataFrame,
@@ -539,13 +535,19 @@ def plot_blob_panel(
     blob_scale: float,
 ) -> None:
     max_rank = len(algorithm_order)
-    ax.set_title(title, fontsize=11)
+    ax.set_title(title, fontsize=PANEL_TITLE_FONTSIZE, fontweight="bold")
     ax.set_xlim(0.5, len(algorithm_order) + 0.5)
     ax.set_ylim(0.5, max_rank + 0.5)
     ax.set_xticks(range(1, len(algorithm_order) + 1))
-    ax.set_xticklabels(algorithm_order, rotation=40, ha="right")
+    ax.set_xticklabels(
+        algorithm_order,
+        rotation=40,
+        ha="right",
+        fontsize=PLOT_TICK_FONTSIZE,
+    )
     ax.set_yticks(range(1, max_rank + 1))
-    ax.grid(axis="y", linestyle="--", alpha=0.35)
+    ax.grid(axis="y", linestyle="--", alpha=0.5)
+    ax.tick_params(axis="y", labelsize=PLOT_TICK_FONTSIZE)
     ax.set_axisbelow(True)
 
     if summary_df.empty:
@@ -556,7 +558,7 @@ def plot_blob_panel(
             transform=ax.transAxes,
             ha="center",
             va="center",
-            fontsize=10,
+            fontsize=PLOT_LABEL_FONTSIZE,
             color="gray",
         )
         return
@@ -618,6 +620,7 @@ def save_dataset_figures(
     blob_scale: float,
     dpi: int,
     dataset_order: Sequence[str],
+    metric_name: str,
 ) -> List[Path]:
     saved_paths: List[Path] = []
     datasets_present = [
@@ -633,7 +636,7 @@ def save_dataset_figures(
         fig, axes = plt.subplots(
             1,
             len(NOISE_ORDER),
-            figsize=(4.3 * len(NOISE_ORDER), 4.8),
+            figsize=(max(14, len(NOISE_ORDER) * PANEL_WIDTH), PLOT_HEIGHT),
             sharey=True,
         )
         if len(NOISE_ORDER) == 1:
@@ -653,32 +656,10 @@ def save_dataset_figures(
                 blob_scale=blob_scale,
             )
             if ax is axes[0]:
-                ax.set_ylabel("Rank")
+                ax.set_ylabel(f"Rank ({metric_name})", fontsize=PLOT_LABEL_FONTSIZE)
+        fig.tight_layout()
 
-        fig.suptitle(
-            f"{dataset}: bootstrap ranking stability",
-            fontsize=14,
-            y=1.03,
-        )
-        fig.legend(
-            handles=frequency_legend_handles(blob_scale),
-            title="% of bootstrap samples",
-            loc="upper center",
-            bbox_to_anchor=(0.5, 1.02),
-            ncol=4,
-            frameon=False,
-        )
-        fig.text(
-            0.5,
-            0.02,
-            "Blob area ∝ frequency at a rank; × = median rank; line = 95% bootstrap interval.",
-            ha="center",
-            va="bottom",
-            fontsize=10,
-        )
-        fig.tight_layout(rect=[0, 0.06, 1, 0.90])
-
-        out_path = output_dir / f"ranking_stability_{dataset}.png"
+        out_path = output_dir / f"ranking_stability_{metric_name.lower()}_{dataset}.png"
         fig.savefig(out_path, dpi=dpi, bbox_inches="tight")
         plt.close(fig)
         saved_paths.append(out_path)
@@ -692,16 +673,22 @@ def save_overall_figure(
     output_dir: Path,
     blob_scale: float,
     dpi: int,
+    metric_name: str,
 ) -> Path:
     panels = [
-        ("all_datasets", "ALL", "clean", "clean"),
-        ("all_datasets", "ALL", "roa", "roa(X)"),
-        ("all_datasets", "ALL", "roc", "roc(X)"),
-        ("all_datasets", "ALL", "noisy", "noisy"),
-        ("overall", "ALL", "all", "overall"),
+        ("all_datasets", "ALL", "clean", NOISE_LABELS["clean"]),
+        ("all_datasets", "ALL", "roa", NOISE_LABELS["roa"]),
+        ("all_datasets", "ALL", "roc", NOISE_LABELS["roc"]),
+        ("all_datasets", "ALL", "noisy", NOISE_LABELS["noisy"]),
+        ("overall", "ALL", "all", NOISE_LABELS["all"]),
     ]
 
-    fig, axes = plt.subplots(1, len(panels), figsize=(4.4 * len(panels), 4.8), sharey=True)
+    fig, axes = plt.subplots(
+        1,
+        len(panels),
+        figsize=(max(18, len(panels) * PANEL_WIDTH), PLOT_HEIGHT),
+        sharey=True,
+    )
     if len(panels) == 1:
         axes = [axes]
 
@@ -719,32 +706,13 @@ def save_overall_figure(
             blob_scale=blob_scale,
         )
         if ax is axes[0]:
-            ax.set_ylabel("Rank")
+            ax.set_ylabel(f"Rank ({metric_name})", fontsize=PLOT_LABEL_FONTSIZE)
+    fig.tight_layout()
 
-    fig.suptitle(
-        "Bootstrap ranking stability summarized over all datasets",
-        fontsize=14,
-        y=1.03,
+    out_path = (
+        output_dir
+        / f"ranking_stability_{metric_name.lower()}_datasets_{'_'.join(datasets)}.png"
     )
-    fig.legend(
-        handles=frequency_legend_handles(blob_scale),
-        title="% of bootstrap samples",
-        loc="upper center",
-        bbox_to_anchor=(0.5, 1.02),
-        ncol=4,
-        frameon=False,
-    )
-    fig.text(
-        0.5,
-        0.02,
-        "Blob area ∝ frequency at a rank; × = median rank; line = 95% bootstrap interval.",
-        ha="center",
-        va="bottom",
-        fontsize=10,
-    )
-    fig.tight_layout(rect=[0, 0.06, 1, 0.90])
-
-    out_path = output_dir / f"ranking_stability_datasets_{'_'.join(datasets)}.png"
     fig.savefig(out_path, dpi=dpi, bbox_inches="tight")
     plt.close(fig)
     return out_path
@@ -757,9 +725,19 @@ def main() -> None:
             "By default, this creates one 5-panel figure summarized over all datasets: "
             "clean, roa(X), roc(X), noisy, and an overall panel across all scenarios. "
             "Ranking follows ranking.py: first average over clients within a fold, "
-            "then average over folds, then rank algorithms by Dice. For stability, "
+            "then average over folds, then rank algorithms by the selected metric. For stability, "
             "the same aggregation is applied element-wise to bootstrap samples."
         )
+    )
+    parser.add_argument(
+        "--metric",
+        type=str,
+        choices=SUPPORTED_METRICS,
+        default=classwise_metric,
+        help=(
+            f"Bootstrap metric to rank by (default: {classwise_metric}). "
+            f"Choices: {SUPPORTED_METRICS}"
+        ),
     )
     parser.add_argument(
         "--output-dir",
@@ -817,8 +795,11 @@ def main() -> None:
         "Using nnUNet results roots: "
         + ", ".join(str(root) for root in nnunet_results_roots)
     )
+    print(f"Using bootstrap metric: {args.metric}")
     all_exp_paths = build_experiment_path_index_for_roots(nnunet_results_roots)
-    client_vectors_df = collect_client_bootstrap_vectors(df, all_exp_paths)
+    client_vectors_df = collect_client_bootstrap_vectors(
+        df, all_exp_paths, args.metric
+    )
 
     if client_vectors_df.empty:
         print("No client bootstrap vectors were collected. Nothing to visualize.")
@@ -830,13 +811,17 @@ def main() -> None:
         return
 
     summary_df = build_rank_frequency_summary(
-        cell_vectors_df, dataset_order=selected_datasets
+        cell_vectors_df, dataset_order=selected_datasets, metric_name=args.metric
     )
     if summary_df.empty:
         print("No rank-frequency summary could be built. Nothing to visualize.")
         return
 
-    summary_df.to_csv(args.output_dir / f"rank_frequency_summary_{'_'.join(selected_datasets)}.csv", index=False)
+    summary_df.to_csv(
+        args.output_dir
+        / f"rank_frequency_summary_{args.metric.lower()}_{'_'.join(selected_datasets)}.csv",
+        index=False,
+    )
     print(f"Saved rank-frequency summary to CSV.")
 
     overall_path = save_overall_figure(
@@ -845,6 +830,7 @@ def main() -> None:
         output_dir=args.output_dir,
         blob_scale=args.blob_scale,
         dpi=args.dpi,
+        metric_name=args.metric,
     )
 
     print(f"Saved all-datasets summary figure:\n  - {overall_path.resolve()}")
@@ -856,6 +842,7 @@ def main() -> None:
             blob_scale=args.blob_scale,
             dpi=args.dpi,
             dataset_order=selected_datasets,
+            metric_name=args.metric,
         )
         print("Saved per-dataset figures:")
         for path in dataset_paths:

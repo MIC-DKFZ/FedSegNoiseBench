@@ -110,12 +110,12 @@ If you set the environment variable `nnUNet_results` or pass `--nnunet-results-r
 
 Overall segmentation performance boxplots:
 ```
-python3 ./src/eval/results_processing/visualize_results.py
+python3 ./src/eval/results_processing/visualize_results.py --metric Dice
 ```
 
 Overall ranking stability plots:
 ```
-python3 ./src/eval/results_processing/visualize_ranking.py --output-dir ./results/segmentation_results/ranking_stability
+python3 ./src/eval/results_processing/visualize_ranking.py --output-dir ./results/segmentation_results/ranking_stability --metric Dice
 ```
 
 Overall partial noise settings (`roa` vs `roc`) comparison:

@@ -1,3 +1,4 @@
+import argparse
 import json
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -22,7 +23,7 @@ metric_col = "Mean(D_val)"
 
 target_algos = ["FedAvg", "FedA3I", "IOP-FL", "FedCorr", "FedSelect"]
 target_datasets = ["LIDC", "RIGA", "Gleason", "MouseTumor", "MMIA", "MMIS"]
-noise_order = ["0", "roa(X)", "roc(X)", "100"]  # plotting order
+noise_order = ["0", "roa(p)", "roc(p)", "100"]  # plotting order
 
 # Include only results from these folds (fold numbers: 0, 1, 2, 3, 4)
 included_folds = [0, 1, 2]
@@ -56,7 +57,7 @@ dataset_to_numclients = {
     "MMIA": 4,
     "MMIS": 4,
 }
-# Clean clients per dataset (for distinguishing in roc(X) plots)
+# Clean clients per dataset (for distinguishing in roc(p) plots)
 clean_clients_per_dataset = {
     "LIDC": [0, 1],
     "RIGA": [0],
@@ -84,6 +85,13 @@ class_line_marker = {
 # for boxplots
 boxplot_clean_color = "#4c72b0"
 boxplot_noisy_color = "#dd8452"
+SUPPORTED_CLASSWISE_METRICS = ("Dice", "HD95", "InstanceF1", "ClassConfusion")
+BOUNDED_ZERO_ONE_METRICS = {"Dice", "InstanceF1", "ClassConfusion"}
+BOXPLOT_TITLE_FONTSIZE = 16
+BOXPLOT_LABEL_FONTSIZE = 14
+BOXPLOT_TICK_FONTSIZE = 14
+BOXPLOT_DATASET_FONTSIZE = 14
+BOXPLOT_LEGEND_FONTSIZE = 14
 
 
 def get_exp_paths_with_bootstrap(exp_id: str) -> list[str]:
@@ -93,6 +101,50 @@ def get_exp_paths_with_bootstrap(exp_id: str) -> list[str]:
         if exp_id in p
         and (Path(p) / "validation" / "bootstrap_evaluation_results.json").is_file()
     ]
+
+
+def parse_selected_datasets(datasets_arg):
+    if not datasets_arg:
+        return list(target_datasets)
+
+    def _normalize_name(name: str) -> str:
+        return re.sub(r"[\s_\-]+", "", str(name).strip().lower())
+
+    canonical_map = {_normalize_name(d): d for d in target_datasets}
+    selected = []
+    unknown = []
+
+    for item in datasets_arg:
+        parts = [p for p in re.split(r"[,\s]+", str(item).strip()) if p]
+        for part in parts:
+            canonical = canonical_map.get(_normalize_name(part))
+            if canonical is None:
+                unknown.append(part)
+                continue
+            if canonical not in selected:
+                selected.append(canonical)
+
+    if unknown:
+        raise ValueError(
+            f"Unknown dataset names in --datasets: {unknown}. Allowed values: {target_datasets}"
+        )
+    if not selected:
+        raise ValueError(
+            f"No valid datasets selected via --datasets. Allowed values: {target_datasets}"
+        )
+    return selected
+
+
+def metric_slug(metric_name: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", metric_name.strip().lower()).strip("_")
+
+
+def apply_metric_axis_limits(ax):
+    if classwise_metric in BOUNDED_ZERO_ONE_METRICS:
+        ax.set_ylim(0.0, 1.0)
+    elif classwise_metric == "HD95":
+        ax.set_yscale("log")
+
 
 # -------------------------------------------------------------------
 # Load and pre-process
@@ -137,8 +189,8 @@ df[metric_col] = pd.to_numeric(df[metric_col], errors="coerce")
 
 # Normalize noise values into canonical buckets:
 # - exact 0/100 -> "0"/"100"
-# - any roa(...) or contains "roa" -> "roa(X)"
-# - any roc(...) or contains "roc" -> "roc(X)"
+# - any roa(...) or contains "roa" -> "roa(p)"
+# - any roc(...) or contains "roc" -> "roc(p)"
 def _normalize_noise_val(v: object) -> str:
     s = "" if v is None else str(v).strip()
     if re.fullmatch(r"(?i)0(?:\.0+)?", s):
@@ -146,9 +198,9 @@ def _normalize_noise_val(v: object) -> str:
     if re.fullmatch(r"(?i)100(?:\.0+)?", s):
         return "100"
     if re.search(r"(?i)\broa\b", s) or re.search(r"(?i)roa\s*\(.*\)", s):
-        return "roa(X)"
+        return "roa(p)"
     if re.search(r"(?i)\broc\b", s) or re.search(r"(?i)roc\s*\(.*\)", s):
-        return "roc(X)"
+        return "roc(p)"
     return s  # fallback: keep as-is
 
 
@@ -175,7 +227,7 @@ def normalize_dataset(name: str) -> str:
 
 df["Dataset_norm"] = df[raw_dataset_col].apply(normalize_dataset)
 
-# Standardize noise to strings such as "0", "100", "roa(X)", "roc(X)"
+# Standardize noise to strings such as "0", "100", "roa(p)", "roc(p)"
 df[noise_col] = df[noise_col].astype(str).str.strip()
 
 
@@ -522,7 +574,7 @@ def plot_classwise_boxplots_clean_noisy(df_all: pd.DataFrame):
         return
 
     # Create figure
-    fig, ax = plt.subplots(figsize=(max(12, len(target_datasets) * 2.5), 7))
+    fig, ax = plt.subplots(figsize=(max(13, len(target_datasets) * 2.7), 7.5))
 
     bp = ax.boxplot(
         box_data,
@@ -554,11 +606,11 @@ def plot_classwise_boxplots_clean_noisy(df_all: pd.DataFrame):
         ds_center = (ds_start + ds_end) / 2.0
         ax.text(
             ds_center,
-            -0.15,
+            -0.11,
             ds_name,
             ha="center",
             va="top",
-            fontsize=11,
+            fontsize=BOXPLOT_DATASET_FONTSIZE,
             fontweight="bold",
             transform=ax.get_xaxis_transform(),
         )
@@ -571,14 +623,16 @@ def plot_classwise_boxplots_clean_noisy(df_all: pd.DataFrame):
         )
 
     ax.set_xticks(label_positions)
-    ax.set_xticklabels(label_texts, rotation=0, ha="center", fontsize=9)
-    ax.set_ylabel(classwise_metric, fontsize=11)
+    ax.set_xticklabels(
+        label_texts, rotation=0, ha="center", fontsize=BOXPLOT_TICK_FONTSIZE
+    )
+    ax.set_ylabel(classwise_metric, fontsize=BOXPLOT_LABEL_FONTSIZE)
     # Tighten in-axes horizontal margins
     xmin = min(positions) - bplot_width
     xmax = max(positions) + bplot_width
     ax.set_xlim(xmin, xmax)
     ax.margins(x=0)
-    ax.set_ylim(0.0, 1.0)
+    apply_metric_axis_limits(ax)
     ax.set_title(
         "Class-wise Dice: clean vs noisy per dataset/class/algorithm",
         fontsize=12,
@@ -852,14 +906,14 @@ def plot_classwise_boxplots_clean_noisy_bootstrapping(df_all: pd.DataFrame):
         )
 
     ax.set_xticks(label_positions)
-    ax.set_xticklabels(label_texts, rotation=0, ha="center", fontsize=9)
-    ax.set_ylabel(classwise_metric, fontsize=11)
+    ax.set_xticklabels(label_texts, rotation=0, ha="center", fontsize=BOXPLOT_LABEL_FONTSIZE)
+    ax.set_ylabel(classwise_metric, fontsize=BOXPLOT_LABEL_FONTSIZE)
     # Tighten in-axes horizontal margins
     xmin = min(positions) - bplot_width
     xmax = max(positions) + bplot_width
     ax.set_xlim(xmin, xmax)
     ax.margins(x=0)
-    ax.set_ylim(0.0, 1.0)
+    apply_metric_axis_limits(ax)
     ax.set_title(
         "Class-wise Dice (bootstrapping): clean vs noisy per dataset/class/algorithm",
         fontsize=12,
@@ -919,7 +973,7 @@ def plot_classwise_boxplots_clean_noiseratioall_noisy_bootstrapping(
     - Within each noise state: boxplot of all methods from bootstrapping results
     """
 
-    noise_states = {"0": "clean", "roa(X)": "roa(X)", "100": "noisy"}
+    noise_states = {"0": "clean", "roa(p)": "roa(p)", "100": "noisy"}
     # data[dataset][class][noise_state] = [dice_values_across_methods]
     data = {ds: {algo: {} for algo in target_algos} for ds in target_datasets}
 
@@ -1031,7 +1085,7 @@ def plot_classwise_boxplots_clean_noiseratioall_noisy_bootstrapping(
             class_has_data = False
             class_positions = []
             state_groups = {}  # Track positions for each state
-            for state_key in ["clean", "roa(X)", "noisy"]:
+            for state_key in ["clean", "roa(p)", "noisy"]:
                 state_has_data = False
                 state_positions = []
                 for algo in target_algos:
@@ -1065,7 +1119,7 @@ def plot_classwise_boxplots_clean_noiseratioall_noisy_bootstrapping(
 
             # Add noise boundaries between consecutive states
             if class_has_data:
-                state_keys_present = ["clean", "roa(X)", "noisy"]
+                state_keys_present = ["clean", "roa(p)", "noisy"]
                 for i in range(len(state_keys_present) - 1):
                     curr_state = state_keys_present[i]
                     next_state = state_keys_present[i + 1]
@@ -1100,10 +1154,10 @@ def plot_classwise_boxplots_clean_noiseratioall_noisy_bootstrapping(
 
     for patch, c, meta in zip(bp["boxes"], colors, meta_info):
         patch.set_facecolor(c)
-        # Highlight roa(X) by making clean and noisy more transparent
+        # Highlight roa(p) by making clean and noisy more transparent
         if meta["state"] in ["clean", "noisy"]:
             patch.set_alpha(0.35)
-        else:  # roa(X)
+        else:  # roa(p)
             patch.set_alpha(0.85)
 
     # Apply color intensity to medians based on state
@@ -1112,7 +1166,7 @@ def plot_classwise_boxplots_clean_noiseratioall_noisy_bootstrapping(
         if meta["state"] in ["clean", "noisy"]:
             median.set_color("gray")
             median.set_alpha(0.5)
-        else:  # roa(X)
+        else:  # roa(p)
             median.set_color("black")
             median.set_alpha(1.0)
 
@@ -1123,7 +1177,7 @@ def plot_classwise_boxplots_clean_noiseratioall_noisy_bootstrapping(
         if meta["state"] in ["clean", "noisy"]:
             whisker.set_color("gray")
             whisker.set_alpha(0.5)
-        else:  # roa(X)
+        else:  # roa(p)
             whisker.set_color("black")
             whisker.set_alpha(1.0)
 
@@ -1133,7 +1187,7 @@ def plot_classwise_boxplots_clean_noiseratioall_noisy_bootstrapping(
         if meta["state"] in ["clean", "noisy"]:
             cap.set_color("gray")
             cap.set_alpha(0.5)
-        else:  # roa(X)
+        else:  # roa(p)
             cap.set_color("black")
             cap.set_alpha(1.0)
 
@@ -1155,7 +1209,7 @@ def plot_classwise_boxplots_clean_noiseratioall_noisy_bootstrapping(
             ds_name,
             ha="center",
             va="top",
-            fontsize=11,
+            fontsize=BOXPLOT_LABEL_FONTSIZE,
             fontweight="bold",
             transform=ax.get_xaxis_transform(),
         )
@@ -1168,17 +1222,17 @@ def plot_classwise_boxplots_clean_noiseratioall_noisy_bootstrapping(
         )
 
     ax.set_xticks(label_positions)
-    ax.set_xticklabels(label_texts, rotation=0, ha="center", fontsize=9)
-    ax.set_ylabel(classwise_metric, fontsize=11)
+    ax.set_xticklabels(label_texts, rotation=0, ha="center", fontsize=BOXPLOT_LABEL_FONTSIZE)
+    ax.set_ylabel(classwise_metric, fontsize=BOXPLOT_LABEL_FONTSIZE)
     # Tighten in-axes horizontal margins
     xmin = min(positions) - bplot_width
     xmax = max(positions) + bplot_width
     ax.set_xlim(xmin, xmax)
     ax.margins(x=0)
-    ax.set_ylim(0.0, 1.0)
+    apply_metric_axis_limits(ax)
     ax.set_title(
-        "Class-wise Dice (bootstrapping): clean vs roa(X) vs noisy per dataset/class/algorithm",
-        fontsize=12,
+        "Class-wise Dice (bootstrapping): clean vs roa(p) vs noisy per dataset/class/algorithm",
+        fontsize=BOXPLOT_LABEL_FONTSIZE,
         fontweight="bold",
     )
     ax.grid(axis="y", linestyle="--", alpha=0.5)
@@ -1217,17 +1271,17 @@ def plot_classwise_boxplots_clean_noiseratioall_noisy_bootstrapping(
         plt.matplotlib.patches.Patch(facecolor=algo_colors[a], alpha=0.75, label=a)
         for a in target_algos
     ]
-    ax.legend(handles=algo_patches, loc="lower right", fontsize=10)
+    ax.legend(handles=algo_patches, loc="lower right", fontsize=BOXPLOT_LABEL_FONTSIZE)
 
     fig.tight_layout()
     fig.subplots_adjust(bottom=0.18)
     fig.savefig(
-        OUTPUT_DIR / "classwise_boxplots_clean_vs_roa(X)_vs_noisy_bootstrapping.png",
+        OUTPUT_DIR / "classwise_boxplots_clean_vs_roa(p)_vs_noisy_bootstrapping.png",
         dpi=200,
         bbox_inches="tight",
     )
     print(
-        f"Saved boxplot to {OUTPUT_DIR / 'classwise_boxplots_clean_vs_roa(X)_vs_noisy_bootstrapping.png'}"
+        f"Saved boxplot to {OUTPUT_DIR / 'classwise_boxplots_clean_vs_roa(p)_vs_noisy_bootstrapping.png'}"
     )
 
 
@@ -1236,11 +1290,11 @@ def plot_classwise_boxplots_clean_roc_noisy_bootstrapping(df_all: pd.DataFrame):
     Create boxplots with hierarchical structure:
     - 6 columns for datasets
     - Within each dataset: C sub-columns for each class
-    - Within each class: clean, roc(X), and noisy boxplots
+    - Within each class: clean, roc(p), and noisy boxplots
     - Within each noise state: boxplot of all methods from bootstrapping results
     """
 
-    noise_states = {"0": "clean", "roc(X)": "roc(X)", "100": "noisy"}
+    noise_states = {"0": "clean", "roc(p)": "roc(p)", "100": "noisy"}
     # data[dataset][class][noise_state] = [dice_values_across_methods]
     data = {ds: {algo: {} for algo in target_algos} for ds in target_datasets}
 
@@ -1351,7 +1405,7 @@ def plot_classwise_boxplots_clean_roc_noisy_bootstrapping(df_all: pd.DataFrame):
             class_has_data = False
             class_positions = []
             state_groups = {}  # Track positions for each state
-            for state_key in ["clean", "roc(X)", "noisy"]:
+            for state_key in ["clean", "roc(p)", "noisy"]:
                 state_has_data = False
                 state_positions = []
                 for algo in target_algos:
@@ -1385,7 +1439,7 @@ def plot_classwise_boxplots_clean_roc_noisy_bootstrapping(df_all: pd.DataFrame):
 
             # Add noise boundaries between consecutive states
             if class_has_data:
-                state_keys_present = ["clean", "roc(X)", "noisy"]
+                state_keys_present = ["clean", "roc(p)", "noisy"]
                 for i in range(len(state_keys_present) - 1):
                     curr_state = state_keys_present[i]
                     next_state = state_keys_present[i + 1]
@@ -1420,10 +1474,10 @@ def plot_classwise_boxplots_clean_roc_noisy_bootstrapping(df_all: pd.DataFrame):
 
     for patch, c, meta in zip(bp["boxes"], colors, meta_info):
         patch.set_facecolor(c)
-        # Highlight roc(X) by making clean and noisy more transparent
+        # Highlight roc(p) by making clean and noisy more transparent
         if meta["state"] in ["clean", "noisy"]:
             patch.set_alpha(0.35)
-        else:  # roc(X)
+        else:  # roc(p)
             patch.set_alpha(0.85)
 
     # Apply color intensity to medians based on state
@@ -1432,7 +1486,7 @@ def plot_classwise_boxplots_clean_roc_noisy_bootstrapping(df_all: pd.DataFrame):
         if meta["state"] in ["clean", "noisy"]:
             median.set_color("gray")
             median.set_alpha(0.5)
-        else:  # roc(X)
+        else:  # roc(p)
             median.set_color("black")
             median.set_alpha(1.0)
 
@@ -1443,7 +1497,7 @@ def plot_classwise_boxplots_clean_roc_noisy_bootstrapping(df_all: pd.DataFrame):
         if meta["state"] in ["clean", "noisy"]:
             whisker.set_color("gray")
             whisker.set_alpha(0.5)
-        else:  # roc(X)
+        else:  # roc(p)
             whisker.set_color("black")
             whisker.set_alpha(1.0)
 
@@ -1453,7 +1507,7 @@ def plot_classwise_boxplots_clean_roc_noisy_bootstrapping(df_all: pd.DataFrame):
         if meta["state"] in ["clean", "noisy"]:
             cap.set_color("gray")
             cap.set_alpha(0.5)
-        else:  # roc(X)
+        else:  # roc(p)
             cap.set_color("black")
             cap.set_alpha(1.0)
 
@@ -1488,16 +1542,16 @@ def plot_classwise_boxplots_clean_roc_noisy_bootstrapping(df_all: pd.DataFrame):
         )
 
     ax.set_xticks(label_positions)
-    ax.set_xticklabels(label_texts, rotation=0, ha="center", fontsize=9)
-    ax.set_ylabel(classwise_metric, fontsize=11)
+    ax.set_xticklabels(label_texts, rotation=0, ha="center", fontsize=BOXPLOT_LABEL_FONTSIZE)
+    ax.set_ylabel(classwise_metric, fontsize=BOXPLOT_LABEL_FONTSIZE)
     # Tighten in-axes horizontal margins
     xmin = min(positions) - bplot_width
     xmax = max(positions) + bplot_width
     ax.set_xlim(xmin, xmax)
     ax.margins(x=0)
-    ax.set_ylim(0.0, 1.0)
+    apply_metric_axis_limits(ax)
     ax.set_title(
-        "Class-wise Dice (bootstrapping): clean vs roc(X) vs noisy per dataset/class/algorithm",
+        "Class-wise Dice (bootstrapping): clean vs roc(p) vs noisy per dataset/class/algorithm",
         fontsize=12,
         fontweight="bold",
     )
@@ -1542,12 +1596,12 @@ def plot_classwise_boxplots_clean_roc_noisy_bootstrapping(df_all: pd.DataFrame):
     fig.tight_layout()
     fig.subplots_adjust(bottom=0.18)
     fig.savefig(
-        OUTPUT_DIR / "classwise_boxplots_clean_vs_roc(X)_vs_noisy_bootstrapping.png",
+        OUTPUT_DIR / "classwise_boxplots_clean_vs_roc(p)_vs_noisy_bootstrapping.png",
         dpi=200,
         bbox_inches="tight",
     )
     print(
-        f"Saved boxplot to {OUTPUT_DIR / 'classwise_boxplots_clean_vs_roc(X)_vs_noisy_bootstrapping.png'}"
+        f"Saved boxplot to {OUTPUT_DIR / 'classwise_boxplots_clean_vs_roc(p)_vs_noisy_bootstrapping.png'}"
     )
 
 
@@ -1558,13 +1612,13 @@ def plot_boxplots_clean_roa_roc_noisy_bootstrapping(
     Create boxplots with hierarchical structure:
     - 6 columns for datasets
     - Within each dataset: C sub-columns for each class (if classwise=True) or just one column (if classwise=False)
-    - Within each class: clean, roa(X), roc(X), and noisy boxplots
+    - Within each class: clean, roa(p), roc(p), and noisy boxplots
     - Within each noise state: boxplot of all methods from bootstrapping results
     """
     noise_states = {
         "0": "clean",
-        "roa(X)": "roa(X)",
-        "roc(X)": "roc(X)",
+        "roa(p)": "roa(p)",
+        "roc(p)": "roc(p)",
         "100": "noisy",
     }
     # data[dataset][algo][class][noise_state] = [dice_values]
@@ -1687,7 +1741,7 @@ def plot_boxplots_clean_roa_roc_noisy_bootstrapping(
             class_has_data = False
             class_positions = []
             state_groups = {}
-            for state_key in ["clean", "roa(X)", "roc(X)", "noisy"]:
+            for state_key in ["clean", "roa(p)", "roc(p)", "noisy"]:
                 state_has_data = False
                 state_positions = []
                 for algo in target_algos:
@@ -1719,7 +1773,7 @@ def plot_boxplots_clean_roa_roc_noisy_bootstrapping(
                     pos += gap_noise
 
             if class_has_data:
-                state_keys_present = ["clean", "roa(X)", "roc(X)", "noisy"]
+                state_keys_present = ["clean", "roa(p)", "roc(p)", "noisy"]
                 for i in range(len(state_keys_present) - 1):
                     curr_state = state_keys_present[i]
                     next_state = state_keys_present[i + 1]
@@ -1785,12 +1839,12 @@ def plot_boxplots_clean_roa_roc_noisy_bootstrapping(
         ds_center = (ds_start + ds_end) / 2.0
         ax.text(
             ds_center,
-            -0.15,
+            -0.06,
             ds_name,
             ha="center",
             va="top",
-            fontsize=11,
-            fontweight="bold",
+            fontsize=BOXPLOT_LABEL_FONTSIZE,
+            # fontweight="bold",
             transform=ax.get_xaxis_transform(),
         )
         ax.axvline(
@@ -1802,21 +1856,22 @@ def plot_boxplots_clean_roa_roc_noisy_bootstrapping(
         )
 
     ax.set_xticks(label_positions)
-    ax.set_xticklabels(label_texts, rotation=0, ha="center", fontsize=9)
-    ax.set_ylabel(classwise_metric, fontsize=11)
+    ax.set_xticklabels(label_texts, rotation=0, ha="center", fontsize=BOXPLOT_LABEL_FONTSIZE-2)
+    ax.set_ylabel(classwise_metric, fontsize=BOXPLOT_LABEL_FONTSIZE)
     xmin = min(positions) - bplot_width
     xmax = max(positions) + bplot_width
     ax.set_xlim(xmin, xmax)
     ax.margins(x=0)
-    ax.set_ylim(0.0, 1.0)
-    prefix = "Class-wise" if classwise else "Overall"
-    suffix = "per dataset/class/algorithm" if classwise else "per dataset/algorithm"
-    ax.set_title(
-        f"{prefix} Dice (bootstrapping): clean vs roa(X) vs roc(X) vs noisy {suffix}",
-        fontsize=12,
-        fontweight="bold",
-    )
+    apply_metric_axis_limits(ax)
+    # prefix = "Class-wise" if classwise else "Overall"
+    # suffix = "per dataset/class/algorithm" if classwise else "per dataset/algorithm"
+    # ax.set_title(
+    #     f"{prefix} {classwise_metric} (bootstrapping): clean vs roa(p) vs roc(p) vs noisy {suffix}",
+    #     fontsize=BOXPLOT_TITLE_FONTSIZE,
+    #     fontweight="bold",
+    # )
     ax.grid(axis="y", linestyle="--", alpha=0.5)
+    ax.tick_params(axis="y", labelsize=BOXPLOT_TICK_FONTSIZE)
 
     # Overlay mean markers
     means = [np.mean(vals) if len(vals) else np.nan for vals in box_data]
@@ -1845,14 +1900,14 @@ def plot_boxplots_clean_roa_roc_noisy_bootstrapping(
         plt.matplotlib.patches.Patch(facecolor=algo_colors[a], alpha=0.75, label=a)
         for a in target_algos
     ]
-    ax.legend(handles=algo_patches, loc="lower right", fontsize=10)
+    ax.legend(handles=algo_patches, loc="lower right", fontsize=BOXPLOT_LEGEND_FONTSIZE)
 
     fig.tight_layout()
-    fig.subplots_adjust(bottom=0.18)
+    fig.subplots_adjust(bottom=0.14)
     out_name = (
-        "classwise_boxplots_clean_vs_roa(X)_vs_roc(X)_vs_noisy_bootstrapping.png"
+        f"classwise_boxplots_clean_vs_roa(p)_vs_roc(p)_vs_noisy_bootstrapping_{metric_slug(classwise_metric)}.png"
         if classwise
-        else "boxplots_clean_vs_roa(X)_vs_roc(X)_vs_noisy_bootstrapping.png"
+        else f"boxplots_clean_vs_roa(p)_vs_roc(p)_vs_noisy_bootstrapping_{metric_slug(classwise_metric)}.png"
     )
     fig.savefig(OUTPUT_DIR / out_name, dpi=200, bbox_inches="tight")
     print(f"Saved boxplot to {OUTPUT_DIR / out_name}")
@@ -1860,27 +1915,27 @@ def plot_boxplots_clean_roa_roc_noisy_bootstrapping(
 
 def plot_boxplots_roa_per_client_bootstrapping(df_all: pd.DataFrame, classwise=False):
     """
-    Create boxplots comparing individual FL clients for roa(X) experiments:
+    Create boxplots comparing individual FL clients for roa(p) experiments:
     - 6 columns for datasets
     - Within each dataset: C sub-columns for each class (if classwise=True) or just one column (if classwise=False)
     - Within each class: client boxplots for each algorithm
     - Each boxplot represents one client's performance on that algorithm/dataset/class
     """
-    noise_state = "roa(X)"
-    # data[dataset][algo][class][client_id] = [dice_values]
+    noise_state = "roa(p)"
+    # data[dataset][algo][class][client_id] = [metric_values]
     data = {ds: {algo: {} for algo in target_algos} for ds in target_datasets}
 
     for ds in target_datasets:
         df_ds = df_all[df_all["Dataset_norm"] == ds]
         if df_ds.empty:
-            print(f"{ds}: no data for per-client roa(X) boxplots")
+            print(f"{ds}: no data for per-client roa(p) boxplots")
             continue
 
         for algo in target_algos:
             df_algo = df_ds[df_ds[algo_col] == algo]
             if df_algo.empty:
                 continue
-            # only keep roa(X) experiments
+            # only keep roa(p) experiments
             df_algo = df_algo[df_algo[noise_col] == noise_state]
 
             exp_ids = df_algo["Experiment ID"].dropna().unique().tolist()
@@ -2039,7 +2094,7 @@ def plot_boxplots_roa_per_client_bootstrapping(df_all: pd.DataFrame, classwise=F
             pos += gap_dataset
 
     if not box_data:
-        print("No per-client roa(X) boxplot data collected.")
+        print("No per-client roa(p) boxplot data collected.")
         return
 
     # Create figure
@@ -2100,13 +2155,13 @@ def plot_boxplots_roa_per_client_bootstrapping(df_all: pd.DataFrame, classwise=F
         )
 
     ax.set_xticks(client_label_positions)
-    ax.set_xticklabels(client_label_texts, rotation=45, ha="right", fontsize=8)
-    ax.set_ylabel(classwise_metric, fontsize=11)
+    ax.set_xticklabels(client_label_texts, rotation=45, ha="right", fontsize=BOXPLOT_LABEL_FONTSIZE)
+    ax.set_ylabel(classwise_metric, fontsize=BOXPLOT_LABEL_FONTSIZE)
     xmin = min(positions) - bplot_width
     xmax = max(positions) + bplot_width
     ax.set_xlim(xmin, xmax)
     ax.margins(x=0)
-    ax.set_ylim(0.0, 1.0)
+    apply_metric_axis_limits(ax)
     prefix = "Class-wise" if classwise else "Overall"
     suffix = (
         "per dataset/class/algorithm/client"
@@ -2114,8 +2169,8 @@ def plot_boxplots_roa_per_client_bootstrapping(df_all: pd.DataFrame, classwise=F
         else "per dataset/algorithm/client"
     )
     ax.set_title(
-        f"{prefix} Dice (bootstrapping) - roa(X): Per-client performance {suffix}",
-        fontsize=12,
+        f"{prefix} {classwise_metric} (bootstrapping) - roa(p): Per-client performance {suffix}",
+        fontsize=BOXPLOT_LABEL_FONTSIZE,
         fontweight="bold",
     )
     ax.grid(axis="y", linestyle="--", alpha=0.5)
@@ -2154,37 +2209,37 @@ def plot_boxplots_roa_per_client_bootstrapping(df_all: pd.DataFrame, classwise=F
     fig.tight_layout()
     fig.subplots_adjust(bottom=0.12)
     out_name = (
-        "classwise_boxplots_roa(X)_per_client_bootstrapping.png"
+        f"classwise_boxplots_roa(p)_per_client_bootstrapping_{metric_slug(classwise_metric)}.png"
         if classwise
-        else "boxplots_roa(X)_per_client_bootstrapping.png"
+        else f"boxplots_roa(p)_per_client_bootstrapping_{metric_slug(classwise_metric)}.png"
     )
     fig.savefig(OUTPUT_DIR / out_name, dpi=200, bbox_inches="tight")
-    print(f"Saved per-client roa(X) boxplot to {OUTPUT_DIR / out_name}")
+    print(f"Saved per-client roa(p) boxplot to {OUTPUT_DIR / out_name}")
 
 
 def plot_boxplots_roc_per_client_bootstrapping(df_all: pd.DataFrame, classwise=False):
     """
-    Create boxplots comparing individual FL clients for roc(X) experiments:
+    Create boxplots comparing individual FL clients for roc(p) experiments:
     - 6 columns for datasets
     - Within each dataset: C sub-columns for each class (if classwise=True) or just one column (if classwise=False)
     - Within each class: client boxplots for each algorithm
     - Each boxplot represents one client's performance on that algorithm/dataset/class
     """
-    noise_state = "roc(X)"
-    # data[dataset][algo][class][client_id] = [dice_values]
+    noise_state = "roc(p)"
+    # data[dataset][algo][class][client_id] = [metric_values]
     data = {ds: {algo: {} for algo in target_algos} for ds in target_datasets}
 
     for ds in target_datasets:
         df_ds = df_all[df_all["Dataset_norm"] == ds]
         if df_ds.empty:
-            print(f"{ds}: no data for per-client roc(X) boxplots")
+            print(f"{ds}: no data for per-client roc(p) boxplots")
             continue
 
         for algo in target_algos:
             df_algo = df_ds[df_ds[algo_col] == algo]
             if df_algo.empty:
                 continue
-            # only keep roc(X) experiments
+            # only keep roc(p) experiments
             df_algo = df_algo[df_algo[noise_col] == noise_state]
 
             exp_ids = df_algo["Experiment ID"].dropna().unique().tolist()
@@ -2343,7 +2398,7 @@ def plot_boxplots_roc_per_client_bootstrapping(df_all: pd.DataFrame, classwise=F
             pos += gap_dataset
 
     if not box_data:
-        print("No per-client roc(X) boxplot data collected.")
+        print("No per-client roc(p) boxplot data collected.")
         return
 
     # Create figure
@@ -2361,7 +2416,7 @@ def plot_boxplots_roc_per_client_bootstrapping(df_all: pd.DataFrame, classwise=F
         patch.set_facecolor(c)
         patch.set_alpha(0.75)
 
-    # Apply hatching to noisy clients in roc(X) plot
+    # Apply hatching to noisy clients in roc(p) plot
     for patch, meta in zip(bp["boxes"], meta_info):
         ds = meta["ds"]
         client = meta["client"]
@@ -2413,19 +2468,19 @@ def plot_boxplots_roc_per_client_bootstrapping(df_all: pd.DataFrame, classwise=F
         )
 
     ax.set_xticks(client_label_positions)
-    ax.set_xticklabels(client_label_texts, rotation=45, ha="right", fontsize=8)
-    ax.set_ylabel(classwise_metric, fontsize=11)
+    ax.set_xticklabels(client_label_texts, rotation=45, ha="right", fontsize=BOXPLOT_LABEL_FONTSIZE)
+    ax.set_ylabel(classwise_metric, fontsize=BOXPLOT_LABEL_FONTSIZE)
     xmin = min(positions) - bplot_width
     xmax = max(positions) + bplot_width
     ax.set_xlim(xmin, xmax)
     ax.margins(x=0)
-    ax.set_ylim(0.0, 1.0)
+    apply_metric_axis_limits(ax)
     prefix = "Class-wise" if classwise else "Overall"
     suffix = (
         "per dataset/algorithm/client" if classwise else "per dataset/algorithm/client"
     )
     ax.set_title(
-        f"{prefix} Dice (bootstrapping) - roc(X): Per-client performance {suffix}",
+        f"{prefix} {classwise_metric} (bootstrapping) - roc(p): Per-client performance {suffix}",
         fontsize=12,
         fontweight="bold",
     )
@@ -2465,43 +2520,64 @@ def plot_boxplots_roc_per_client_bootstrapping(df_all: pd.DataFrame, classwise=F
     fig.tight_layout()
     fig.subplots_adjust(bottom=0.12)
     out_name = (
-        "classwise_boxplots_roc(X)_per_client_bootstrapping.png"
+        f"classwise_boxplots_roc(p)_per_client_bootstrapping_{metric_slug(classwise_metric)}.png"
         if classwise
-        else "boxplots_roc(X)_per_client_bootstrapping.png"
+        else f"boxplots_roc(p)_per_client_bootstrapping_{metric_slug(classwise_metric)}.png"
     )
     fig.savefig(OUTPUT_DIR / out_name, dpi=200, bbox_inches="tight")
-    print(f"Saved per-client roc(X) boxplot to {OUTPUT_DIR / out_name}")
+    print(f"Saved per-client roc(p) boxplot to {OUTPUT_DIR / out_name}")
 
 
-# # plot per algorithm
-# for algo in target_algos:
-#     plot_algorithm(df, algo)
+def main():
+    global classwise_metric, target_datasets
 
-# # plot per dataset
-# for ds in target_datasets:
-#     plot_dataset(df, ds)
+    parser = argparse.ArgumentParser(
+        description=(
+            "Visualize bootstrap-based segmentation result boxplots for selected "
+            "datasets and metrics."
+        )
+    )
+    parser.add_argument(
+        "--metric",
+        type=str,
+        choices=SUPPORTED_CLASSWISE_METRICS,
+        default=classwise_metric,
+        help=(
+            f"Bootstrap metric to visualize (default: {classwise_metric}). "
+            f"Choices: {SUPPORTED_CLASSWISE_METRICS}"
+        ),
+    )
+    parser.add_argument(
+        "--datasets",
+        nargs="+",
+        default=list(target_datasets),
+        help=(
+            "Optional list of datasets to include; all others are excluded. "
+            f"Allowed: {target_datasets}"
+        ),
+    )
+    parser.add_argument(
+        "--classwise",
+        action="store_true",
+        help="If set, keep class-wise boxplots instead of aggregating over classes.",
+    )
+    args = parser.parse_args()
 
-# # plot per dataset and per class label
-# for ds in target_datasets:
-#     plot_dataset_per_class(df, ds)
+    classwise_metric = args.metric
+    target_datasets = parse_selected_datasets(args.datasets)
 
-# boxplots clean vs noisy per dataset/class across methods
-# plot_classwise_boxplots_clean_noisy(df)
+    df_selected = df[df["Dataset_norm"].isin(target_datasets)].copy()
+    print(
+        f"Using metric '{classwise_metric}' for datasets: {target_datasets}. "
+        f"Retained {len(df_selected)} rows."
+    )
 
-# # boxplots clean vs noisy per dataset/class across methods from bootstrapping
-# plot_classwise_boxplots_clean_noisy_bootstrapping(df)
+    plot_boxplots_clean_roa_roc_noisy_bootstrapping(
+        df_selected, classwise=args.classwise
+    )
+    # plot_boxplots_roa_per_client_bootstrapping(df_selected, classwise=args.classwise)
+    # plot_boxplots_roc_per_client_bootstrapping(df_selected, classwise=args.classwise)
 
-# # boxplots clean vs roa(X) vs noisy per dataset/class across methods from bootstrapping
-# plot_classwise_boxplots_clean_noiseratioall_noisy_bootstrapping(df)
 
-# # boxplots clean vs roc(X) vs noisy per dataset/class across methods from bootstrapping
-# plot_classwise_boxplots_clean_roc_noisy_bootstrapping(df)
-
-# boxplots clean vs roa(X) vs roc(X) vs noisy per dataset/class across methods from bootstrapping
-plot_boxplots_clean_roa_roc_noisy_bootstrapping(df, classwise=False)
-
-# boxplots roa(X) per client per dataset/class across methods from bootstrapping
-plot_boxplots_roa_per_client_bootstrapping(df, classwise=False)
-
-# boxplots roc(X) per client per dataset/class across methods from bootstrapping
-plot_boxplots_roc_per_client_bootstrapping(df, classwise=False)
+if __name__ == "__main__":
+    main()
