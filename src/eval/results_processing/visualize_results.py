@@ -146,6 +146,26 @@ def apply_metric_axis_limits(ax):
         ax.set_yscale("log")
 
 
+def extract_finite_metric_values(raw_values):
+    """Return a list of finite floats from a scalar or list-like metric entry."""
+    if raw_values is None:
+        return []
+    if isinstance(raw_values, list):
+        seq = raw_values
+    else:
+        seq = [raw_values]
+
+    finite_values = []
+    for value in seq:
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            continue
+        if np.isfinite(value):
+            finite_values.append(value)
+    return finite_values
+
+
 # -------------------------------------------------------------------
 # Load and pre-process
 # -------------------------------------------------------------------
@@ -758,13 +778,17 @@ def plot_classwise_boxplots_clean_noisy_bootstrapping(df_all: pd.DataFrame):
                                 continue
                             if class_label not in data[ds][algo]:
                                 data[ds][algo][class_label] = {"clean": [], "noisy": []}
-                            vals = metrics.get(classwise_metric, None)
-                            if vals is None:
+                            raw_vals = metrics.get(classwise_metric, None)
+                            finite_vals = extract_finite_metric_values(raw_vals)
+                            if raw_vals is None:
                                 continue
-                            if isinstance(vals, list):
-                                data[ds][algo][class_label][state_key].extend(vals)
-                            else:
-                                data[ds][algo][class_label][state_key].append(vals)
+                            if not finite_vals:
+                                print(
+                                    f"No finite values for {classwise_metric}: "
+                                    f"{ds}/{algo}/{state_key}/class {class_label}"
+                                )
+                                continue
+                            data[ds][algo][class_label][state_key].extend(finite_vals)
 
     # Build boxplot structure (per dataset → class → noise state → algorithm)
     algo_colors = {algo: plt.cm.tab10(i % 10) for i, algo in enumerate(target_algos)}
@@ -1747,9 +1771,17 @@ def plot_boxplots_clean_roa_roc_noisy_bootstrapping(
                 for algo in target_algos:
                     vals = data[ds].get(algo, {}).get(cl, {}).get(state_key, [])
                     if not vals:
+                        print(f"No data for {ds}/{algo}/class {cl}/{state_key}, skipping...")
+                        continue
+                    arr = np.asarray(vals, dtype=float)
+                    arr = arr[np.isfinite(arr)]
+                    if arr.size == 0:
+                        print(
+                            f"No finite plot values for {ds}/{algo}/class {cl}/{state_key}, skipping..."
+                        )
                         continue
                     positions.append(pos)
-                    box_data.append(vals)
+                    box_data.append(arr.tolist())
                     colors.append(algo_colors[algo])
                     meta_info.append(
                         {
@@ -1757,7 +1789,7 @@ def plot_boxplots_clean_roa_roc_noisy_bootstrapping(
                             "class": cl,
                             "state": state_key,
                             "algo": algo,
-                            "n": len(vals),
+                            "n": int(arr.size),
                         }
                     )
                     state_positions.append(pos)
@@ -1874,7 +1906,11 @@ def plot_boxplots_clean_roa_roc_noisy_bootstrapping(
     ax.tick_params(axis="y", labelsize=BOXPLOT_TICK_FONTSIZE)
 
     # Overlay mean markers
-    means = [np.mean(vals) if len(vals) else np.nan for vals in box_data]
+    means = []
+    for vals in box_data:
+        arr = np.asarray(vals, dtype=float)
+        arr = arr[np.isfinite(arr)]
+        means.append(float(np.mean(arr)) if arr.size else np.nan)
     for pos_i, mean, color in zip(positions, means, colors):
         ax.scatter(
             pos_i,
@@ -1979,13 +2015,17 @@ def plot_boxplots_roa_per_client_bootstrapping(df_all: pd.DataFrame, classwise=F
                         if client_idx not in data[ds][algo][class_label]:
                             data[ds][algo][class_label][client_idx] = []
 
-                        vals = metrics.get(classwise_metric, None)
-                        if vals is None:
+                        raw_vals = metrics.get(classwise_metric, None)
+                        finite_vals = extract_finite_metric_values(raw_vals)
+                        if raw_vals is None:
                             continue
-                        if isinstance(vals, list):
-                            data[ds][algo][class_label][client_idx].extend(vals)
-                        else:
-                            data[ds][algo][class_label][client_idx].append(vals)
+                        if not finite_vals:
+                            print(
+                                f"No finite values for {classwise_metric}: "
+                                f"{ds}/{algo}/{noise_state}/class {class_label}/client {client_idx}"
+                            )
+                            continue
+                        data[ds][algo][class_label][client_idx].extend(finite_vals)
 
     # Optionally aggregate across classes
     if not classwise:
@@ -2283,13 +2323,17 @@ def plot_boxplots_roc_per_client_bootstrapping(df_all: pd.DataFrame, classwise=F
                         if client_idx not in data[ds][algo][class_label]:
                             data[ds][algo][class_label][client_idx] = []
 
-                        vals = metrics.get(classwise_metric, None)
-                        if vals is None:
+                        raw_vals = metrics.get(classwise_metric, None)
+                        finite_vals = extract_finite_metric_values(raw_vals)
+                        if raw_vals is None:
                             continue
-                        if isinstance(vals, list):
-                            data[ds][algo][class_label][client_idx].extend(vals)
-                        else:
-                            data[ds][algo][class_label][client_idx].append(vals)
+                        if not finite_vals:
+                            print(
+                                f"No finite values for {classwise_metric}: "
+                                f"{ds}/{algo}/{noise_state}/class {class_label}/client {client_idx}"
+                            )
+                            continue
+                        data[ds][algo][class_label][client_idx].extend(finite_vals)
 
     # Optionally aggregate across classes
     if not classwise:
