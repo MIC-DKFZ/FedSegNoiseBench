@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from glob import glob
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple, Union
@@ -116,6 +117,121 @@ def _print_bootstrap_stats(bootstrap_stats: Dict[str, Dict[str, Dict[str, float]
             )
 
 
+def _default_num_workers() -> int:
+    return max(1, min(8, os.cpu_count() or 1))
+
+
+def _compute_case_metrics(
+    ref_file: str,
+    pred_file: str,
+    reader_writer_cls,
+    labels: List[int],
+    ignore_label: Optional[int],
+    requested_metrics: Optional[Set[str]],
+) -> Tuple[str, Dict]:
+    case_name = Path(pred_file).stem
+    metrics = compute_metrics(
+        ref_file,
+        pred_file,
+        reader_writer_cls(),
+        labels,
+        ignore_label,
+        requested_metrics=requested_metrics,
+    )
+    return case_name, metrics
+
+
+def _compute_all_case_metrics(
+    files_ref: List[str],
+    files_pred: List[str],
+    reader_writer_cls,
+    labels: List[int],
+    ignore_label: Optional[int],
+    requested_metrics: Optional[Set[str]],
+    num_workers: int,
+) -> Dict[str, Dict]:
+    num_cases = len(files_pred)
+
+    if num_workers <= 1:
+        all_case_metrics = {}
+        for ref_file, pred_file in tqdm(
+            zip(files_ref, files_pred),
+            total=num_cases,
+            desc="Computing metrics per sample...",
+        ):
+            case_name, metrics = _compute_case_metrics(
+                ref_file,
+                pred_file,
+                reader_writer_cls,
+                labels,
+                ignore_label,
+                requested_metrics,
+            )
+            all_case_metrics[case_name] = metrics
+        return all_case_metrics
+
+    all_case_metrics = {}
+    with ThreadPoolExecutor(max_workers=num_workers) as executor:
+        futures = [
+            executor.submit(
+                _compute_case_metrics,
+                ref_file,
+                pred_file,
+                reader_writer_cls,
+                labels,
+                ignore_label,
+                requested_metrics,
+            )
+            for ref_file, pred_file in zip(files_ref, files_pred)
+        ]
+
+        for future in tqdm(
+            as_completed(futures),
+            total=num_cases,
+            desc=f"Computing metrics per sample ({num_workers} threads)...",
+        ):
+            case_name, metrics = future.result()
+            all_case_metrics[case_name] = metrics
+
+    return all_case_metrics
+
+
+def _metric_values_by_case(
+    all_case_metrics: Dict[str, Dict],
+    case_names: List[str],
+    label: int,
+    metric_name: str,
+) -> np.ndarray:
+    values = np.full(len(case_names), np.nan, dtype=float)
+    for idx, case_name in enumerate(case_names):
+        val = all_case_metrics[case_name]["metrics"][label].get(metric_name)
+        if val is None:
+            continue
+        try:
+            val = float(val)
+        except (TypeError, ValueError):
+            continue
+        if np.isfinite(val):
+            values[idx] = val
+    return values
+
+
+def _bootstrap_mean_vector(
+    values_by_case: np.ndarray,
+    sampled_indices: np.ndarray,
+) -> List[float]:
+    sampled_values = values_by_case[sampled_indices]
+    finite_mask = np.isfinite(sampled_values)
+    finite_counts = finite_mask.sum(axis=1)
+    finite_sums = np.where(finite_mask, sampled_values, 0.0).sum(axis=1)
+    bootstrap_means = np.full(sampled_indices.shape[0], np.nan, dtype=float)
+    valid_iterations = finite_counts > 0
+    bootstrap_means[valid_iterations] = (
+        finite_sums[valid_iterations] / finite_counts[valid_iterations]
+    )
+    return bootstrap_means.tolist()
+
+
 def bootstrap_evaluate(
     folder_ref: str,
     folder_pred: str,
@@ -124,6 +240,7 @@ def bootstrap_evaluate(
     num_bootstrap_iterations: int = 1000,
     file_ending: str = ".nii.gz",
     force: bool = False,
+    num_workers: int = 1,
 ) -> Dict:
     """
     Perform bootstrap evaluation on predictions.
@@ -138,9 +255,10 @@ def bootstrap_evaluate(
     existing_results = {} if force else _load_existing_bootstrap_results(results_file)
 
     example_file = subfiles(folder_ref, join=True)[0]
-    rw = determine_reader_writer_from_file_ending(
+    reader_writer_cls = determine_reader_writer_from_file_ending(
         file_ending, example_file, allow_nonmatching_filename=True, verbose=False
-    )()
+    )
+    rw = reader_writer_cls()
 
     files_pred = subfiles(folder_pred, suffix=file_ending, join=False)
     files_ref = [join(folder_ref, f) for f in files_pred]
@@ -184,56 +302,47 @@ def bootstrap_evaluate(
     elif force and results_file.is_file():
         print("Force mode enabled. Recomputing all metrics from scratch.")
 
-    all_case_metrics = {}
     requested_metrics = set(metrics_to_compute) if metrics_to_compute else None
-    for ref_file, pred_file in tqdm(
-        zip(files_ref, files_pred),
-        total=num_cases,
-        desc="Computing metrics per sample...",
-    ):
-        case_name = Path(pred_file).stem
-        metrics = compute_metrics(
-            ref_file,
-            pred_file,
-            rw,
-            labels,
-            ignore_label,
-            requested_metrics=requested_metrics,
-        )
-        all_case_metrics[case_name] = metrics
+    num_workers = max(1, int(num_workers))
+    print(f"Computing per-case metrics with {num_workers} worker(s).")
+    all_case_metrics = _compute_all_case_metrics(
+        files_ref,
+        files_pred,
+        reader_writer_cls,
+        labels,
+        ignore_label,
+        requested_metrics,
+        num_workers,
+    )
 
     bootstrap_results = {
         _normalize_label_key(label): {metric: [] for metric in sorted(metrics_to_compute)}
         for label in labels
     }
 
-    case_names = list(all_case_metrics.keys())
+    # Keep bootstrap sampling deterministic across worker counts. Threaded metric
+    # computation can finish out of order, so do not rely on dict insertion order.
+    case_names = [Path(pred_file).stem for pred_file in files_pred]
     np.random.seed(42)
-    for _ in tqdm(range(num_bootstrap_iterations), desc="Bootstrap Sampling"):
-        sampled_indices = np.random.choice(num_cases, size=num_cases, replace=True)
-        sampled_cases = [case_names[i] for i in sampled_indices]
+    sampled_indices = np.random.choice(
+        num_cases,
+        size=(num_bootstrap_iterations, num_cases),
+        replace=True,
+    )
 
-        for label in labels:
-            label_key = _normalize_label_key(label)
-            for metric_name in metrics_to_compute:
-                metric_values = []
-                for case_name in sampled_cases:
-                    val = all_case_metrics[case_name]["metrics"][label].get(metric_name)
-                    if val is None:
-                        continue
-                    try:
-                        val = float(val)
-                    except (TypeError, ValueError):
-                        continue
-                    if np.isfinite(val):
-                        metric_values.append(val)
-
-                if metric_values:
-                    bootstrap_results[label_key][metric_name].append(
-                        float(np.mean(metric_values))
-                    )
-                else:
-                    bootstrap_results[label_key][metric_name].append(np.nan)
+    for label in tqdm(labels, desc="Bootstrap Sampling"):
+        label_key = _normalize_label_key(label)
+        for metric_name in metrics_to_compute:
+            values_by_case = _metric_values_by_case(
+                all_case_metrics,
+                case_names,
+                label,
+                metric_name,
+            )
+            bootstrap_results[label_key][metric_name] = _bootstrap_mean_vector(
+                values_by_case,
+                sampled_indices,
+            )
 
     bootstrap_stats = _compute_bootstrap_stats(bootstrap_results)
     _print_bootstrap_stats(bootstrap_stats)
@@ -257,6 +366,15 @@ if __name__ == "__main__":
         action="store_true",
         help="Force full re-evaluation of all bootstrap metrics, even if results exist.",
         default=False,
+    )
+    parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=_default_num_workers(),
+        help=(
+            "Number of threads used for per-case metric computation. "
+            "Use 1 to disable multithreading."
+        ),
     )
     args = parser.parse_args()
 
@@ -297,4 +415,5 @@ if __name__ == "__main__":
             num_bootstrap_iterations=num_bootstrap_iterations,
             file_ending=file_ending,
             force=args.force,
+            num_workers=args.num_workers,
         )

@@ -5,7 +5,7 @@ import argparse
 import re
 
 
-def run_bootstrap_eval(experiment_id, force=False):
+def run_bootstrap_eval(experiment_id, force=False, num_workers=None):
     """Run bootstrap_nnunet_eval.py for a given experiment_id."""
     cmd = [
         "python3",
@@ -15,6 +15,8 @@ def run_bootstrap_eval(experiment_id, force=False):
     ]
     if force:
         cmd.append("--force")
+    if num_workers is not None:
+        cmd.extend(["--num-workers", str(num_workers)])
 
     print(f"Running: {' '.join(cmd)}")
     result = subprocess.run(cmd, capture_output=True, text=True)
@@ -30,7 +32,7 @@ def extract_fold_from_experiment_id(experiment_id):
     return int(match.group(1)) if match else None
 
 
-def main(df, force=False, selected_folds=None):
+def main(df, force=False, selected_folds=None, num_workers=None):
     """Find experiment_ids and run bootstrap for each experiment."""
     # get experiment_ids of df for rows with ID set
     experiment_ids = df[df["ID"].notna()]["Experiment ID"].dropna().unique().tolist()
@@ -58,7 +60,7 @@ def main(df, force=False, selected_folds=None):
 
     print(f"Found {len(experiment_ids)} experiments")
     for exp_id in tqdm(experiment_ids, desc="Running bootstrap evaluations"):
-        run_bootstrap_eval(exp_id, force=force)
+        run_bootstrap_eval(exp_id, force=force, num_workers=num_workers)
 
 
 if __name__ == "__main__":
@@ -76,6 +78,15 @@ if __name__ == "__main__":
         default=None,
         help="Optional list of folds to run, e.g. --folds 0 1 2",
     )
+    parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=None,
+        help=(
+            "Number of threads to use per bootstrap_nnunet_eval.py process. "
+            "If omitted, the child script chooses its default."
+        ),
+    )
     args = parser.parse_args()
 
     # google sheet details
@@ -86,4 +97,9 @@ if __name__ == "__main__":
     )
     gsheet_df = pd.read_csv(csv_url)
 
-    main(gsheet_df, force=args.force, selected_folds=args.folds)
+    main(
+        gsheet_df,
+        force=args.force,
+        selected_folds=args.folds,
+        num_workers=args.num_workers,
+    )
