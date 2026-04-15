@@ -527,6 +527,66 @@ def build_rank_frequency_summary(
     return out
 
 
+def print_incorporated_datapoint_summary(
+    client_vectors_df: pd.DataFrame,
+    dataset_order: Sequence[str],
+    algorithm_order: Sequence[str],
+) -> None:
+    """Print how many client vectors and scalar bootstrap datapoints were used."""
+    if client_vectors_df.empty:
+        print("No incorporated datapoints to summarize.")
+        return
+
+    summary_rows = []
+    for row in client_vectors_df.itertuples(index=False):
+        vec = np.asarray(row.bootstrap_vector, dtype=float).reshape(-1)
+        finite_count = int(np.isfinite(vec).sum())
+        summary_rows.append(
+            {
+                "dataset": row.dataset,
+                "algorithm": row.algorithm,
+                "experiment_id": row.experiment_id,
+                "fold": row.fold,
+                "client_id": row.client_id,
+                "n_bootstrap_points": finite_count,
+            }
+        )
+
+    summary_df = pd.DataFrame(summary_rows)
+    if summary_df.empty:
+        print("No incorporated datapoints to summarize.")
+        return
+
+    grouped = (
+        summary_df.groupby(["dataset", "algorithm"], dropna=False)
+        .agg(
+            n_client_vectors=("n_bootstrap_points", "size"),
+            n_bootstrap_points=("n_bootstrap_points", "sum"),
+            n_experiments=("experiment_id", "nunique"),
+            n_folds=("fold", "nunique"),
+            n_clients=("client_id", "nunique"),
+        )
+        .reset_index()
+    )
+
+    dataset_rank = {d: i for i, d in enumerate(dataset_order)}
+    algo_rank = {a: i for i, a in enumerate(algorithm_order)}
+    grouped["_dataset_order"] = grouped["dataset"].map(dataset_rank).fillna(len(dataset_rank))
+    grouped["_algo_order"] = grouped["algorithm"].map(algo_rank).fillna(len(algo_rank))
+    grouped = grouped.sort_values(["_dataset_order", "_algo_order"]).drop(
+        columns=["_dataset_order", "_algo_order"]
+    )
+
+    print("\nIncorporated datapoint summary:")
+    for row in grouped.itertuples(index=False):
+        print(
+            f"  {row.dataset} | {row.algorithm}: "
+            f"client_vectors={row.n_client_vectors}, "
+            f"bootstrap_points={row.n_bootstrap_points}, "
+            f"experiments={row.n_experiments}, folds={row.n_folds}, clients={row.n_clients}"
+        )
+
+
 def plot_blob_panel(
     ax: plt.Axes,
     summary_df: pd.DataFrame,
@@ -847,6 +907,12 @@ def main() -> None:
         print("Saved per-dataset figures:")
         for path in dataset_paths:
             print(f"  - {path.resolve()}")
+
+    print_incorporated_datapoint_summary(
+        client_vectors_df=client_vectors_df,
+        dataset_order=selected_datasets,
+        algorithm_order=target_algos,
+    )
 
 
 if __name__ == "__main__":
