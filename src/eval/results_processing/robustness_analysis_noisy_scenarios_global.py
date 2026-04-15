@@ -1,5 +1,5 @@
 """
-Comparison of partially noisy training scenarios roa(X) and roc(X).
+Comparison of partially noisy training scenarios roa(p) and roc(p).
 
 For matched X, computes the effective noise ratio p and the per-dataset / per-algorithm
 absolute and relative performance differences with respect to the clean baseline:
@@ -8,8 +8,8 @@ absolute and relative performance differences with respect to the clean baseline
     delta^{v}_{rel,eff}     = (Dice(clean) - Dice(v)) / p^{v}_{eff}(X)
 
 where v ∈ {roa, roc} and p^{v}_{eff}(X) is defined as:
-    - roa(X): p^{roa}_{eff}   = X  (X fraction of each client's annotations are noisy)
-    - roc(X): p^{roc}_{eff}   = (Σ_{k ∈ K_n} n_k) / (Σ_{k ∈ K} n_k)
+    - roa(p): p^{roa}_{eff}   = X  (X fraction of each client's annotations are noisy)
+    - roc(p): p^{roc}_{eff}   = (Σ_{k ∈ K_n} n_k) / (Σ_{k ∈ K} n_k)
                                    with K_n = noisy clients, K = all clients
 
 The Dice values are computed from bootstrap_evaluation_results.json across checkpoints,
@@ -71,6 +71,7 @@ OUTPUT_DIR = Path("./results/segmentation_results/partial_noise_comparison")
 # ---------------------------------------------------------------------------
 # For roa(50): all datasets use 50 % noisy annotations per client → p_eff = 0.50
 P_ROA_EFF: float = 0.50
+P_NOISY_EFF: float = 1.00
 
 # ---------------------------------------------------------------------------
 # Effective noise ratio p^{roc}_{eff} per dataset
@@ -116,6 +117,101 @@ ALGO_COLORS = {
     "FedCorr": "#C44E52",
     "FedSelect": "#8172B2",
 }
+
+DELTA_MODE_COLUMNS = {
+    "rel_eff": {
+        "roa": "delta_roa_rel_eff",
+        "roc": "delta_roc_rel_eff",
+        "noisy": "delta_noisy_rel_eff",
+    },
+    "abs": {
+        "roa": "delta_roa_abs",
+        "roc": "delta_roc_abs",
+        "noisy": "delta_noisy_abs",
+    },
+}
+
+DELTA_MODE_LABELS = {
+    "rel_eff": r"$\Delta Dice_{\mathrm{eff,rel}}$",
+    "abs": r"$\Delta Dice$",
+}
+
+DELTA_MODE_TITLES = {
+    "rel_eff": "effective-relative Dice drop",
+    "abs": "absolute Dice drop",
+}
+
+SCENARIO_LABELS = {
+    "roa": "roa(p)",
+    "roc": "roc(p)",
+    "noisy": "noisy(100%)",
+}
+
+DATASET_OFFSETS = {
+    dataset: offset
+    for dataset, offset in zip(
+        TARGET_DATASETS,
+        np.linspace(-0.32, 0.32, len(TARGET_DATASETS)),
+    )
+}
+
+DATASET_TICK_LABELS = {
+    "LIDC": "LIDC",
+    "RIGA": "RIGA",
+    "Gleason": "GleasonHD",
+    "MouseTumor": "MouseT",
+    "MMIA": "MMIA",
+    "MMIS": "MMIS",
+}
+
+SEPARATE_DOT_FIGSIZE = (28.0, 7.6)
+SEPARATE_DOT_TITLE_SIZE = 22
+SEPARATE_DOT_PANEL_TITLE_SIZE = 22
+SEPARATE_DOT_LABEL_SIZE = 24
+SEPARATE_DOT_TICK_SIZE = 19
+SEPARATE_DOT_LEGEND_SIZE = 20
+SEPARATE_DOT_MARKER_SIZE = 200
+SEPARATE_DOT_BOOTSTRAP_MARKER_SIZE = 15
+SEPARATE_DOT_MEAN_LINEWIDTH = 3.5
+SEPARATE_DOT_AXIS_LINEWIDTH = 1.2
+
+
+def get_effective_noise_ratio(dataset: str, scenario: str) -> float:
+    if scenario == "roa":
+        return P_ROA_EFF
+    if scenario == "roc":
+        return P_ROC_EFF.get(dataset, np.nan)
+    if scenario == "noisy":
+        return P_NOISY_EFF
+    return np.nan
+
+
+def compute_bootstrap_delta_vector(
+    bootstrap_vectors: Dict[tuple, np.ndarray],
+    algo: str,
+    dataset: str,
+    scenario: str,
+    delta_mode: str,
+) -> np.ndarray:
+    clean_vec = bootstrap_vectors.get((algo, dataset, "clean"))
+    scenario_vec = bootstrap_vectors.get((algo, dataset, scenario))
+    if clean_vec is None or scenario_vec is None:
+        return np.asarray([], dtype=float)
+    if len(clean_vec) == 0 or len(scenario_vec) == 0:
+        return np.asarray([], dtype=float)
+
+    n = min(len(clean_vec), len(scenario_vec))
+    clean_arr = np.asarray(clean_vec[:n], dtype=float)
+    scenario_arr = np.asarray(scenario_vec[:n], dtype=float)
+    delta = clean_arr - scenario_arr
+
+    if delta_mode == "rel_eff":
+        p_eff = get_effective_noise_ratio(dataset, scenario)
+        if not np.isfinite(p_eff) or p_eff <= 0:
+            return np.asarray([], dtype=float)
+        delta = delta / p_eff
+
+    return delta[np.isfinite(delta)]
 
 # ---------------------------------------------------------------------------
 # Bootstrap loading (reused from visualize_ranking.py)
@@ -308,7 +404,7 @@ def load_sheet() -> pd.DataFrame:
     # Keep only target algos / datasets / known noise scenarios / included folds
     df = df[df[algo_col].isin(TARGET_ALGOS)]
     df = df[df["dataset"].isin(TARGET_DATASETS)]
-    df = df[df["noise_scenario"].isin(["clean", "roa", "roc"])]
+    df = df[df["noise_scenario"].isin(["clean", "roa", "roc", "noisy"])]
     df = df[df["fold"].isin(INCLUDED_FOLDS)]
     df = df[df["exp_id"].notna()]
     df = df[df["exp_id"] != ""]
@@ -316,7 +412,7 @@ def load_sheet() -> pd.DataFrame:
     print(
         f"Retained {len(df)} rows after filtering "
         f"(algos={TARGET_ALGOS!r}; datasets={TARGET_DATASETS!r}; "
-        f"noise=[clean,roa,roc]; folds={INCLUDED_FOLDS!r})."
+        f"noise=[clean,roa,roc,noisy]; folds={INCLUDED_FOLDS!r})."
     )
     return df
 
@@ -439,16 +535,19 @@ def build_comparison_table(bootstrap_dice: Dict[tuple, float]) -> pd.DataFrame:
             key_clean = (algo, dataset, "clean")
             key_roa = (algo, dataset, "roa")
             key_roc = (algo, dataset, "roc")
+            key_noisy = (algo, dataset, "noisy")
 
             dice_clean = bootstrap_dice.get(key_clean, np.nan)
             dice_roa = bootstrap_dice.get(key_roa, np.nan)
             dice_roc = bootstrap_dice.get(key_roc, np.nan)
+            dice_noisy = bootstrap_dice.get(key_noisy, np.nan)
 
             if np.isnan(dice_clean):
                 continue
 
             p_roa = P_ROA_EFF
             p_roc = P_ROC_EFF.get(dataset, np.nan)
+            p_noisy = P_NOISY_EFF
             roc_nom_x = ROC_NOMINAL_X.get(dataset, "?")
 
             delta_roa_abs = (
@@ -456,6 +555,9 @@ def build_comparison_table(bootstrap_dice: Dict[tuple, float]) -> pd.DataFrame:
             )
             delta_roc_abs = (
                 (dice_clean - dice_roc) if not np.isnan(dice_roc) else np.nan
+            )
+            delta_noisy_abs = (
+                (dice_clean - dice_noisy) if not np.isnan(dice_noisy) else np.nan
             )
 
             delta_roa_rel = (
@@ -468,6 +570,11 @@ def build_comparison_table(bootstrap_dice: Dict[tuple, float]) -> pd.DataFrame:
                 if (not np.isnan(delta_roc_abs) and not np.isnan(p_roc) and p_roc > 0)
                 else np.nan
             )
+            delta_noisy_rel = (
+                (delta_noisy_abs / p_noisy)
+                if (not np.isnan(delta_noisy_abs) and p_noisy > 0)
+                else np.nan
+            )
 
             rows.append(
                 {
@@ -476,13 +583,17 @@ def build_comparison_table(bootstrap_dice: Dict[tuple, float]) -> pd.DataFrame:
                     "dice_clean": dice_clean,
                     "dice_roa": dice_roa,
                     "dice_roc": dice_roc,
+                    "dice_noisy": dice_noisy,
                     "p_roa_eff": p_roa,
                     "p_roc_eff": p_roc,
+                    "p_noisy_eff": p_noisy,
                     "roc_nominal_X_pct": roc_nom_x,
                     "delta_roa_abs": delta_roa_abs,
                     "delta_roc_abs": delta_roc_abs,
+                    "delta_noisy_abs": delta_noisy_abs,
                     "delta_roa_rel_eff": delta_roa_rel,
                     "delta_roc_rel_eff": delta_roc_rel,
+                    "delta_noisy_rel_eff": delta_noisy_rel,
                 }
             )
 
@@ -509,12 +620,16 @@ def print_table(result: pd.DataFrame) -> None:
         "dice_clean",
         "dice_roa",
         "dice_roc",
+        "dice_noisy",
         "p_roa_eff",
         "p_roc_eff",
+        "p_noisy_eff",
         "delta_roa_abs",
         "delta_roc_abs",
+        "delta_noisy_abs",
         "delta_roa_rel_eff",
         "delta_roc_rel_eff",
+        "delta_noisy_rel_eff",
     ]
     display = result.copy()
     for c in float_cols:
@@ -527,7 +642,7 @@ def print_table(result: pd.DataFrame) -> None:
 
     print()
     print("=" * 120)
-    print("Partial noise scenario comparison: roa(50%) vs roc(X)")
+    print("Noise scenario comparison: roa(50%), roc(p), and noisy(100%)")
     print("=" * 120)
     print(display.to_string(index=False))
     print()
@@ -540,12 +655,16 @@ def print_table(result: pd.DataFrame) -> None:
         "dice_clean",
         "dice_roa",
         "dice_roc",
+        "dice_noisy",
         "p_roa_eff",
         "p_roc_eff",
+        "p_noisy_eff",
         "delta_roa_abs",
         "delta_roc_abs",
+        "delta_noisy_abs",
         "delta_roa_rel_eff",
         "delta_roc_rel_eff",
+        "delta_noisy_rel_eff",
     ]
     summary = result.groupby("dataset")[numeric_cols].mean().reset_index()
     # Restore dataset order
@@ -596,6 +715,36 @@ def plot_comparison_scatter(
             TARGET_DATASETS,
             ["o", "s", "^", "D", "P", "X"],
         )
+    }
+    dataset_offsets = {
+        dataset: offset
+        for dataset, offset in zip(
+            TARGET_DATASETS,
+            np.linspace(-0.32, 0.32, len(TARGET_DATASETS)),
+        )
+    }
+    dataset_tick_labels = {
+        "LIDC": "LIDC",
+        "RIGA": "RIGA",
+        "Gleason": "Gleason",
+        "MouseTumor": "MouseT",
+        "MMIA": "MMIA",
+        "MMIS": "MMIS",
+    }
+    dataset_offsets = {
+        dataset: offset
+        for dataset, offset in zip(
+            TARGET_DATASETS,
+            np.linspace(-0.32, 0.32, len(TARGET_DATASETS)),
+        )
+    }
+    dataset_tick_labels = {
+        "LIDC": "LIDC",
+        "RIGA": "RIGA",
+        "Gleason": "Gleason",
+        "MouseTumor": "MouseT",
+        "MMIA": "MMIA",
+        "MMIS": "MMIS",
     }
 
     fig, ax = plt.subplots(figsize=(10, 8), dpi=dpi)
@@ -767,11 +916,11 @@ def plot_comparison_scatter(
         )
 
     ax.set_xlabel(
-        r"$\Delta Dice_{eff}(\mathrm{clean},\mathrm{{roa}})$",
+        r"$\Delta Dice_{eff,rel}(\mathrm{clean},\mathrm{{roa}})$",
         fontsize=11,
     )
     ax.set_ylabel(
-        r"$\Delta Dice_{eff}(\mathrm{clean},\mathrm{roc})$",
+        r"$\Delta Dice_{eff,rel}(\mathrm{clean},\mathrm{roc})$",
         fontsize=11,
     )
     ax.set_title(
@@ -1074,11 +1223,159 @@ def plot_comparison_paired_dot(
 
     ax.set_ylabel(
         # r"$\Delta Dice_{\mathrm{eff}} = \left(\mathrm{Dice(clean)} - \mathrm{Dice(partial)}\right)/p^{partial}_{\mathrm{eff}}$",
-        r"$\Delta Dice_{\mathrm{eff}}$(clean, partial noisy)",
+        r"$\Delta Dice_{\mathrm{eff,rel}}$(clean, partial noisy)",
         fontsize=11,
     )
 
     # Legends
+    dataset_handles = [
+        Line2D(
+            [0],
+            [0],
+            marker=dataset_markers[d],
+            color="black",
+            markerfacecolor="white",
+            markeredgecolor="black",
+            markersize=8,
+            linewidth=0,
+            label=d,
+        )
+        for d in TARGET_DATASETS
+    ]
+    mean_handle = Line2D(
+        [0],
+        [0],
+        color="black",
+        linewidth=3,
+        label="Mean across datasets",
+    )
+
+    fig.legend(
+        handles=dataset_handles + [mean_handle],
+        # title="Marker = dataset",
+        loc="upper right",
+        # bbox_to_anchor=(1.12, 0.92),
+        framealpha=0.95,
+        fontsize=9,
+        title_fontsize=10,
+    )
+
+    fig.tight_layout(rect=[0.03, 0.10, 0.97, 0.94])
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=dpi, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved figure: {output_path.resolve()}")
+
+
+def plot_single_scenario_dot(
+    result: pd.DataFrame,
+    output_path: Path,
+    scenario: str,
+    delta_mode: str = "rel_eff",
+    dpi: int = 200,
+) -> None:
+    """
+    Single-panel dot plot for one partial-noise scenario only.
+
+    delta_mode='rel_eff' uses delta_*_rel_eff columns.
+    delta_mode='abs' uses delta_*_abs columns.
+    """
+    if delta_mode not in DELTA_MODE_COLUMNS:
+        raise ValueError("delta_mode must be one of: 'rel_eff', 'abs'")
+    if scenario not in SCENARIO_LABELS:
+        raise ValueError("scenario must be one of: 'roa', 'roc', 'noisy'")
+
+    from matplotlib.lines import Line2D
+
+    metric_col = DELTA_MODE_COLUMNS[delta_mode][scenario]
+    scenario_label = SCENARIO_LABELS[scenario]
+    y_label = DELTA_MODE_LABELS[delta_mode]
+    delta_title = DELTA_MODE_TITLES[delta_mode]
+
+    algo_colors = {
+        algo: ALGO_COLORS.get(algo, plt.cm.tab10(i % 10))
+        for i, algo in enumerate(TARGET_ALGOS)
+    }
+    dataset_markers = {
+        ds: m
+        for ds, m in zip(
+            TARGET_DATASETS,
+            ["o", "s", "^", "D", "P", "X"],
+        )
+    }
+
+    points = []
+    for dataset in TARGET_DATASETS:
+        for algo in TARGET_ALGOS:
+            row = result[(result["dataset"] == dataset) & (result["algorithm"] == algo)]
+            if row.empty:
+                continue
+            y = float(row.iloc[0][metric_col])
+            if np.isfinite(y):
+                points.append((algo, dataset, y))
+
+    if not points:
+        print(f"No valid points to plot for scenario '{scenario}'.")
+        return
+
+    all_y = [p[2] for p in points]
+    y_min = float(np.nanmin(all_y))
+    y_max = float(np.nanmax(all_y))
+    y_span = y_max - y_min
+    y_pad = 0.08 * y_span if y_span > 0 else 0.05
+    y_low = y_min - y_pad
+    y_high = y_max + y_pad
+
+    fig, ax = plt.subplots(1, 1, figsize=(9.0, 5.4), dpi=dpi)
+
+    for x_sep in np.arange(1.5, len(TARGET_ALGOS) + 0.5, 1.0):
+        ax.axvline(x_sep, color="0.90", lw=1.1, zorder=0)
+
+    for i, algo in enumerate(TARGET_ALGOS, start=1):
+        vals = []
+        for _, dataset, y in [p for p in points if p[0] == algo]:
+            vals.append(y)
+            ax.scatter(
+                i,
+                y,
+                s=95,
+                marker=dataset_markers[dataset],
+                c=[algo_colors[algo]],
+                edgecolors="black",
+                linewidths=0.8,
+                alpha=0.96,
+                zorder=3,
+            )
+        if vals:
+            y_mean = float(np.nanmean(vals))
+            ax.hlines(
+                y_mean,
+                i + min(DATASET_OFFSETS.values()),
+                i + max(DATASET_OFFSETS.values()),
+                colors="black",
+                linewidth=3.0,
+                zorder=4,
+            )
+
+    ax.axhline(0, color="black", linewidth=1.0, linestyle="-", alpha=0.35)
+    ax.set_xlim(0.5, len(TARGET_ALGOS) + 0.5)
+    ax.set_ylim(y_low, y_high)
+    ax.set_xticks(range(1, len(TARGET_ALGOS) + 1))
+    ax.set_xticklabels(TARGET_ALGOS, rotation=0, ha="center")
+    ax.tick_params(axis="x", which="major", pad=6, length=0)
+    ax.tick_params(axis="x", which="minor", bottom=False, labelbottom=False)
+    # ax.set_xlabel("FNLL method", fontsize=11)
+    ax.set_ylabel(
+        rf"{y_label}(clean, {scenario})",
+        fontsize=11,
+    )
+    ax.set_title(
+        f"{delta_title.capitalize()} for noisy training scenario: {scenario_label}",
+        fontsize=13,
+        pad=12,
+    )
+    ax.grid(axis="y", alpha=0.3, linestyle="--")
+
     dataset_handles = [
         Line2D(
             [0],
@@ -1103,18 +1400,255 @@ def plot_comparison_paired_dot(
         linewidth=0,
         label="Mean across datasets",
     )
-
     fig.legend(
         handles=dataset_handles + [mean_handle],
-        # title="Marker = dataset",
         loc="upper right",
-        bbox_to_anchor=(1.12, 0.92),
+        bbox_to_anchor=(1.12, 0.94),
         framealpha=0.95,
         fontsize=9,
         title_fontsize=10,
     )
 
-    fig.tight_layout(rect=[0.03, 0.10, 0.97, 0.94])
+    fig.tight_layout(rect=[0.03, 0.03, 0.97, 0.96])
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=dpi, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved figure: {output_path.resolve()}")
+
+
+def _plot_single_scenario_dot_on_axis(
+    ax,
+    result: pd.DataFrame,
+    bootstrap_vectors: Dict[tuple, np.ndarray],
+    scenario: str,
+    delta_mode: str,
+) -> None:
+    """Render one single-scenario dot plot onto an existing axis."""
+    from matplotlib.lines import Line2D
+
+    if delta_mode not in DELTA_MODE_COLUMNS:
+        raise ValueError("delta_mode must be one of: 'rel_eff', 'abs'")
+    if scenario not in SCENARIO_LABELS:
+        raise ValueError("scenario must be one of: 'roa', 'roc', 'noisy'")
+
+    metric_col = DELTA_MODE_COLUMNS[delta_mode][scenario]
+    scenario_label = SCENARIO_LABELS[scenario]
+    y_label = DELTA_MODE_LABELS[delta_mode]
+
+    algo_colors = {
+        algo: ALGO_COLORS.get(algo, plt.cm.tab10(i % 10))
+        for i, algo in enumerate(TARGET_ALGOS)
+    }
+    dataset_markers = {
+        ds: m
+        for ds, m in zip(
+            TARGET_DATASETS,
+            ["o", "s", "^", "D", "P", "X"],
+        )
+    }
+
+    points = []
+    bootstrap_points = []
+    for dataset in TARGET_DATASETS:
+        for algo in TARGET_ALGOS:
+            bootstrap_deltas = compute_bootstrap_delta_vector(
+                bootstrap_vectors,
+                algo,
+                dataset,
+                scenario,
+                delta_mode,
+            )
+            if bootstrap_deltas.size > 0:
+                bootstrap_points.append((algo, dataset, bootstrap_deltas))
+
+            row = result[(result["dataset"] == dataset) & (result["algorithm"] == algo)]
+            if row.empty:
+                continue
+            y = float(row.iloc[0][metric_col])
+            if np.isfinite(y):
+                points.append((algo, dataset, y))
+
+    if not points and not bootstrap_points:
+        ax.text(0.5, 0.5, f"No valid {scenario_label} points", ha="center", va="center", transform=ax.transAxes)
+        return
+
+    all_y = [p[2] for p in points]
+    for _, _, values in bootstrap_points:
+        all_y.extend(values.tolist())
+    y_min = float(np.nanmin(all_y))
+    y_max = float(np.nanmax(all_y))
+    y_span = y_max - y_min
+    y_pad = 0.08 * y_span if y_span > 0 else 0.05
+    y_low = y_min - y_pad
+    y_high = y_max + y_pad
+
+    for x_sep in np.arange(1.5, len(TARGET_ALGOS) + 0.5, 1.0):
+        ax.axvline(x_sep, color="0.90", lw=1.1, zorder=0)
+
+    for i, algo in enumerate(TARGET_ALGOS, start=1):
+        for _, dataset, bootstrap_deltas in [p for p in bootstrap_points if p[0] == algo]:
+            x = i + DATASET_OFFSETS[dataset]
+            ax.scatter(
+                np.full(bootstrap_deltas.shape, x, dtype=float),
+                bootstrap_deltas,
+                s=SEPARATE_DOT_BOOTSTRAP_MARKER_SIZE,
+                c="lightgray",
+                alpha=0.13,
+                edgecolors="none",
+                zorder=1,
+            )
+
+    for i, algo in enumerate(TARGET_ALGOS, start=1):
+        vals = []
+        for _, dataset, y in [p for p in points if p[0] == algo]:
+            vals.append(y)
+            x = i + DATASET_OFFSETS[dataset]
+            ax.scatter(
+                x,
+                y,
+                s=SEPARATE_DOT_MARKER_SIZE,
+                marker=dataset_markers[dataset],
+                c=[algo_colors[algo]],
+                edgecolors="black",
+                linewidths=1.1,
+                alpha=0.96,
+                zorder=3,
+            )
+        if vals:
+            y_mean = float(np.nanmean(vals))
+            ax.hlines(
+                y_mean,
+                i + min(DATASET_OFFSETS.values()),
+                i + max(DATASET_OFFSETS.values()),
+                colors="black",
+                linewidth=SEPARATE_DOT_MEAN_LINEWIDTH,
+                zorder=4,
+            )
+
+    ax.axhline(0, color="black", linewidth=1.3, linestyle="-", alpha=0.38)
+    ax.set_xlim(0.35, len(TARGET_ALGOS) + 0.65)
+    ax.set_ylim(-0.1, y_high)
+    ax.set_xticks(range(1, len(TARGET_ALGOS) + 1))
+    ax.set_xticklabels(TARGET_ALGOS, rotation=0, ha="center", fontsize=SEPARATE_DOT_TICK_SIZE)
+    ax.tick_params(
+        axis="both",
+        which="major",
+        labelsize=SEPARATE_DOT_TICK_SIZE,
+        width=SEPARATE_DOT_AXIS_LINEWIDTH,
+    )
+    ax.tick_params(axis="x", which="major", pad=8, length=0)
+    ax.tick_params(axis="x", which="minor", bottom=False, labelbottom=False)
+    for spine in ax.spines.values():
+        spine.set_linewidth(SEPARATE_DOT_AXIS_LINEWIDTH)
+
+    # ax.set_xlabel("FNLL method", fontsize=SEPARATE_DOT_LABEL_SIZE)
+    ax.set_ylabel(
+        rf"{y_label}(clean, $\mathbf{{{scenario}}}$)",
+        fontsize=SEPARATE_DOT_LABEL_SIZE,
+    )
+    # ax.set_title(
+    #     f"Noise scenario: {scenario_label}",
+    #     fontsize=SEPARATE_DOT_PANEL_TITLE_SIZE,
+    #     fontweight="bold",
+    #     pad=14,
+    # )
+    ax.grid(axis="y", alpha=0.34, linestyle="--", linewidth=1.0)
+    ax.grid(axis="x", alpha=0.22, linestyle=":", linewidth=0.9)
+
+    dataset_handles = [
+        Line2D(
+            [0],
+            [0],
+            marker=dataset_markers[d],
+            color="black",
+            markerfacecolor="white",
+            markeredgecolor="black",
+            markersize=15,
+            linewidth=0,
+            label=DATASET_TICK_LABELS.get(d, d),
+        )
+        for d in TARGET_DATASETS
+    ]
+    mean_handle = Line2D(
+        [0],
+        [0],
+        color="black",
+        linewidth=SEPARATE_DOT_MEAN_LINEWIDTH,
+        label="Mean across datasets",
+    )
+    bootstrap_handle = Line2D(
+        [0],
+        [0],
+        marker="o",
+        color="none",
+        markerfacecolor="lightgray",
+        markeredgecolor="lightgray",
+        markersize=7,
+        label="Bootstrap deltas",
+    )
+    return dataset_handles, mean_handle, bootstrap_handle
+
+
+def plot_separate_scenarios_side_by_side(
+    result: pd.DataFrame,
+    output_path: Path,
+    bootstrap_vectors: Dict[tuple, np.ndarray],
+    delta_mode: str = "rel_eff",
+    dpi: int = 200,
+) -> None:
+    """Create one figure with roa, roc, and noisy shown in side-by-side panels."""
+    if delta_mode not in DELTA_MODE_COLUMNS:
+        raise ValueError("delta_mode must be one of: 'rel_eff', 'abs'")
+
+    scenarios = ["roa", "roc", "noisy"]
+    fig, axes = plt.subplots(
+        1,
+        len(scenarios),
+        figsize=SEPARATE_DOT_FIGSIZE,
+        dpi=dpi,
+        sharey=False,
+    )
+    legend_handles = None
+
+    for ax, scenario in zip(axes, scenarios):
+        handles = _plot_single_scenario_dot_on_axis(
+            ax,
+            result,
+            bootstrap_vectors,
+            scenario,
+            delta_mode,
+        )
+        if handles is not None:
+            legend_handles = handles
+
+    y_lims = [ax.get_ylim() for ax in axes]
+    y_low = min(lim[0] for lim in y_lims)
+    y_high = max(lim[1] for lim in y_lims)
+    for ax in axes:
+        ax.set_ylim(y_low, y_high)
+
+    # fig.suptitle(
+    #     f"Robustness of FNLL methods to noisy training scenarios "
+    #     f"({DELTA_MODE_TITLES[delta_mode]})",
+    #     fontsize=SEPARATE_DOT_TITLE_SIZE,
+    #     y=0.985,
+    # )
+
+    fig.tight_layout(rect=[0.02, 0.03, 0.905, 0.93])
+    if legend_handles is not None:
+        dataset_handles, mean_handle, bootstrap_handle = legend_handles
+        right_ax_pos = axes[-1].get_position()
+        fig.legend(
+            handles=dataset_handles,  # + [mean_handle, bootstrap_handle],
+            loc="upper left",
+            bbox_to_anchor=(right_ax_pos.x1 + 0.006, right_ax_pos.y1),
+            bbox_transform=fig.transFigure,
+            borderaxespad=0.0,
+            framealpha=0.95,
+            fontsize=SEPARATE_DOT_LEGEND_SIZE,
+            title_fontsize=SEPARATE_DOT_LEGEND_SIZE,
+        )
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, dpi=dpi, bbox_inches="tight")
     plt.close(fig)
@@ -1129,7 +1663,7 @@ def plot_comparison_paired_dot(
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
-            "Compare roa(X) and roc(X) partially noisy scenarios by computing\n"
+            "Compare roa(p), roc(p), and noisy training scenarios by computing\n"
             "  delta_abs  = Dice(clean) - Dice(v)  [from bootstrap values]\n"
             "  delta_rel_eff = delta_abs / p_eff\n"
             "per dataset and algorithm."
@@ -1146,7 +1680,21 @@ def main() -> None:
         "--figure",
         type=str,
         default="paired_dot",
-        help="Generate figure: scatter_plot, paired_dot, no_figure.",
+        help=(
+            "Generate figure: scatter_plot, paired_dot, separate_dot "
+            "(one figure with roa, roc, and noisy side by side), no_figure."
+        ),
+    )
+    parser.add_argument(
+        "--delta-mode",
+        type=str,
+        choices=sorted(DELTA_MODE_COLUMNS),
+        default="rel_eff",
+        help=(
+            "Metric shown in separate_dot plots: "
+            "'rel_eff' = (Dice(clean)-Dice(scenario))/p_eff, "
+            "'abs' = Dice(clean)-Dice(scenario)."
+        ),
     )
     parser.add_argument(
         "--nnunet-results-root",
@@ -1200,6 +1748,7 @@ def main() -> None:
     print()
     print("Effective noise ratios used:")
     print(f"  p^{{roa}}_{{eff}} = {P_ROA_EFF:.4f}  (same for all datasets)")
+    print(f"  p^{{noisy}}_{{eff}} = {P_NOISY_EFF:.4f}  (same for all datasets)")
     for ds in TARGET_DATASETS:
         p_roc = P_ROC_EFF.get(ds, float("nan"))
         roc_nom = ROC_NOMINAL_X.get(ds, "?")
@@ -1233,6 +1782,14 @@ def main() -> None:
         fig_path = out_dir / "partial_noise_comparison_paired_dot.png"
         plot_comparison_paired_dot(
             result, fig_path, bootstrap_vectors=bootstrap_vectors
+        )
+    elif args.figure == "separate_dot":
+        fig_path = out_dir / f"robustness_analysis_clean_noise_scenarios_separate_dot_{args.delta_mode}.png"
+        plot_separate_scenarios_side_by_side(
+            result=result,
+            output_path=fig_path,
+            bootstrap_vectors=bootstrap_vectors,
+            delta_mode=args.delta_mode,
         )
     elif args.figure == "no_figure":
         print("No figure generated (as per --figure=no_figure).")
