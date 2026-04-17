@@ -5,7 +5,12 @@ import argparse
 import re
 
 
-def run_bootstrap_eval(experiment_id, force=False, num_workers=None):
+def run_bootstrap_eval(
+    experiment_id,
+    force=False,
+    force_metrics=None,
+    num_workers=None,
+):
     """Run bootstrap_nnunet_eval.py for a given experiment_id."""
     cmd = [
         "python3",
@@ -15,6 +20,8 @@ def run_bootstrap_eval(experiment_id, force=False, num_workers=None):
     ]
     if force:
         cmd.append("--force")
+    if force_metrics:
+        cmd.extend(["--force-metrics", *force_metrics])
     if num_workers is not None:
         cmd.extend(["--num-workers", str(num_workers)])
 
@@ -32,7 +39,13 @@ def extract_fold_from_experiment_id(experiment_id):
     return int(match.group(1)) if match else None
 
 
-def main(df, force=False, selected_folds=None, num_workers=None):
+def main(
+    df,
+    force=False,
+    force_metrics=None,
+    selected_folds=None,
+    num_workers=None,
+):
     """Find experiment_ids and run bootstrap for each experiment."""
     # get experiment_ids of df for rows with ID set
     experiment_ids = df[df["ID"].notna()]["Experiment ID"].dropna().unique().tolist()
@@ -60,7 +73,12 @@ def main(df, force=False, selected_folds=None, num_workers=None):
 
     print(f"Found {len(experiment_ids)} experiments")
     for exp_id in tqdm(experiment_ids, desc="Running bootstrap evaluations"):
-        run_bootstrap_eval(exp_id, force=force, num_workers=num_workers)
+        run_bootstrap_eval(
+            exp_id,
+            force=force,
+            force_metrics=force_metrics,
+            num_workers=num_workers,
+        )
 
 
 if __name__ == "__main__":
@@ -77,6 +95,15 @@ if __name__ == "__main__":
         nargs="+",
         default=None,
         help="Optional list of folds to run, e.g. --folds 0 1 2",
+    )
+    parser.add_argument(
+        "--force-metrics",
+        nargs="+",
+        default=None,
+        help=(
+            "Metric names to recompute even when already present, while other "
+            "metrics stay incremental. Example: --force-metrics HD95"
+        ),
     )
     parser.add_argument(
         "--num-workers",
@@ -100,6 +127,7 @@ if __name__ == "__main__":
     main(
         gsheet_df,
         force=args.force,
+        force_metrics=args.force_metrics,
         selected_folds=args.folds,
         num_workers=args.num_workers,
     )

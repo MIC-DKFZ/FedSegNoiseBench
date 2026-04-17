@@ -49,15 +49,37 @@ def _infer_missing_metrics(
     labels: List[int],
     available_metric_names: List[str],
     expected_iterations: int,
+    forced_metrics: Optional[Set[str]] = None,
 ) -> Set[str]:
     missing_metrics: Set[str] = set()
+    forced_metrics = forced_metrics or set()
     for label in labels:
         for metric_name in available_metric_names:
+            if metric_name in forced_metrics:
+                missing_metrics.add(metric_name)
+                continue
             if not _metric_vector_is_complete(
                 existing_results, label, metric_name, expected_iterations
             ):
                 missing_metrics.add(metric_name)
     return missing_metrics
+
+
+def _resolve_forced_metrics(
+    forced_metrics: Optional[List[str]],
+    available_metric_names: List[str],
+) -> Set[str]:
+    if not forced_metrics:
+        return set()
+
+    available = set(available_metric_names)
+    resolved = {metric for metric in forced_metrics if metric in available}
+    unknown = sorted(set(forced_metrics) - available)
+    if unknown:
+        print(
+            "Ignoring unknown forced metrics: " + ", ".join(unknown)
+        )
+    return resolved
 
 
 def _compute_bootstrap_stats(bootstrap_results: Dict[str, Dict[str, List[float]]]) -> Dict:
@@ -240,6 +262,7 @@ def bootstrap_evaluate(
     num_bootstrap_iterations: int = 1000,
     file_ending: str = ".nii.gz",
     force: bool = False,
+    force_metrics: Optional[List[str]] = None,
     num_workers: int = 1,
 ) -> Dict:
     """
@@ -280,6 +303,7 @@ def bootstrap_evaluate(
         ignore_label,
     )["metrics"]
     available_metric_names = list(first_case_metrics[labels[0]].keys())
+    forced_metrics = _resolve_forced_metrics(force_metrics, available_metric_names)
 
     metrics_to_compute = set(available_metric_names)
     if not force and existing_results:
@@ -288,11 +312,22 @@ def bootstrap_evaluate(
             labels,
             available_metric_names,
             num_bootstrap_iterations,
+            forced_metrics=forced_metrics,
         )
         if metrics_to_compute:
+            recompute_reasons = []
+            if forced_metrics:
+                recompute_reasons.append(
+                    "forced metrics: " + ", ".join(sorted(forced_metrics))
+                )
+            missing_only = sorted(metrics_to_compute - forced_metrics)
+            if missing_only:
+                recompute_reasons.append(
+                    "missing metrics: " + ", ".join(missing_only)
+                )
             print(
-                "Existing bootstrap results found. Recomputing only missing metrics: "
-                + ", ".join(sorted(metrics_to_compute))
+                "Existing bootstrap results found. Recomputing only "
+                + "; ".join(recompute_reasons)
             )
         else:
             print(
@@ -301,6 +336,12 @@ def bootstrap_evaluate(
             return existing_results
     elif force and results_file.is_file():
         print("Force mode enabled. Recomputing all metrics from scratch.")
+    elif forced_metrics:
+        metrics_to_compute = forced_metrics
+        print(
+            "No prior bootstrap results found. Computing requested forced metrics: "
+            + ", ".join(sorted(forced_metrics))
+        )
 
     requested_metrics = set(metrics_to_compute) if metrics_to_compute else None
     num_workers = max(1, int(num_workers))
@@ -368,6 +409,15 @@ if __name__ == "__main__":
         default=False,
     )
     parser.add_argument(
+        "--force-metrics",
+        nargs="+",
+        default=None,
+        help=(
+            "Metric names to recompute even when already present, while leaving "
+            "other metrics incremental. Example: --force-metrics HD95"
+        ),
+    )
+    parser.add_argument(
         "--num-workers",
         type=int,
         default=_default_num_workers(),
@@ -415,5 +465,6 @@ if __name__ == "__main__":
             num_bootstrap_iterations=num_bootstrap_iterations,
             file_ending=file_ending,
             force=args.force,
+            force_metrics=args.force_metrics,
             num_workers=args.num_workers,
         )
