@@ -85,13 +85,41 @@ class_line_marker = {
 # for boxplots
 boxplot_clean_color = "#4c72b0"
 boxplot_noisy_color = "#dd8452"
-SUPPORTED_CLASSWISE_METRICS = ("Dice", "HD95", "InstanceF1", "ClassConfusion")
-BOUNDED_ZERO_ONE_METRICS = {"Dice", "InstanceF1", "ClassConfusion"}
+SUPPORTED_CLASSWISE_METRICS = (
+    "Dice",
+    "HD95",
+    "InstanceF1",
+    "FgBgInstanceF1",
+    "ClassConfusion",
+)
+BOUNDED_ZERO_ONE_METRICS = {
+    "Dice",
+    "InstanceF1",
+    "FgBgInstanceF1",
+    "ClassConfusion",
+}
 BOXPLOT_TITLE_FONTSIZE = 16
 BOXPLOT_LABEL_FONTSIZE = 14
 BOXPLOT_TICK_FONTSIZE = 14
 BOXPLOT_DATASET_FONTSIZE = 14
 BOXPLOT_LEGEND_FONTSIZE = 14
+LATEX_TABLE_FILENAME = "mean_dice_table.tex"
+LATEX_TABLE_COLOR_STRENGTH = 0.6
+LATEX_TABLE_DECIMALS = 3
+LATEX_DATASET_LABELS = {
+    "LIDC": "LIDC",
+    "RIGA": "RIGA",
+    "Gleason": "GleasonHD",
+    "MouseTumor": "MouseT",
+    "MMIA": "MMIA",
+    "MMIS": "MMIS",
+}
+LATEX_SCENARIO_LABELS = {
+    "0": "clean",
+    "roa(p)": "roa",
+    "roc(p)": "roc",
+    "100": "noisy",
+}
 
 
 def get_exp_paths_with_bootstrap(exp_id: str) -> list[str]:
@@ -164,6 +192,274 @@ def extract_finite_metric_values(raw_values):
         if np.isfinite(value):
             finite_values.append(value)
     return finite_values
+
+
+def _rgb_to_hex(rgb_triplet: tuple[float, float, float]) -> str:
+    rgb_255 = [int(round(max(0.0, min(1.0, channel)) * 255)) for channel in rgb_triplet]
+    return "".join(f"{channel:02X}" for channel in rgb_255)
+
+
+def _blend_with_white(
+    rgb_triplet: tuple[float, float, float],
+    strength: float = LATEX_TABLE_COLOR_STRENGTH,
+) -> tuple[float, float, float]:
+    strength = max(0.0, min(1.0, float(strength)))
+    return tuple(
+        (strength * channel) + ((1.0 - strength) * 1.0) for channel in rgb_triplet
+    )
+
+
+def _get_row_color_scale(row_mean_values: pd.Series) -> tuple[float, float] | None:
+    numeric_values = pd.to_numeric(row_mean_values, errors="coerce")
+    finite_values = numeric_values[
+        np.isfinite(numeric_values.to_numpy(dtype=float, na_value=np.nan))
+    ]
+
+    if finite_values.empty:
+        return None
+
+    return float(finite_values.min()), float(finite_values.max())
+
+
+def summarize_bootstrap_values(values: list[float] | np.ndarray) -> tuple[float, float, float] | None:
+    arr = np.asarray(values, dtype=float)
+    arr = arr[np.isfinite(arr)]
+    if arr.size == 0:
+        return None
+
+    mean_val = float(np.mean(arr))
+    ci_low, ci_high = np.percentile(arr, [2.5, 97.5])
+    return mean_val, float(ci_low), float(ci_high)
+
+
+def _format_bootstrap_summary(
+    summary: tuple[float, float, float] | None,
+    decimals: int = LATEX_TABLE_DECIMALS,
+) -> str:
+    if summary is None:
+        return "--"
+    mean_val, ci_low, ci_high = summary
+    return (
+        rf"${mean_val:.{decimals}f}"
+        rf"^{{\scriptscriptstyle {ci_high:.{decimals}f}}}"
+        rf"_{{\scriptscriptstyle {ci_low:.{decimals}f}}}$"
+    )
+
+
+def _bold_latex_mean_value(display_value: str) -> str:
+    match = re.match(r"^\$([0-9.]+)(.*)\$$", str(display_value))
+    if not match:
+        return str(display_value)
+    mean_str, suffix = match.groups()
+    return rf"$\mathbf{{{mean_str}}}{suffix}$"
+
+
+def _underline_latex_mean_value(display_value: str) -> str:
+    match = re.match(r"^\$([0-9.]+)(.*)\$$", str(display_value))
+    if not match:
+        return str(display_value)
+    mean_str, suffix = match.groups()
+    return rf"$\underline{{{mean_str}}}{suffix}$"
+
+
+def _format_colored_latex_row_values(
+    display_values: pd.Series,
+    mean_values: pd.Series,
+    scale_min: float,
+    scale_max: float,
+) -> list[str]:
+    cmap = plt.get_cmap("RdYlGn")
+    numeric_means = pd.to_numeric(mean_values, errors="coerce")
+    finite_means = numeric_means[
+        np.isfinite(numeric_means.to_numpy(dtype=float, na_value=np.nan))
+    ]
+    best_mean = float(finite_means.max()) if not finite_means.empty else None
+    second_best_mean = None
+    if not finite_means.empty:
+        distinct_sorted = sorted({float(v) for v in finite_means.tolist()}, reverse=True)
+        if len(distinct_sorted) > 1:
+            second_best_mean = distinct_sorted[1]
+
+    formatted = []
+    for col in display_values.index:
+        display_value = display_values[col]
+        mean_value = numeric_means[col]
+        if pd.isna(mean_value) or display_value == "--":
+            formatted.append(str(display_value))
+            continue
+
+        if best_mean is not None and np.isclose(float(mean_value), best_mean):
+            display_value = _bold_latex_mean_value(str(display_value))
+        elif second_best_mean is not None and np.isclose(
+            float(mean_value), second_best_mean
+        ):
+            display_value = _underline_latex_mean_value(str(display_value))
+
+        if scale_max > scale_min:
+            normalized = (float(mean_value) - scale_min) / (scale_max - scale_min)
+        else:
+            normalized = 0.5
+
+        rgba = cmap(normalized)
+        softened_rgb = _blend_with_white((rgba[0], rgba[1], rgba[2]))
+        cell_hex = _rgb_to_hex(softened_rgb)
+        formatted.append(rf"\cellcolor[HTML]{{{cell_hex}}}{display_value}")
+
+    return formatted
+
+
+def _latex_dataset_label(dataset_name: str) -> str:
+    return LATEX_DATASET_LABELS.get(dataset_name, dataset_name)
+
+
+def _latex_scenario_label(scenario_name: str) -> str:
+    return LATEX_SCENARIO_LABELS.get(scenario_name, scenario_name)
+
+
+def build_bootstrap_summary_table(
+    df_all: pd.DataFrame,
+    datasets: list[str] | None = None,
+    scenarios: list[str] | None = None,
+    algorithms: list[str] | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    datasets = datasets or list(target_datasets)
+    scenarios = scenarios or list(noise_order)
+    algorithms = algorithms or list(target_algos)
+
+    full_index = pd.MultiIndex.from_product(
+        [datasets, scenarios], names=["Dataset_norm", noise_col]
+    )
+    mean_table = pd.DataFrame(index=full_index, columns=algorithms, dtype=float)
+    display_table = pd.DataFrame(index=full_index, columns=algorithms, dtype=object)
+
+    for ds in datasets:
+        df_ds = df_all[df_all["Dataset_norm"] == ds]
+        if df_ds.empty:
+            continue
+
+        for algo in algorithms:
+            df_algo = df_ds[df_ds[algo_col] == algo]
+            if df_algo.empty:
+                continue
+
+            for scenario in scenarios:
+                df_scenario = df_algo[df_algo[noise_col] == scenario]
+                if df_scenario.empty:
+                    continue
+
+                bootstrap_values = []
+                exp_ids = df_scenario["Experiment ID"].dropna().unique().tolist()
+                for exp_id in exp_ids:
+                    exp_paths = get_exp_paths_with_bootstrap(exp_id)
+                    expected_clients = dataset_to_numclients.get(ds, None)
+                    if expected_clients and len(exp_paths) != expected_clients:
+                        print(
+                            f"Skipping Exp_ID {exp_id} for {ds}/{algo}/{scenario}: expected "
+                            f"{expected_clients} clients with bootstrap results, found {len(exp_paths)}"
+                        )
+                        continue
+                    if len(exp_paths) == 0:
+                        print(
+                            f"No experiment paths with bootstrap results found for Exp_ID {exp_id} "
+                            f"({ds}/{algo}/{scenario})"
+                        )
+                        continue
+
+                    for exp_path in exp_paths:
+                        bootstrap_file = (
+                            Path(exp_path)
+                            / "validation"
+                            / "bootstrap_evaluation_results.json"
+                        )
+                        if not bootstrap_file.is_file():
+                            print(
+                                f"Missing bootstrap_evaluation_results.json at {bootstrap_file}"
+                            )
+                            continue
+                        with open(bootstrap_file, "r") as f:
+                            results_summary = json.load(f)
+
+                        for class_label, metrics in results_summary.items():
+                            if class_label == "stats":
+                                continue
+                            bootstrap_values.extend(
+                                extract_finite_metric_values(
+                                    metrics.get(classwise_metric, None)
+                                )
+                            )
+
+                summary = summarize_bootstrap_values(bootstrap_values)
+                mean_table.loc[(ds, scenario), algo] = (
+                    np.nan if summary is None else summary[0]
+                )
+                display_table.loc[(ds, scenario), algo] = _format_bootstrap_summary(
+                    summary
+                )
+
+    return mean_table, display_table.fillna("--")
+
+
+def write_mean_dice_latex_table(
+    display_table_df: pd.DataFrame,
+    color_value_df: pd.DataFrame,
+    output_path: Path,
+    caption: str = (
+        "Mean validation Dice values with 95\\% percentile bootstrap confidence "
+        "intervals for each dataset, noise scenario, and method."
+    ),
+    label: str = "tab:mean_dice_results",
+):
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    dataset_groups = display_table_df.groupby(level=0, sort=False)
+    lines = [
+        r"% Requires \usepackage[table]{xcolor} and \usepackage{multirow}",
+        r"\begin{table*}[t]",
+        r"\centering",
+        r"\small",
+        r"\begin{tabular}{ll" + "c" * len(display_table_df.columns) + "}",
+        r"\hline",
+        r"\hline",
+        r"\textit{Dataset} & \textit{Scenario} & "
+        + " & ".join(rf"\textbf{{{col}}}" for col in display_table_df.columns)
+        + r" \\",
+        r"\hline",
+    ]
+
+    for dataset, dataset_rows in dataset_groups:
+        num_rows = len(dataset_rows)
+        for row_idx, ((_, scenario), display_values) in enumerate(dataset_rows.iterrows()):
+            mean_values = color_value_df.loc[(dataset, scenario)]
+            row_scale = _get_row_color_scale(mean_values)
+            if row_scale is None:
+                row_values = [str(display_values[col]) for col in display_table_df.columns]
+            else:
+                row_values = _format_colored_latex_row_values(
+                    display_values,
+                    mean_values,
+                    row_scale[0],
+                    row_scale[1],
+                )
+            scenario_label = _latex_scenario_label(str(scenario))
+            dataset_label = _latex_dataset_label(str(dataset))
+            if row_idx == 0:
+                prefix = rf"\multirow{{{num_rows}}}{{*}}{{{dataset_label}}} & {scenario_label}"
+            else:
+                prefix = f"& {scenario_label}"
+            lines.append(prefix + " & " + " & ".join(row_values) + r" \\")
+        lines.append(r"\hline")
+
+    lines.extend(
+        [
+            r"\hline",
+            r"\end{tabular}",
+            r"\caption{" + caption + "}",
+            r"\label{" + label + "}",
+            r"\end{table*}",
+        ]
+    )
+    output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print(f"Saved LaTeX mean Dice table to {output_path}")
 
 
 # -------------------------------------------------------------------
@@ -2609,11 +2905,26 @@ def main():
 
     classwise_metric = args.metric
     target_datasets = parse_selected_datasets(args.datasets)
+    if args.classwise and classwise_metric == "FgBgInstanceF1":
+        print(
+            "Metric 'FgBgInstanceF1' is a foreground-vs-background aggregate, "
+            "so classwise plotting is disabled for this run."
+        )
+        args.classwise = False
 
     df_selected = df[df["Dataset_norm"].isin(target_datasets)].copy()
     print(
         f"Using metric '{classwise_metric}' for datasets: {target_datasets}. "
         f"Retained {len(df_selected)} rows."
+    )
+
+    mean_dice_table, display_table = build_bootstrap_summary_table(
+        df_selected, datasets=target_datasets
+    )
+    write_mean_dice_latex_table(
+        display_table,
+        mean_dice_table,
+        OUTPUT_DIR / LATEX_TABLE_FILENAME,
     )
 
     plot_boxplots_clean_roa_roc_noisy_bootstrapping(

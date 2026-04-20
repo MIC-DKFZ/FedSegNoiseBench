@@ -45,7 +45,13 @@ except ImportError:
 
 
 NOISE_ORDER = ["clean", "roa", "roc", "noisy"]
-SUPPORTED_METRICS = ("Dice", "HD95", "InstanceF1", "ClassConfusion")
+SUPPORTED_METRICS = (
+    "Dice",
+    "HD95",
+    "InstanceF1",
+    "FgBgInstanceF1",
+    "ClassConfusion",
+)
 LOWER_IS_BETTER_METRICS = {"HD95", "ClassConfusion"}
 NOISE_LABELS = {
     "clean": "clean",
