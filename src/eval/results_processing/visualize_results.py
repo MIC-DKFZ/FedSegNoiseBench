@@ -98,14 +98,13 @@ BOUNDED_ZERO_ONE_METRICS = {
     "FgBgInstanceF1",
     "ClassConfusion",
 }
+LOWER_IS_BETTER_METRICS = {"HD95", "ClassConfusion"}
 BOXPLOT_TITLE_FONTSIZE = 16
 BOXPLOT_LABEL_FONTSIZE = 14
 BOXPLOT_TICK_FONTSIZE = 14
 BOXPLOT_DATASET_FONTSIZE = 14
 BOXPLOT_LEGEND_FONTSIZE = 14
-LATEX_TABLE_FILENAME = "mean_dice_table.tex"
 LATEX_TABLE_COLOR_STRENGTH = 0.6
-LATEX_TABLE_DECIMALS = 3
 LATEX_DATASET_LABELS = {
     "LIDC": "LIDC",
     "RIGA": "RIGA",
@@ -221,6 +220,18 @@ def _get_row_color_scale(row_mean_values: pd.Series) -> tuple[float, float] | No
     return float(finite_values.min()), float(finite_values.max())
 
 
+def metric_higher_is_better(metric_name: str) -> bool:
+    return metric_name not in LOWER_IS_BETTER_METRICS
+
+
+def metric_display_params(metric_name: str) -> tuple[float, int]:
+    if metric_name in {"Dice", "InstanceF1", "FgBgInstanceF1", "ClassConfusion"}:
+        return 100.0, 1
+    if metric_name == "HD95":
+        return 1.0, 1
+    return 1.0, 3
+
+
 def summarize_bootstrap_values(values: list[float] | np.ndarray) -> tuple[float, float, float] | None:
     arr = np.asarray(values, dtype=float)
     arr = arr[np.isfinite(arr)]
@@ -234,11 +245,18 @@ def summarize_bootstrap_values(values: list[float] | np.ndarray) -> tuple[float,
 
 def _format_bootstrap_summary(
     summary: tuple[float, float, float] | None,
-    decimals: int = LATEX_TABLE_DECIMALS,
+    metric_name: str,
+    include_ci: bool = True,
 ) -> str:
     if summary is None:
         return "--"
+    scale_factor, decimals = metric_display_params(metric_name)
     mean_val, ci_low, ci_high = summary
+    mean_val *= scale_factor
+    ci_low *= scale_factor
+    ci_high *= scale_factor
+    if not include_ci:
+        return rf"${mean_val:.{decimals}f}$"
     return (
         rf"${mean_val:.{decimals}f}"
         rf"^{{\scriptscriptstyle {ci_high:.{decimals}f}}}"
@@ -267,16 +285,23 @@ def _format_colored_latex_row_values(
     mean_values: pd.Series,
     scale_min: float,
     scale_max: float,
+    metric_name: str,
 ) -> list[str]:
     cmap = plt.get_cmap("RdYlGn")
     numeric_means = pd.to_numeric(mean_values, errors="coerce")
     finite_means = numeric_means[
         np.isfinite(numeric_means.to_numpy(dtype=float, na_value=np.nan))
     ]
-    best_mean = float(finite_means.max()) if not finite_means.empty else None
+    higher_is_better = metric_higher_is_better(metric_name)
+    best_mean = (
+        float(finite_means.max()) if higher_is_better else float(finite_means.min())
+    ) if not finite_means.empty else None
     second_best_mean = None
     if not finite_means.empty:
-        distinct_sorted = sorted({float(v) for v in finite_means.tolist()}, reverse=True)
+        distinct_sorted = sorted(
+            {float(v) for v in finite_means.tolist()},
+            reverse=higher_is_better,
+        )
         if len(distinct_sorted) > 1:
             second_best_mean = distinct_sorted[1]
 
@@ -297,6 +322,8 @@ def _format_colored_latex_row_values(
 
         if scale_max > scale_min:
             normalized = (float(mean_value) - scale_min) / (scale_max - scale_min)
+            if not higher_is_better:
+                normalized = 1.0 - normalized
         else:
             normalized = 0.5
 
@@ -321,6 +348,7 @@ def build_bootstrap_summary_table(
     datasets: list[str] | None = None,
     scenarios: list[str] | None = None,
     algorithms: list[str] | None = None,
+    include_ci: bool = True,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     datasets = datasets or list(target_datasets)
     scenarios = scenarios or list(noise_order)
@@ -393,21 +421,21 @@ def build_bootstrap_summary_table(
                     np.nan if summary is None else summary[0]
                 )
                 display_table.loc[(ds, scenario), algo] = _format_bootstrap_summary(
-                    summary
+                    summary,
+                    classwise_metric,
+                    include_ci=include_ci,
                 )
 
     return mean_table, display_table.fillna("--")
 
 
-def write_mean_dice_latex_table(
+def write_bootstrap_metric_latex_table(
     display_table_df: pd.DataFrame,
     color_value_df: pd.DataFrame,
     output_path: Path,
-    caption: str = (
-        "Mean validation Dice values with 95\\% percentile bootstrap confidence "
-        "intervals for each dataset, noise scenario, and method."
-    ),
-    label: str = "tab:mean_dice_results",
+    caption: str,
+    label: str,
+    metric_name: str,
 ):
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -439,6 +467,7 @@ def write_mean_dice_latex_table(
                     mean_values,
                     row_scale[0],
                     row_scale[1],
+                    metric_name,
                 )
             scenario_label = _latex_scenario_label(str(scenario))
             dataset_label = _latex_dataset_label(str(dataset))
@@ -459,7 +488,7 @@ def write_mean_dice_latex_table(
         ]
     )
     output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    print(f"Saved LaTeX mean Dice table to {output_path}")
+    print(f"Saved LaTeX bootstrap metric table to {output_path}")
 
 
 # -------------------------------------------------------------------
@@ -2901,6 +2930,11 @@ def main():
         action="store_true",
         help="If set, keep class-wise boxplots instead of aggregating over classes.",
     )
+    parser.add_argument(
+        "--latex-hide-ci",
+        action="store_true",
+        help="If set, the LaTeX table shows only the mean value and omits the 95% CI.",
+    )
     args = parser.parse_args()
 
     classwise_metric = args.metric
@@ -2918,13 +2952,23 @@ def main():
         f"Retained {len(df_selected)} rows."
     )
 
-    mean_dice_table, display_table = build_bootstrap_summary_table(
-        df_selected, datasets=target_datasets
+    mean_metric_table, display_table = build_bootstrap_summary_table(
+        df_selected,
+        datasets=target_datasets,
+        include_ci=not args.latex_hide_ci,
     )
-    write_mean_dice_latex_table(
+    metric_slug_name = metric_slug(classwise_metric)
+    write_bootstrap_metric_latex_table(
         display_table,
-        mean_dice_table,
-        OUTPUT_DIR / LATEX_TABLE_FILENAME,
+        mean_metric_table,
+        OUTPUT_DIR / f"bootstrap_{metric_slug_name}_table.tex",
+        caption=(
+            f"Mean validation {classwise_metric} values with 95\\% percentile "
+            "bootstrap confidence intervals for each dataset, noise scenario, "
+            "and method."
+        ),
+        label=f"tab:bootstrap_{metric_slug_name}_results",
+        metric_name=classwise_metric,
     )
 
     plot_boxplots_clean_roa_roc_noisy_bootstrapping(

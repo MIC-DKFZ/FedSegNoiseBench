@@ -55,8 +55,8 @@ SUPPORTED_METRICS = (
 LOWER_IS_BETTER_METRICS = {"HD95", "ClassConfusion"}
 NOISE_LABELS = {
     "clean": "clean",
-    "roa": "roa(p)",
-    "roc": "roc(p)",
+    "roa": "roa",
+    "roc": "roc",
     "noisy": "noisy",
     "all": "overall",
 }
@@ -71,9 +71,9 @@ DEFAULT_OUTPUT_DIR = OUTPUT_DIR / "ranking_stability"
 DEFAULT_SUMMARY_CSV = DEFAULT_OUTPUT_DIR / "ranking_stability_summary.csv"
 DEFAULT_BLOB_SCALE = 1200.0
 DEFAULT_DPI = 200
-PLOT_LABEL_FONTSIZE = 14
-PLOT_TICK_FONTSIZE = 14
-PANEL_TITLE_FONTSIZE = 14
+PLOT_LABEL_FONTSIZE = 18
+PLOT_TICK_FONTSIZE = 18
+PANEL_TITLE_FONTSIZE = 18
 PLOT_HEIGHT = 3.8
 PANEL_WIDTH = 3.6
 DEFAULT_NNUNET_RESULTS_ROOTS = [
