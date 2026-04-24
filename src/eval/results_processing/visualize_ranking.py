@@ -76,10 +76,21 @@ PLOT_TICK_FONTSIZE = 18
 PANEL_TITLE_FONTSIZE = 18
 PLOT_HEIGHT = 3.8
 PANEL_WIDTH = 3.6
+YLABEL_BY_METRIC = {
+    "Dice": "Rank(Dice)",
+    "HD95": "Rank(HD95)",
+    "InstanceF1": "Rank(F1)",
+    "FgBgInstanceF1": "Rank(F1)",
+    "ClassConfusion": "Rank(ClsConf)",
+}
 DEFAULT_NNUNET_RESULTS_ROOTS = [
     DEFAULT_NNUNET_RESULTS_ROOT,
     Path("/home/m391k/juwels/checkpoints/nnUNet_results"),
 ]
+
+
+def metric_rank_ylabel(metric_name: str) -> str:
+    return YLABEL_BY_METRIC.get(metric_name, f"Rank({metric_name})")
 
 
 def resolve_nnunet_results_roots(cli_root: Optional[Path]) -> List[Path]:
@@ -601,7 +612,7 @@ def plot_blob_panel(
     blob_scale: float,
 ) -> None:
     max_rank = len(algorithm_order)
-    ax.set_title(title, fontsize=PANEL_TITLE_FONTSIZE, fontweight="bold")
+    ax.set_title(title, fontsize=PANEL_TITLE_FONTSIZE, fontweight="normal")
     ax.set_xlim(0.5, len(algorithm_order) + 0.5)
     ax.set_ylim(0.5, max_rank + 0.5)
     ax.set_xticks(range(1, len(algorithm_order) + 1))
@@ -675,7 +686,7 @@ def plot_blob_panel(
 
     for tick in ax.get_xticklabels():
         algo = tick.get_text()
-        tick.set_color(ALGO_COLORS.get(algo, "black"))
+        tick.set_color("black")
         if algo not in available_algorithms:
             tick.set_alpha(0.35)
 
@@ -722,7 +733,11 @@ def save_dataset_figures(
                 blob_scale=blob_scale,
             )
             if ax is axes[0]:
-                ax.set_ylabel(f"Rank ({metric_name})", fontsize=PLOT_LABEL_FONTSIZE)
+                ax.set_ylabel(
+                    metric_rank_ylabel(metric_name),
+                    fontsize=PLOT_LABEL_FONTSIZE,
+                    fontweight="bold",
+                )
         fig.tight_layout()
 
         out_path = output_dir / f"ranking_stability_{metric_name.lower()}_{dataset}.png"
@@ -772,7 +787,11 @@ def save_overall_figure(
             blob_scale=blob_scale,
         )
         if ax is axes[0]:
-            ax.set_ylabel(f"Rank ({metric_name})", fontsize=PLOT_LABEL_FONTSIZE)
+            ax.set_ylabel(
+                metric_rank_ylabel(metric_name),
+                fontsize=PLOT_LABEL_FONTSIZE,
+                fontweight="bold",
+            )
     fig.tight_layout()
 
     out_path = (
