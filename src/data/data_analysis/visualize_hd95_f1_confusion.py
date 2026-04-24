@@ -19,7 +19,7 @@ import pandas as pd
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 
-BASE_FONT_SIZE = 22
+BASE_FONT_SIZE = 30
 TITLE_FONT_SIZE = BASE_FONT_SIZE
 TICK_FONT_SIZE = BASE_FONT_SIZE
 ANNOTATION_FONT_SIZE = BASE_FONT_SIZE # - 2
@@ -236,9 +236,9 @@ def plot_hd95_vs_f1_confusion(
             )
 
     ax.set_xlabel(
-        "HD95 (mm)", fontsize=BASE_FONT_SIZE, fontweight="bold"
+        "HD95 [mm]", fontsize=BASE_FONT_SIZE # , fontweight="bold"
     )
-    ax.set_ylabel("Instance F1 (all fg classes vs bg)", fontsize=BASE_FONT_SIZE, fontweight="bold")
+    ax.set_ylabel("fg-bg Instance F1", fontsize=BASE_FONT_SIZE) # , fontweight="bold")
     label_suffix = " with labels" if add_labels else ""
     # ax.set_title(
     #     # f"{level_title}: HD95 vs F1 vs Class confusion{label_suffix}",
@@ -260,11 +260,11 @@ def plot_hd95_vs_f1_confusion(
     divider = make_axes_locatable(ax)
     cax = divider.append_axes("right", size="4%", pad=0.12)
     cbar = fig.colorbar(scatter_for_colorbar, cax=cax)
-    cbar.set_label("Class Confusion score", fontsize=BASE_FONT_SIZE, fontweight="bold")
+    cbar.set_label("Class Confusion", fontsize=BASE_FONT_SIZE) # , fontweight="bold")
     cbar.ax.tick_params(labelsize=TICK_FONT_SIZE)
 
     if len(multiclass_data) > 0 or len(binary_data) > 0:
-        ax.legend(loc="best", fontsize=TICK_FONT_SIZE, framealpha=0.95)
+        ax.legend(loc="best", fontsize=TICK_FONT_SIZE-5, framealpha=0.95)
 
     os.makedirs(
         os.path.dirname(output_path) if os.path.dirname(output_path) else ".",
@@ -334,7 +334,7 @@ def main():
     parser.add_argument(
         "--marker_size",
         type=int,
-        default=80,
+        default=160,
         help="Marker size for scatter points",
     )
     parser.add_argument(

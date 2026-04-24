@@ -6,7 +6,7 @@ Creates one figure with 4 violin subplots plus 1 class-confusion heatmap:
 - Mean Dice between consensus and raters (class-wise; averaged over raters)
 - Mean HD95 between consensus and raters (class-wise; averaged over raters)
 - Mean instance-level F1 between consensus and raters (class-wise)
-- Class confusion matrix consensus -> raters (averaged over raters and samples)
+- Class Confusion consensus -> raters (averaged over raters and samples)
 """
 
 import argparse
@@ -18,6 +18,7 @@ from typing import Dict, List, Tuple
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 try:
     from .analyze_multirater_consensus import load_mask
@@ -29,7 +30,7 @@ except ImportError:
 CLASS_COLORS = ["#1f77b4", "#ff7f0e", "#2ca02c", "#9467bd"]
 
 # Central style control for the whole figure.
-BASE_FONT_SIZE = 20
+BASE_FONT_SIZE = 30
 TITLE_FONT_SIZE = BASE_FONT_SIZE # + 1
 TICK_FONT_SIZE = BASE_FONT_SIZE # - 1
 ANNOTATION_FONT_SIZE = BASE_FONT_SIZE # - 1
@@ -40,41 +41,41 @@ DEFAULT_MAX_SAMPLES = None
 METRICS_TO_PLOT = [
     (
         "fleiss_kappa",
-        "Fleiss' Kappa",
-        "Class-wise Fleiss' Kappa\n(Among Raters)",
+        "Fleiss' Kappa (of R)",
+        "Fleiss' Kappa\n(of R)",
     ),
     (
         "mean_dice",
-        "Dice",
-        "Class-wise Dice\n(Consensus vs Raters)",
+        "Dice (C vs R)",
+        "Dice\n(C vs R)",
     ),
     (
         "mean_hd95",
-        "HD95 (mm)",
-        "Class-wise HD95\n(Consensus vs Raters)",
+        "HD95 [mm] (C vs R)",
+        "HD95\n(C vs R)",
     ),
     (
         "mean_instance_level_f1",
-        "Instance F1",
-        "Class-wise Instance F1\n(Consensus vs Raters)",
+        "Instance F1 (C vs R)",
+        "Instance F1\n(C vs R)",
     ),
 ]
 
 QUESTION1_METRICS_TO_PLOT = [
     (
         "fleiss_kappa",
-        "Fleiss' Kappa",
-        "Class-wise Fleiss' Kappa\n(Among Raters)",
+        "Fleiss' Kappa (of R)",
+        "Fleiss' Kappa\n(of R)",
     ),
     (
         "mean_hd95",
-        "HD95 (mm)",
-        "Class-wise HD95\n(Consensus vs Raters)",
+        "HD95 [mm] (C vs R)",
+        "HD95\n(C vs R)",
     ),
     (
         "mean_instance_level_f1",
-        "Instance F1",
-        "Class-wise Instance F1\n(Consensus vs Raters)",
+        "Instance F1 (C vs R)",
+        "Instance F1\n(C vs R)",
     ),
 ]
 
@@ -319,7 +320,7 @@ def _add_violin_subplot(
             va="center",
             fontsize=BASE_FONT_SIZE,
         )
-        ax.set_title(title, fontsize=TITLE_FONT_SIZE, fontweight="bold")
+        # ax.set_title(title, fontsize=TITLE_FONT_SIZE) # , fontweight="bold")
         ax.set_ylabel(ylabel, fontsize=BASE_FONT_SIZE)
         if ylabelpad is not None:
             ax.set_ylabel(ylabel, fontsize=BASE_FONT_SIZE, labelpad=ylabelpad)
@@ -357,12 +358,12 @@ def _add_violin_subplot(
             parts[key].set_edgecolor("black")
             parts[key].set_linewidth(1.0)
 
-    ax.set_title(title, fontsize=TITLE_FONT_SIZE, fontweight="bold")
+    # ax.set_title(title, fontsize=TITLE_FONT_SIZE) # , fontweight="bold")
     ax.set_ylabel(ylabel, fontsize=BASE_FONT_SIZE)
     if ylabelpad is not None:
         ax.set_ylabel(ylabel, fontsize=BASE_FONT_SIZE, labelpad=ylabelpad)
     ax.set_xticks(positions)
-    ax.set_xticklabels([f"Class {c}" for c in valid_classes], fontsize=TICK_FONT_SIZE)
+    ax.set_xticklabels([f"Cls {c}" for c in valid_classes], fontsize=TICK_FONT_SIZE)
     ax.grid(axis="y", alpha=0.3)
     ax.tick_params(axis="y", labelsize=TICK_FONT_SIZE)
 
@@ -399,26 +400,38 @@ def plot_multirater_consensus_violin_row(
             va="center",
             fontsize=BASE_FONT_SIZE,
         )
-        ax_cm.set_title(
-            "Class Confusion Matrix\n(Consensus vs Raters)",
-            fontsize=TITLE_FONT_SIZE,
-            fontweight="bold",
-        )
+        # ax_cm.set_title(
+        #     "Class Confusion (C vs R)",
+        #     fontsize=TITLE_FONT_SIZE,
+        #     # fontweight="bold",
+        # )
         ax_cm.set_xticks([])
         ax_cm.set_yticks([])
     else:
         im = ax_cm.imshow(confusion_matrix, cmap=HEATMAP_CMAP, vmin=0.0, vmax=1.0)
-        ax_cm.set_title(
-            "Class Confusion Matrix\n(Consensus vs Raters)",
-            fontsize=TITLE_FONT_SIZE,
-            fontweight="bold",
-        )
+        # ax_cm.set_title(
+        #     "Class Confusion (C vs R)",
+        #     fontsize=TITLE_FONT_SIZE,
+        #     # fontweight="bold",
+        # )
         ax_cm.set_xticks(range(len(confusion_classes)))
         ax_cm.set_yticks(range(len(confusion_classes)))
-        ax_cm.set_xticklabels([f"C{c}" for c in confusion_classes], fontsize=TICK_FONT_SIZE)
-        ax_cm.set_yticklabels([f"C{c}" for c in confusion_classes], fontsize=TICK_FONT_SIZE)
-        ax_cm.set_xlabel("Rater classes", fontsize=BASE_FONT_SIZE)
-        ax_cm.set_ylabel("Consensus classes", fontsize=BASE_FONT_SIZE)
+        ax_cm.set_xticklabels(
+            [f"R Cls {c}" for c in confusion_classes], fontsize=TICK_FONT_SIZE-10,
+        )
+        ax_cm.set_yticklabels(
+            [f"C Cls {c}" for c in confusion_classes], fontsize=TICK_FONT_SIZE-10,
+        )
+        plt.setp(
+            ax_cm.get_yticklabels(),
+            rotation=90,
+            va="center",
+            ha="center",
+            rotation_mode="anchor",
+        )
+        ax_cm.tick_params(axis="y", pad=8)
+        # ax_cm.set_xlabel("Rater classes", fontsize=BASE_FONT_SIZE)
+        # ax_cm.set_ylabel("Consensus classes", fontsize=BASE_FONT_SIZE)
 
         for i in range(confusion_matrix.shape[0]):
             for j in range(confusion_matrix.shape[1]):
@@ -432,8 +445,10 @@ def plot_multirater_consensus_violin_row(
                     color="#0b1f2a" if confusion_matrix[i, j] < 0.62 else "white",
                 )
 
-        cbar = plt.colorbar(im, ax=ax_cm, fraction=0.046, pad=0.04)
-        cbar.set_label("Overlap", fontsize=BASE_FONT_SIZE)
+        divider = make_axes_locatable(ax_cm)
+        cax = divider.append_axes("right", size="5%", pad=0.2)
+        cbar = plt.colorbar(im, cax=cax, pad=0.1)
+        cbar.set_label("Class Confusion (C vs R)", fontsize=BASE_FONT_SIZE)
         cbar.ax.tick_params(labelsize=TICK_FONT_SIZE)
 
     # fig.suptitle(
@@ -448,6 +463,7 @@ def plot_multirater_consensus_violin_row(
         exist_ok=True,
     )
     plt.tight_layout()
+    fig.subplots_adjust(wspace=0.12)
     plt.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
 
@@ -458,6 +474,7 @@ def _add_confusion_heatmap_subplot(
     ax,
     confusion_matrix: np.ndarray,
     confusion_classes: List[int],
+    add_colorbar: bool = True,
 ):
     """Add the class confusion heatmap subplot."""
     if confusion_matrix.size == 0:
@@ -470,27 +487,39 @@ def _add_confusion_heatmap_subplot(
             va="center",
             fontsize=BASE_FONT_SIZE,
         )
-        ax.set_title(
-            "Class Confusion Matrix\n(Consensus vs Raters)",
-            fontsize=TITLE_FONT_SIZE,
-            fontweight="bold",
-        )
+        # ax.set_title(
+        #     "Class Confusion (C vs R)",
+        #     fontsize=TITLE_FONT_SIZE,
+        #     # fontweight="bold",
+        # )
         ax.set_xticks([])
         ax.set_yticks([])
-        return
+        return None
 
     im = ax.imshow(confusion_matrix, cmap=HEATMAP_CMAP, vmin=0.0, vmax=1.0)
-    ax.set_title(
-        "Class Confusion Matrix\n(Consensus vs Raters)",
-        fontsize=TITLE_FONT_SIZE,
-        fontweight="bold",
-    )
+    # ax.set_title(
+    #     "Class Confusion (C vs R)",
+    #     fontsize=TITLE_FONT_SIZE,
+    #     # fontweight="bold",
+    # )
     ax.set_xticks(range(len(confusion_classes)))
     ax.set_yticks(range(len(confusion_classes)))
-    ax.set_xticklabels([f"C{c}" for c in confusion_classes], fontsize=TICK_FONT_SIZE)
-    ax.set_yticklabels([f"C{c}" for c in confusion_classes], fontsize=TICK_FONT_SIZE)
-    ax.set_xlabel("Rater classes", fontsize=BASE_FONT_SIZE)
-    ax.set_ylabel("Consensus classes", fontsize=BASE_FONT_SIZE)
+    ax.set_xticklabels(
+        [f"R Cls {c}" for c in confusion_classes], fontsize=TICK_FONT_SIZE-10
+    )
+    ax.set_yticklabels(
+        [f"C Cls {c}" for c in confusion_classes], fontsize=TICK_FONT_SIZE-10
+    )
+    plt.setp(
+        ax.get_yticklabels(),
+        rotation=90,
+        va="center",
+        ha="center",
+        rotation_mode="anchor",
+    )
+    ax.tick_params(axis="y", pad=8)
+    # ax.set_xlabel("Rater classes", fontsize=BASE_FONT_SIZE)
+    # ax.set_ylabel("Consensus classes", fontsize=BASE_FONT_SIZE)
 
     for i in range(confusion_matrix.shape[0]):
         for j in range(confusion_matrix.shape[1]):
@@ -504,9 +533,14 @@ def _add_confusion_heatmap_subplot(
                 color="#0b1f2a" if confusion_matrix[i, j] < 0.62 else "white",
             )
 
-    cbar = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-    cbar.set_label("Overlap", fontsize=BASE_FONT_SIZE)
-    cbar.ax.tick_params(labelsize=TICK_FONT_SIZE)
+    if add_colorbar:
+        divider = make_axes_locatable(ax)
+        cax = divider.append_axes("right", size="5%", pad=0.2)
+        cbar = plt.colorbar(im, cax=cax)
+        cbar.set_label("Class Confusion (C vs R)", fontsize=BASE_FONT_SIZE)
+        cbar.ax.tick_params(labelsize=TICK_FONT_SIZE)
+
+    return im
 
 
 def plot_multirater_consensus_question1_grid(
@@ -521,7 +555,7 @@ def plot_multirater_consensus_question1_grid(
         raise ValueError("No class IDs found in extracted data.")
 
     fig, axes = plt.subplots(2, 2, figsize=(11.8, 10.8), constrained_layout=True)
-    fig.set_constrained_layout_pads(w_pad=0.03, h_pad=0.04, wspace=0.06, hspace=0.08)
+    fig.set_constrained_layout_pads(w_pad=0.015, h_pad=0.02, wspace=0.035, hspace=0.05)
     axes = axes.flatten()
 
     for idx, (ax, (metric, ylabel, title)) in enumerate(
@@ -544,11 +578,30 @@ def plot_multirater_consensus_question1_grid(
             ax.yaxis.tick_right()
             ax.tick_params(axis="y", labelsize=TICK_FONT_SIZE, pad=4)
 
-    _add_confusion_heatmap_subplot(axes[3], confusion_matrix, confusion_classes)
+    im = _add_confusion_heatmap_subplot(
+        axes[3], confusion_matrix, confusion_classes, add_colorbar=False
+    )
     axes[3].yaxis.set_label_position("right")
     axes[3].yaxis.tick_right()
-    axes[3].set_ylabel("Consensus classes", fontsize=BASE_FONT_SIZE, labelpad=4)
+    plt.setp(
+        axes[3].get_yticklabels(),
+        rotation=90,
+        va="center",
+        ha="center",
+        rotation_mode="anchor",
+    )
+    axes[3].tick_params(axis="y", pad=15)
+    # axes[3].set_ylabel("Consensus classes", fontsize=BASE_FONT_SIZE, labelpad=4)
     axes[3].set_box_aspect(1)
+
+    if im is not None:
+        fig.canvas.draw()
+        pos = axes[3].get_position()
+        # Keep the colorbar clearly outside the right-side rotated y tick labels.
+        cax = fig.add_axes([pos.x1 + 0.06, pos.y0, 0.018, pos.height])
+        cbar = fig.colorbar(im, cax=cax)
+        cbar.set_label("Class Confusion (C vs R)", fontsize=BASE_FONT_SIZE)
+        cbar.ax.tick_params(labelsize=TICK_FONT_SIZE)
 
     os.makedirs(
         os.path.dirname(output_path) if os.path.dirname(output_path) else ".",
