@@ -57,7 +57,7 @@ fold_col = "Fold"
 mean_dice_col = "Mean(D_val)"
 
 TARGET_ALGOS = ["FedAvg", "FedA3I", "IOP-FL", "FedCorr", "FedSelect"]
-TARGET_DATASETS = ["LIDC", "RIGA", "Gleason", "MouseTumor", "MMIA", "MMIS"]
+TARGET_DATASETS = ["LIDC", "RIGA", "Gleason", "MouseTumor", "MMIS", "MMIA"]
 INCLUDED_FOLDS = [0, 1, 2]
 DEFAULT_NNUNET_RESULTS_ROOTS = [
     Path("/home/m391k/cluster-data/checkpoints/nnUNet_results"),
@@ -96,8 +96,8 @@ P_ROC_EFF: dict[str, float] = {
     "RIGA": 554 / 749,  # ≈ 0.740
     "Gleason": 317 / 476,  # ≈ 0.666
     "MouseTumor": 147 / 452,  # ≈ 0.325
-    "MMIA": 1044 / 1506,  # ≈ 0.693
     "MMIS": 57 / 120,  # ≈ 0.475
+    "MMIA": 1044 / 1506,  # ≈ 0.693
 }
 
 # Nominal X for roc per dataset (from Google Sheets Noise column)
@@ -106,8 +106,8 @@ ROC_NOMINAL_X: dict[str, str] = {
     "RIGA": "66.6",
     "Gleason": "66.6",
     "MouseTumor": "60",
-    "MMIA": "50",
     "MMIS": "50",
+    "MMIA": "50",
 }
 
 ALGO_COLORS = {
@@ -160,18 +160,18 @@ DATASET_TICK_LABELS = {
     "RIGA": "RIGA",
     "Gleason": "GleasonHD",
     "MouseTumor": "MouseT",
-    "MMIA": "MMIA",
     "MMIS": "MMIS",
+    "MMIA": "MMIA",
 }
 
 SEPARATE_DOT_FIGSIZE = (28.0, 7.6)
-SEPARATE_DOT_TITLE_SIZE = 22
-SEPARATE_DOT_PANEL_TITLE_SIZE = 22
-SEPARATE_DOT_LABEL_SIZE = 24
-SEPARATE_DOT_TICK_SIZE = 19
-SEPARATE_DOT_LEGEND_SIZE = 20
-SEPARATE_DOT_MARKER_SIZE = 200
-SEPARATE_DOT_BOOTSTRAP_MARKER_SIZE = 15
+SEPARATE_DOT_TITLE_SIZE = 30
+SEPARATE_DOT_PANEL_TITLE_SIZE = 30
+SEPARATE_DOT_LABEL_SIZE = 30
+SEPARATE_DOT_TICK_SIZE = 25
+SEPARATE_DOT_LEGEND_SIZE = 25
+SEPARATE_DOT_MARKER_SIZE = 320
+SEPARATE_DOT_BOOTSTRAP_MARKER_SIZE = 32
 SEPARATE_DOT_MEAN_LINEWIDTH = 3.5
 SEPARATE_DOT_AXIS_LINEWIDTH = 1.2
 
@@ -1493,7 +1493,7 @@ def _plot_single_scenario_dot_on_axis(
                 bootstrap_deltas,
                 s=SEPARATE_DOT_BOOTSTRAP_MARKER_SIZE,
                 c="lightgray",
-                alpha=0.13,
+                alpha=0.18,
                 edgecolors="none",
                 zorder=1,
             )
@@ -1529,7 +1529,13 @@ def _plot_single_scenario_dot_on_axis(
     ax.set_xlim(0.35, len(TARGET_ALGOS) + 0.65)
     ax.set_ylim(-0.1, y_high)
     ax.set_xticks(range(1, len(TARGET_ALGOS) + 1))
-    ax.set_xticklabels(TARGET_ALGOS, rotation=0, ha="center", fontsize=SEPARATE_DOT_TICK_SIZE)
+    ax.set_xticklabels(
+        TARGET_ALGOS,
+        rotation=45,
+        ha="right",
+        rotation_mode="anchor",
+        fontsize=SEPARATE_DOT_TICK_SIZE,
+    )
     ax.tick_params(
         axis="both",
         which="major",
@@ -1563,7 +1569,7 @@ def _plot_single_scenario_dot_on_axis(
             color="black",
             markerfacecolor="white",
             markeredgecolor="black",
-            markersize=15,
+            markersize=18,
             linewidth=0,
             label=DATASET_TICK_LABELS.get(d, d),
         )
@@ -1583,7 +1589,7 @@ def _plot_single_scenario_dot_on_axis(
         color="none",
         markerfacecolor="lightgray",
         markeredgecolor="lightgray",
-        markersize=7,
+        markersize=10,
         label="Bootstrap deltas",
     )
     return dataset_handles, mean_handle, bootstrap_handle

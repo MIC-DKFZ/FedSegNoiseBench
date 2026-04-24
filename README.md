@@ -127,3 +127,8 @@ Per-client -- roc-clean vs roc-noisy clients comparison:
 ```
 python3 ./src/eval/results_processing/roc_clean_vs_noisy_clients_global_comparison.py --output-dir ./results/segmentation_results/partial_noise_comparison --figure paired_dot
 ```
+
+Overall clean-referenced robustness analysis:
+```
+python ./src/eval/results_processing/robustness_analysis_noisy_scenarios_global.py --figure separate_dot --delta-mode abs
+```
