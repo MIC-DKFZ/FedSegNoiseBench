@@ -22,7 +22,7 @@ noise_col = "Noise"
 metric_col = "Mean(D_val)"
 
 target_algos = ["FedAvg", "FedA3I", "IOP-FL", "FedCorr", "FedSelect"]
-target_datasets = ["LIDC", "RIGA", "Gleason", "MouseTumor", "MMIA", "MMIS"]
+target_datasets = ["LIDC", "RIGA", "Gleason", "MouseTumor", "MMIS", "MMIA"]
 noise_order = ["0", "roa(p)", "roc(p)", "100"]  # plotting order
 
 # Include only results from these folds (fold numbers: 0, 1, 2, 3, 4)
@@ -104,6 +104,9 @@ BOXPLOT_LABEL_FONTSIZE = 14
 BOXPLOT_TICK_FONTSIZE = 14
 BOXPLOT_DATASET_FONTSIZE = 14
 BOXPLOT_LEGEND_FONTSIZE = 14
+BOXPLOT_CLEAN_NOISY_FIGSIZE = (16.2, 7.5)
+BOXPLOT_STANDARD_FIGSIZE = (15.0, 7.0)
+BOXPLOT_PER_CLIENT_FIGSIZE = (24.0, 7.0)
 LATEX_TABLE_COLOR_STRENGTH = 0.6
 LATEX_DATASET_LABELS = {
     "LIDC": "LIDC",
@@ -117,6 +120,24 @@ LATEX_SCENARIO_LABELS = {
     "0": "clean",
     "roa(p)": "roa",
     "roc(p)": "roc",
+    "100": "noisy",
+}
+
+PLOT_DATASET_LABELS = {
+    "LIDC": "LIDC",
+    "RIGA": "RIGA",
+    "Gleason": "GleasonHD",
+    "MouseTumor": "MouseT",
+    "MMIS": "MMIS",
+    "MMIA": "MMIA",
+}
+
+PLOT_SCENARIO_LABELS = {
+    "clean": "clean",
+    "roa(p)": "roa",
+    "roc(p)": "roc",
+    "noisy": "noisy",
+    "0": "clean",
     "100": "noisy",
 }
 
@@ -341,6 +362,32 @@ def _latex_dataset_label(dataset_name: str) -> str:
 
 def _latex_scenario_label(scenario_name: str) -> str:
     return LATEX_SCENARIO_LABELS.get(scenario_name, scenario_name)
+
+
+def _plot_dataset_label(dataset_name: str) -> str:
+    return PLOT_DATASET_LABELS.get(dataset_name, dataset_name)
+
+
+def _plot_scenario_label(scenario_name: str) -> str:
+    return PLOT_SCENARIO_LABELS.get(scenario_name, scenario_name)
+
+
+def metric_axis_label(metric_name: str) -> str:
+    if metric_name == "FgBgInstanceF1":
+        return "fg-bg Instance F1"
+    if metric_name == "HD95":
+        return "HD95 [mm]"
+    if metric_name == "ClassConfusion":
+        return "Class Confusion"
+    return metric_name
+
+
+def boxplot_legend_location() -> str:
+    return (
+        "upper right"
+        if classwise_metric in {"HD95", "ClassConfusion"}
+        else "lower right"
+    )
 
 
 def build_bootstrap_summary_table(
@@ -901,7 +948,7 @@ def plot_classwise_boxplots_clean_noisy(df_all: pd.DataFrame):
                         noisy_positions = state_positions
                     # Add label position at center of state group
                     label_positions.append(np.mean(state_positions))
-                    label_texts.append(state_key)
+                    label_texts.append(_plot_scenario_label(state_key))
                     pos += gap_noise
             if class_has_data:
                 if clean_positions and noisy_positions:
@@ -919,7 +966,7 @@ def plot_classwise_boxplots_clean_noisy(df_all: pd.DataFrame):
         return
 
     # Create figure
-    fig, ax = plt.subplots(figsize=(max(13, len(target_datasets) * 2.7), 7.5))
+    fig, ax = plt.subplots(figsize=BOXPLOT_CLEAN_NOISY_FIGSIZE)
 
     bp = ax.boxplot(
         box_data,
@@ -971,7 +1018,7 @@ def plot_classwise_boxplots_clean_noisy(df_all: pd.DataFrame):
     ax.set_xticklabels(
         label_texts, rotation=0, ha="center", fontsize=BOXPLOT_TICK_FONTSIZE
     )
-    ax.set_ylabel(classwise_metric, fontsize=BOXPLOT_LABEL_FONTSIZE)
+    ax.set_ylabel(metric_axis_label(classwise_metric), fontsize=BOXPLOT_LABEL_FONTSIZE)
     # Tighten in-axes horizontal margins
     xmin = min(positions) - bplot_width
     xmax = max(positions) + bplot_width
@@ -1012,7 +1059,11 @@ def plot_classwise_boxplots_clean_noisy(df_all: pd.DataFrame):
         plt.matplotlib.patches.Patch(facecolor=algo_colors[a], alpha=0.75, label=a)
         for a in target_algos
     ]
-    ax.legend(handles=algo_patches, loc="lower right", fontsize=10)
+    ax.legend(
+        handles=algo_patches,
+        loc=boxplot_legend_location(),
+        fontsize=10,
+    )
 
     fig.tight_layout()
     fig.subplots_adjust(bottom=0.18)
@@ -1188,7 +1239,7 @@ def plot_classwise_boxplots_clean_noisy_bootstrapping(df_all: pd.DataFrame):
                         noisy_positions = state_positions
                     # Add label position at center of state group
                     label_positions.append(np.mean(state_positions))
-                    label_texts.append(state_key)
+                    label_texts.append(_plot_scenario_label(state_key))
                     pos += gap_noise
             if class_has_data:
                 if clean_positions and noisy_positions:
@@ -1206,7 +1257,7 @@ def plot_classwise_boxplots_clean_noisy_bootstrapping(df_all: pd.DataFrame):
         return
 
     # Create figure
-    fig, ax = plt.subplots(figsize=(max(12, len(target_datasets) * 2.5), 7))
+    fig, ax = plt.subplots(figsize=BOXPLOT_STANDARD_FIGSIZE)
 
     bp = ax.boxplot(
         box_data,
@@ -1256,7 +1307,7 @@ def plot_classwise_boxplots_clean_noisy_bootstrapping(df_all: pd.DataFrame):
 
     ax.set_xticks(label_positions)
     ax.set_xticklabels(label_texts, rotation=0, ha="center", fontsize=BOXPLOT_LABEL_FONTSIZE)
-    ax.set_ylabel(classwise_metric, fontsize=BOXPLOT_LABEL_FONTSIZE)
+    ax.set_ylabel(metric_axis_label(classwise_metric), fontsize=BOXPLOT_LABEL_FONTSIZE)
     # Tighten in-axes horizontal margins
     xmin = min(positions) - bplot_width
     xmax = max(positions) + bplot_width
@@ -1297,7 +1348,11 @@ def plot_classwise_boxplots_clean_noisy_bootstrapping(df_all: pd.DataFrame):
         plt.matplotlib.patches.Patch(facecolor=algo_colors[a], alpha=0.75, label=a)
         for a in target_algos
     ]
-    ax.legend(handles=algo_patches, loc="lower right", fontsize=10)
+    ax.legend(
+        handles=algo_patches,
+        loc=boxplot_legend_location(),
+        fontsize=10,
+    )
 
     fig.tight_layout()
     fig.subplots_adjust(bottom=0.18)
@@ -1463,7 +1518,7 @@ def plot_classwise_boxplots_clean_noiseratioall_noisy_bootstrapping(
                     state_groups[state_key] = state_positions
                     # Add label position at center of state group
                     label_positions.append(np.mean(state_positions))
-                    label_texts.append(state_key)
+                    label_texts.append(_plot_scenario_label(state_key))
                     pos += gap_noise
 
             # Add noise boundaries between consecutive states
@@ -1491,7 +1546,7 @@ def plot_classwise_boxplots_clean_noiseratioall_noisy_bootstrapping(
         return
 
     # Create figure
-    fig, ax = plt.subplots(figsize=(max(12, len(target_datasets) * 2.5), 7))
+    fig, ax = plt.subplots(figsize=BOXPLOT_STANDARD_FIGSIZE)
 
     bp = ax.boxplot(
         box_data,
@@ -1572,7 +1627,7 @@ def plot_classwise_boxplots_clean_noiseratioall_noisy_bootstrapping(
 
     ax.set_xticks(label_positions)
     ax.set_xticklabels(label_texts, rotation=0, ha="center", fontsize=BOXPLOT_LABEL_FONTSIZE)
-    ax.set_ylabel(classwise_metric, fontsize=BOXPLOT_LABEL_FONTSIZE)
+    ax.set_ylabel(metric_axis_label(classwise_metric), fontsize=BOXPLOT_LABEL_FONTSIZE)
     # Tighten in-axes horizontal margins
     xmin = min(positions) - bplot_width
     xmax = max(positions) + bplot_width
@@ -1620,7 +1675,11 @@ def plot_classwise_boxplots_clean_noiseratioall_noisy_bootstrapping(
         plt.matplotlib.patches.Patch(facecolor=algo_colors[a], alpha=0.75, label=a)
         for a in target_algos
     ]
-    ax.legend(handles=algo_patches, loc="lower right", fontsize=BOXPLOT_LABEL_FONTSIZE)
+    ax.legend(
+        handles=algo_patches,
+        loc=boxplot_legend_location(),
+        fontsize=BOXPLOT_LABEL_FONTSIZE,
+    )
 
     fig.tight_layout()
     fig.subplots_adjust(bottom=0.18)
@@ -1783,7 +1842,7 @@ def plot_classwise_boxplots_clean_roc_noisy_bootstrapping(df_all: pd.DataFrame):
                     state_groups[state_key] = state_positions
                     # Add label position at center of state group
                     label_positions.append(np.mean(state_positions))
-                    label_texts.append(state_key)
+                    label_texts.append(_plot_scenario_label(state_key))
                     pos += gap_noise
 
             # Add noise boundaries between consecutive states
@@ -1811,7 +1870,7 @@ def plot_classwise_boxplots_clean_roc_noisy_bootstrapping(df_all: pd.DataFrame):
         return
 
     # Create figure
-    fig, ax = plt.subplots(figsize=(max(12, len(target_datasets) * 2.5), 7))
+    fig, ax = plt.subplots(figsize=BOXPLOT_STANDARD_FIGSIZE)
 
     bp = ax.boxplot(
         box_data,
@@ -1892,7 +1951,7 @@ def plot_classwise_boxplots_clean_roc_noisy_bootstrapping(df_all: pd.DataFrame):
 
     ax.set_xticks(label_positions)
     ax.set_xticklabels(label_texts, rotation=0, ha="center", fontsize=BOXPLOT_LABEL_FONTSIZE)
-    ax.set_ylabel(classwise_metric, fontsize=BOXPLOT_LABEL_FONTSIZE)
+    ax.set_ylabel(metric_axis_label(classwise_metric), fontsize=BOXPLOT_LABEL_FONTSIZE)
     # Tighten in-axes horizontal margins
     xmin = min(positions) - bplot_width
     xmax = max(positions) + bplot_width
@@ -1940,7 +1999,11 @@ def plot_classwise_boxplots_clean_roc_noisy_bootstrapping(df_all: pd.DataFrame):
         plt.matplotlib.patches.Patch(facecolor=algo_colors[a], alpha=0.75, label=a)
         for a in target_algos
     ]
-    ax.legend(handles=algo_patches, loc="lower right", fontsize=10)
+    ax.legend(
+        handles=algo_patches,
+        loc=boxplot_legend_location(),
+        fontsize=10,
+    )
 
     fig.tight_layout()
     fig.subplots_adjust(bottom=0.18)
@@ -2126,7 +2189,7 @@ def plot_boxplots_clean_roa_roc_noisy_bootstrapping(
                 if state_has_data:
                     state_groups[state_key] = state_positions
                     label_positions.append(np.mean(state_positions))
-                    label_texts.append(state_key)
+                    label_texts.append(_plot_scenario_label(state_key))
                     pos += gap_noise
 
             if class_has_data:
@@ -2153,7 +2216,7 @@ def plot_boxplots_clean_roa_roc_noisy_bootstrapping(
         return
 
     # Create figure
-    fig, ax = plt.subplots(figsize=(max(12, len(target_datasets) * 2.5), 7))
+    fig, ax = plt.subplots(figsize=BOXPLOT_STANDARD_FIGSIZE)
 
     bp = ax.boxplot(
         box_data,
@@ -2197,7 +2260,7 @@ def plot_boxplots_clean_roa_roc_noisy_bootstrapping(
         ax.text(
             ds_center,
             -0.06,
-            ds_name,
+            _plot_dataset_label(ds_name),
             ha="center",
             va="top",
             fontsize=BOXPLOT_LABEL_FONTSIZE,
@@ -2214,7 +2277,7 @@ def plot_boxplots_clean_roa_roc_noisy_bootstrapping(
 
     ax.set_xticks(label_positions)
     ax.set_xticklabels(label_texts, rotation=0, ha="center", fontsize=BOXPLOT_LABEL_FONTSIZE-2)
-    ax.set_ylabel(classwise_metric, fontsize=BOXPLOT_LABEL_FONTSIZE)
+    ax.set_ylabel(metric_axis_label(classwise_metric), fontsize=BOXPLOT_LABEL_FONTSIZE)
     xmin = min(positions) - bplot_width
     xmax = max(positions) + bplot_width
     ax.set_xlim(xmin, xmax)
@@ -2261,7 +2324,11 @@ def plot_boxplots_clean_roa_roc_noisy_bootstrapping(
         plt.matplotlib.patches.Patch(facecolor=algo_colors[a], alpha=0.75, label=a)
         for a in target_algos
     ]
-    ax.legend(handles=algo_patches, loc="lower right", fontsize=BOXPLOT_LEGEND_FONTSIZE)
+    ax.legend(
+        handles=algo_patches,
+        loc=boxplot_legend_location(),
+        fontsize=BOXPLOT_LEGEND_FONTSIZE,
+    )
 
     fig.tight_layout()
     fig.subplots_adjust(bottom=0.14)
@@ -2463,7 +2530,7 @@ def plot_boxplots_roa_per_client_bootstrapping(df_all: pd.DataFrame, classwise=F
         return
 
     # Create figure
-    fig, ax = plt.subplots(figsize=(max(16, len(target_datasets) * 4), 7))
+    fig, ax = plt.subplots(figsize=BOXPLOT_PER_CLIENT_FIGSIZE)
 
     bp = ax.boxplot(
         box_data,
@@ -2521,7 +2588,7 @@ def plot_boxplots_roa_per_client_bootstrapping(df_all: pd.DataFrame, classwise=F
 
     ax.set_xticks(client_label_positions)
     ax.set_xticklabels(client_label_texts, rotation=45, ha="right", fontsize=BOXPLOT_LABEL_FONTSIZE)
-    ax.set_ylabel(classwise_metric, fontsize=BOXPLOT_LABEL_FONTSIZE)
+    ax.set_ylabel(metric_axis_label(classwise_metric), fontsize=BOXPLOT_LABEL_FONTSIZE)
     xmin = min(positions) - bplot_width
     xmax = max(positions) + bplot_width
     ax.set_xlim(xmin, xmax)
@@ -2569,7 +2636,11 @@ def plot_boxplots_roa_per_client_bootstrapping(df_all: pd.DataFrame, classwise=F
         plt.matplotlib.patches.Patch(facecolor=algo_colors[a], alpha=0.75, label=a)
         for a in target_algos
     ]
-    ax.legend(handles=algo_patches, loc="lower right", fontsize=10)
+    ax.legend(
+        handles=algo_patches,
+        loc=boxplot_legend_location(),
+        fontsize=10,
+    )
 
     fig.tight_layout()
     fig.subplots_adjust(bottom=0.12)
@@ -2771,7 +2842,7 @@ def plot_boxplots_roc_per_client_bootstrapping(df_all: pd.DataFrame, classwise=F
         return
 
     # Create figure
-    fig, ax = plt.subplots(figsize=(max(16, len(target_datasets) * 4), 7))
+    fig, ax = plt.subplots(figsize=BOXPLOT_PER_CLIENT_FIGSIZE)
 
     bp = ax.boxplot(
         box_data,
@@ -2838,7 +2909,7 @@ def plot_boxplots_roc_per_client_bootstrapping(df_all: pd.DataFrame, classwise=F
 
     ax.set_xticks(client_label_positions)
     ax.set_xticklabels(client_label_texts, rotation=45, ha="right", fontsize=BOXPLOT_LABEL_FONTSIZE)
-    ax.set_ylabel(classwise_metric, fontsize=BOXPLOT_LABEL_FONTSIZE)
+    ax.set_ylabel(metric_axis_label(classwise_metric), fontsize=BOXPLOT_LABEL_FONTSIZE)
     xmin = min(positions) - bplot_width
     xmax = max(positions) + bplot_width
     ax.set_xlim(xmin, xmax)
@@ -2884,7 +2955,11 @@ def plot_boxplots_roc_per_client_bootstrapping(df_all: pd.DataFrame, classwise=F
         plt.matplotlib.patches.Patch(facecolor=algo_colors[a], alpha=0.75, label=a)
         for a in target_algos
     ]
-    ax.legend(handles=algo_patches, loc="lower right", fontsize=10)
+    ax.legend(
+        handles=algo_patches,
+        loc=boxplot_legend_location(),
+        fontsize=10,
+    )
 
     fig.tight_layout()
     fig.subplots_adjust(bottom=0.12)
