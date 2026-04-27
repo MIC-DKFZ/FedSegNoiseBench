@@ -17,8 +17,7 @@ from torch.utils.data import WeightedRandomSampler, Dataset
 from torch.optim.sgd import SGD
 
 from nnunetv2.utilities.helpers import empty_cache, dummy_context
-from nnunetv2.training.dataloading.data_loader_2d import nnUNetDataLoader2D
-from nnunetv2.training.dataloading.data_loader_3d import nnUNetDataLoader3D
+from nnunetv2.training.dataloading.data_loader import nnUNetDataLoader
 from batchgenerators.dataloading.single_threaded_augmenter import (
     SingleThreadedAugmenter,
 )
@@ -876,30 +875,41 @@ class FedSelect(FedAvg):
             proxy_batch_size = min(
                 max(1, int(configured_proxy_batch_size)), len(top_k_identifiers)
             )
-        if dim == 2:
-            dl_proxy = nnUNetDataLoader2D(
-                proxy_dataset,
-                proxy_batch_size,
-                patch_size,
-                patch_size,
-                nnunet_trainer.label_manager,
-                oversample_foreground_percent=nnunet_trainer.oversample_foreground_percent,
-                sampling_probabilities=None,
-                pad_sides=None,
-                transforms=val_transforms,
-            )
-        else:
-            dl_proxy = nnUNetDataLoader3D(
-                proxy_dataset,
-                proxy_batch_size,
-                patch_size,
-                patch_size,
-                nnunet_trainer.label_manager,
-                oversample_foreground_percent=nnunet_trainer.oversample_foreground_percent,
-                sampling_probabilities=None,
-                pad_sides=None,
-                transforms=val_transforms,
-            )
+        # if dim == 2:
+        #     dl_proxy = nnUNetDataLoader2D(
+        #         proxy_dataset,
+        #         proxy_batch_size,
+        #         patch_size,
+        #         patch_size,
+        #         nnunet_trainer.label_manager,
+        #         oversample_foreground_percent=nnunet_trainer.oversample_foreground_percent,
+        #         sampling_probabilities=None,
+        #         pad_sides=None,
+        #         transforms=val_transforms,
+        #     )
+        # else:
+        #     dl_proxy = nnUNetDataLoader3D(
+        #         proxy_dataset,
+        #         proxy_batch_size,
+        #         patch_size,
+        #         patch_size,
+        #         nnunet_trainer.label_manager,
+        #         oversample_foreground_percent=nnunet_trainer.oversample_foreground_percent,
+        #         sampling_probabilities=None,
+        #         pad_sides=None,
+        #         transforms=val_transforms,
+        #     )
+        dl_proxy = nnUNetDataLoader(
+            proxy_dataset,
+            proxy_batch_size,
+            patch_size,
+            patch_size,
+            nnunet_trainer.label_manager,
+            oversample_foreground_percent=nnunet_trainer.oversample_foreground_percent,
+            sampling_probabilities=None,
+            pad_sides=None,
+            transforms=val_transforms,
+        )
 
         allowed_num_processes = get_allowed_n_proc_DA()
         proxy_num_processes = max(

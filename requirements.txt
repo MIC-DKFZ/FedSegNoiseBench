@@ -7,6 +7,7 @@ pylidc
 opencv-python
 tifffile==2025.2.18
 h5py
+dynamic-network-architectures
 
 # Custom packages with custom index URL
 httpx
