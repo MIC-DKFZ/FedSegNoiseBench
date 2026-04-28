@@ -1,21 +1,45 @@
-import os
-import sys
 import argparse
+import json
 import logging
+import os
+import random
+import string
+import sys
 from datetime import datetime
 
-# Add src to PYTHONPATH automatically if it's not there
 src_path = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if src_path not in sys.path:
     sys.path.append(src_path)
-print(f"{src_path=}")
-print(f"{sys.path=}")
 
-from orchestrator import Orchestrator
 from client import Client
-import json
-import random
-import string
+from orchestrator import Orchestrator
+
+
+METHOD_ARG_KEYS = {
+    "fedavg": (),
+    "feda3i": ("feda3i_warmup_rounds_frac", "feda3i_interw"),
+    "feddm": (
+        "feddm_gamma_hgd_smoothing",
+        "feddm_ratio_cac_pixelselection",
+        "feddm_cac_label_correction",
+        "feddm_loss",
+    ),
+    "iopfl": ("iopfl_alpha",),
+    "fedcorr": (
+        "fedcorr_preproc_rounds_frac",
+        "fedcorr_relabel_ratio",
+        "fedcorr_relabel_confidence_thres",
+        "fedcorr_proxterm_beta",
+    ),
+    "fedselect": (
+        "fedselect_warmup_rounds_frac",
+        "fedselect_client_select_ratio",
+        "fedselect_sample_select_ratio",
+        "fedselect_meta_momentum",
+        "fedselect_reward_data_size_frac",
+        "fedselect_proxy_batch_size",
+    ),
+}
 
 
 def cli_args_to_file(args, experiment_id: str):
@@ -32,10 +56,80 @@ def cli_args_to_file(args, experiment_id: str):
         json.dump(args_dict, f, indent=2, default=str)
 
 
+def create_experiment_id(args) -> str:
+    random_hash = "".join(random.choices(string.ascii_lowercase + string.digits, k=5))
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    return (
+        f"{args.noise_mitigation_method.lower()}_noiseroa{args.noise_ratio}_"
+        f"fold{args.fold}_clients{args.num_clients}_flrounds{args.num_rounds}_"
+        f"localepochs{args.num_local_epochs}_{timestamp}_{random_hash}"
+    )
+
+
+def split_optional_arg(value):
+    return value.split() if value else None
+
+
+def build_clients(args, experiment_id: str):
+    dataset_ids = args.dataset_ids.split()
+    clean_validation_datasets = split_optional_arg(args.clean_validation_dataset)
+    noisy_train_folders = split_optional_arg(args.noisy_train_folder)
+
+    clients = []
+    for client_id, dataset_id in enumerate(dataset_ids):
+        clients.append(
+            Client(
+                client_id=client_id,
+                model_args={
+                    "dataset_id": dataset_id,
+                    "configuration": args.configuration,
+                    "fold": args.fold,
+                    "plan": args.plan,
+                    "trainer": args.trainer,
+                    "save_every": args.save_every,
+                    "oversample_foreground_percent": args.oversample_foreground_percent,
+                    "class_sampling_probabilities": args.class_sampling_probabilities,
+                    "batch_element_class_probabilities": args.batch_element_class_probabilities,
+                    "num_gpus": args.num_gpus,
+                    "clean_validation_dataset": (
+                        clean_validation_datasets[client_id]
+                        if clean_validation_datasets
+                        else None
+                    ),
+                    "experiment_id": f"D{dataset_id}_{experiment_id}",
+                    "noisy_train_folder": (
+                        noisy_train_folders[client_id] if noisy_train_folders else None
+                    ),
+                    "noise_ratio": args.noise_ratio,
+                },
+                fl_args={
+                    "num_local_epochs": args.num_local_epochs,
+                    "num_rounds": args.num_rounds,
+                },
+            )
+        )
+    return clients
+
+
+def build_fl_args(args):
+    strategy_name = args.noise_mitigation_method.lower()
+    if strategy_name not in METHOD_ARG_KEYS:
+        raise NotImplementedError(
+            f"Federated learning strategy {args.noise_mitigation_method} not implemented!"
+        )
+
+    fl_args = {
+        "num_rounds": args.num_rounds,
+        "strategy": args.noise_mitigation_method,
+    }
+    for key in METHOD_ARG_KEYS[strategy_name]:
+        fl_args[key] = getattr(args, key)
+    return fl_args
+
+
 def main(args):
     # setup experiment id
-    random_hash = "".join(random.choices(string.ascii_lowercase + string.digits, k=5))
-    experiment_id = f"{args.noise_mitigation_method.lower()}_noiseroa{args.noise_ratio}_fold{args.fold}_clients{args.num_clients}_flrounds{args.num_rounds}_localepochs{args.num_local_epochs}_{datetime.now().strftime('%Y%m%d-%H%M%S')}_{random_hash}"
+    experiment_id = create_experiment_id(args)
 
     # # set up logging
     # setup_logging(args, experiment_id)
@@ -43,140 +137,10 @@ def main(args):
     # log all cli args to file
     cli_args_to_file(args, experiment_id)
 
-    # setup clients
-    clients = [
-        Client(
-            client_id=i,
-            model_args={
-                "dataset_id": args.dataset_ids.split()[i],
-                "configuration": args.configuration,
-                "fold": args.fold,
-                "plan": args.plan,
-                "trainer": args.trainer,
-                "save_every": args.save_every,
-                "oversample_foreground_percent": args.oversample_foreground_percent,
-                "class_sampling_probabilities": args.class_sampling_probabilities,
-                "batch_element_class_probabilities": args.batch_element_class_probabilities,
-                "num_gpus": args.num_gpus,
-                "clean_validation_dataset": (
-                    args.clean_validation_dataset.split()[i]
-                    if args.clean_validation_dataset
-                    else None
-                ),
-                "experiment_id": f"D{args.dataset_ids.split()[i]}_{experiment_id}",
-                "noisy_train_folder": (
-                    args.noisy_train_folder.split()[i]
-                    if args.noisy_train_folder
-                    else None
-                ),
-                "noise_ratio": args.noise_ratio,
-            },
-            fl_args={
-                "num_local_epochs": args.num_local_epochs,
-                "num_rounds": args.num_rounds,
-            },
-        )
-        for i in range(args.num_clients)
-    ]
+    clients = build_clients(args, experiment_id)
 
     # setup orchestrator
-    orchestrator = Orchestrator(
-        clients,
-        fl_args={
-            "num_rounds": args.num_rounds,
-            "strategy": args.noise_mitigation_method,
-            # FedA3I
-            "feda3i_warmup_rounds_frac": (
-                args.feda3i_warmup_rounds_frac
-                if args.noise_mitigation_method.lower() == "feda3i"
-                else None
-            ),
-            "feda3i_interw": (
-                args.feda3i_interw
-                if args.noise_mitigation_method.lower() == "feda3i"
-                else None
-            ),
-            # FedDM
-            "feddm_gamma_hgd_smoothing": (
-                args.feddm_gamma_hgd_smoothing
-                if args.noise_mitigation_method.lower() == "feddm"
-                else None
-            ),
-            "feddm_ratio_cac_pixelselection": (
-                args.feddm_ratio_cac_pixelselection
-                if args.noise_mitigation_method.lower() == "feddm"
-                else None
-            ),
-            "feddm_cac_label_correction": (
-                args.feddm_cac_label_correction
-                if args.noise_mitigation_method.lower() == "feddm"
-                else None
-            ),
-            "feddm_loss": (
-                args.feddm_loss
-                if args.noise_mitigation_method.lower() == "feddm"
-                else None
-            ),
-            # IOP-FL
-            "iopfl_alpha": (
-                args.iopfl_alpha
-                if args.noise_mitigation_method.lower() == "iopfl"
-                else None
-            ),
-            # FedCorr
-            "fedcorr_preproc_rounds_frac": (
-                args.fedcorr_preproc_rounds_frac
-                if args.noise_mitigation_method.lower() == "fedcorr"
-                else None
-            ),
-            "fedcorr_relabel_ratio": (
-                args.fedcorr_relabel_ratio
-                if args.noise_mitigation_method.lower() == "fedcorr"
-                else None
-            ),
-            "fedcorr_relabel_confidence_thres": (
-                args.fedcorr_relabel_confidence_thres
-                if args.noise_mitigation_method.lower() == "fedcorr"
-                else None
-            ),
-            "fedcorr_proxterm_beta": (
-                args.fedcorr_proxterm_beta
-                if args.noise_mitigation_method.lower() == "fedcorr"
-                else None
-            ),
-            # FedSelect
-            "fedselect_warmup_rounds_frac": (
-                args.fedselect_warmup_rounds_frac
-                if args.noise_mitigation_method.lower() == "fedselect"
-                else None
-            ),
-            "fedselect_client_select_ratio": (
-                args.fedselect_client_select_ratio
-                if args.noise_mitigation_method.lower() == "fedselect"
-                else None
-            ),
-            "fedselect_sample_select_ratio": (
-                args.fedselect_sample_select_ratio
-                if args.noise_mitigation_method.lower() == "fedselect"
-                else None
-            ),
-            "fedselect_meta_momentum": (
-                args.fedselect_meta_momentum
-                if args.noise_mitigation_method.lower() == "fedselect"
-                else None
-            ),
-            "fedselect_reward_data_size_frac": (
-                args.fedselect_reward_data_size_frac
-                if args.noise_mitigation_method.lower() == "fedselect"
-                else None
-            ),
-            "fedselect_proxy_batch_size": (
-                args.fedselect_proxy_batch_size
-                if args.noise_mitigation_method.lower() == "fedselect"
-                else None
-            ),
-        },
-    )
+    orchestrator = Orchestrator(clients, fl_args=build_fl_args(args))
 
     # run federated learning
     orchestrator.fl_run()
@@ -190,14 +154,20 @@ def check_cli_args(args):
         len(dataset_ids) == args.num_clients
     ), "Every client needs its dataset! Please provide as many datasets as clients."
 
-    # if all clients are partially noise, clean_validation_folder has to be given
+    if args.clean_validation_dataset:
+        assert len(args.clean_validation_dataset.split()) == args.num_clients, (
+            "--clean_validation_dataset must provide as many datasets as clients."
+        )
+
     if args.noisy_train_folder:
-        assert (
-            args.noisy_train_folder is None and args.clean_validation_dataset is None
-        ) or (
-            args.noisy_train_folder is not None
-            and args.clean_validation_dataset is not None
-        ), "Arguments --noisy_train_folder and --clean_validation_dataset must be provided together or not at all"
+        assert len(args.noisy_train_folder.split()) == args.num_clients, (
+            "--noisy_train_folder must provide as many folders as clients."
+        )
+
+    if args.noisy_train_folder:
+        assert args.clean_validation_dataset is not None, (
+            "Argument --clean_validation_dataset must be provided when --noisy_train_folder is used"
+        )
 
     # save_every should be positive and larger than num_local_epochs
     assert args.save_every > 0 and args.save_every >= min(

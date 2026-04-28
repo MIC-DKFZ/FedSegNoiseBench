@@ -193,7 +193,6 @@ class FedA3I(FedAvg):
         }
         # assign temp values to addresses
         for address, keys in address_key_dict.items():
-            temp = None
             for i, (stage, temp) in enumerate(stage_keywords_temp_dict.items()):
                 if keys[0].startswith(stage):
                     address_temp_mapping[address] = temp
@@ -205,10 +204,22 @@ class FedA3I(FedAvg):
 
         # perform the weight1-weight2-weighted fedavg in a layer-wise manner
         for a, keys in address_key_dict.items():
+            if a not in address_temp_mapping:
+                logging.debug(
+                    "FedA3I: Could not map parameter group %s to a network stage. "
+                    "Falling back to quantity-based FedAvg for this group.",
+                    keys,
+                )
+                layer_alpha = 0.0
+            else:
+                logging.debug(
+                    f"FedA3I: Mapping parameter group {keys} to stage with temp {address_temp_mapping[a]} and alpha {alpha[address_temp_mapping[a]]}"
+                )
+                layer_alpha = alpha[address_temp_mapping[a]]
             # compute weight3
             weight3 = (
-                alpha[address_temp_mapping[a]] * weight1
-                + (1 - alpha[address_temp_mapping[a]]) * weight2
+                layer_alpha * weight1
+                + (1 - layer_alpha) * weight2
             )
 
             for client_id, client_model_weights in _client_checkpoints.items():

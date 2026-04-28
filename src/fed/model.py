@@ -1,6 +1,8 @@
-import os
-import torch
 import ast
+import logging
+import os
+
+import torch
 
 from nnunetv2.run.run_training import run_training
 
@@ -33,21 +35,13 @@ class nnUNetv2_fed:
         self.save_every = save_every
         self.oversample_foreground_percent = oversample_foreground_percent
 
-        self.class_sampling_probabilities = (
-            ast.literal_eval(class_sampling_probabilities)
-            if class_sampling_probabilities
-            else None
+        self.class_sampling_probabilities = self._parse_optional_dict(
+            class_sampling_probabilities,
+            "class_sampling_probabilities",
         )
-        print(
-            f"Class sampling probabilities:{self.class_sampling_probabilities} ; {type(self.class_sampling_probabilities)=}"
-        )
-        self.batch_element_class_probabilities = (
-            ast.literal_eval(batch_element_class_probabilities)
-            if batch_element_class_probabilities
-            else None
-        )
-        print(
-            f"Batch element class probabilities:{self.batch_element_class_probabilities} ; {type(self.batch_element_class_probabilities)=}"
+        self.batch_element_class_probabilities = self._parse_optional_dict(
+            batch_element_class_probabilities,
+            "batch_element_class_probabilities",
         )
 
         self.clean_validation_folder = (
@@ -80,6 +74,75 @@ class nnUNetv2_fed:
             num_gpus=num_gpus,
         )
 
+    @staticmethod
+    def _parse_optional_dict(value, name: str):
+        if value is None or isinstance(value, dict):
+            parsed = value
+        else:
+            parsed = ast.literal_eval(value)
+        logging.info(f"{name}: {parsed}")
+        return parsed
+
+    def _build_run_training_kwargs(
+        self,
+        num_gpus: int,
+        initialize_fed_training: bool,
+        continue_training: bool,
+        num_epochs: int,
+        current_epoch: int,
+        epochs_per_round: int,
+        last_fl_round: bool,
+        very_last_fl_predict_round: bool,
+        only_run_validation: bool,
+        fl_strategy,
+        fl_client_id: int,
+        feddm_client_peers: list,
+        is_fedcorr_noisyclient: bool,
+        is_fedcorr_preproc_stage: bool,
+        is_fedcorr_finetune_stage: bool,
+        is_fedcorr_fulltrain_stage: bool,
+        is_fedselect_selected_client: bool,
+    ):
+        return {
+            "nnunet_trainer": self.nnunet_trainer,
+            "dataset_name_or_id": self.dataset_id,
+            "configuration": self.configuration,
+            "fold": self.fold,
+            "trainer_class_name": self.trainer,
+            "plans_identifier": self.plan,
+            "pretrained_weights": None,
+            "num_gpus": num_gpus,
+            "export_validation_probabilities": False,
+            "continue_training": continue_training,
+            "only_run_validation": only_run_validation,
+            "disable_checkpointing": False,
+            "val_with_best": False,
+            "device": torch.device("cuda"),
+            "save_every": self.save_every,
+            "oversample_foreground_percent": self.oversample_foreground_percent,
+            "class_sampling_probabilities": self.class_sampling_probabilities,
+            "batch_element_class_probabilities": self.batch_element_class_probabilities,
+            "clean_validation_folder": self.clean_validation_folder,
+            "initialize_fed_training": initialize_fed_training,
+            "num_epochs": num_epochs,
+            "current_epoch": current_epoch,
+            "epochs_per_round": epochs_per_round,
+            "last_fl_round": last_fl_round,
+            "current_model_weights": self.current_model_weights,
+            "very_last_fl_predict_round": very_last_fl_predict_round,
+            "experiment_id": self.experiment_id,
+            "fl_strategy": fl_strategy,
+            "fl_client_id": fl_client_id,
+            "feddm_client_peers": feddm_client_peers,
+            "noisy_train_folder": self.noisy_train_folder,
+            "noise_ratio": self.noise_ratio,
+            "is_fedcorr_noisyclient": is_fedcorr_noisyclient,
+            "is_fedcorr_preproc_stage": is_fedcorr_preproc_stage,
+            "is_fedcorr_finetune_stage": is_fedcorr_finetune_stage,
+            "is_fedcorr_fulltrain_stage": is_fedcorr_fulltrain_stage,
+            "is_fedselect_selected_client": is_fedselect_selected_client,
+        }
+
     def run(
         self,
         num_gpus: int = 1,
@@ -100,42 +163,23 @@ class nnUNetv2_fed:
         is_fedcorr_fulltrain_stage: bool = False,
         is_fedselect_selected_client: bool = False,
     ):
-        self.current_model_weights, self.nnunet_trainer = run_training(
-            nnunet_trainer=self.nnunet_trainer,
-            dataset_name_or_id=self.dataset_id,
-            configuration=self.configuration,
-            fold=self.fold,
-            trainer_class_name=self.trainer,
-            plans_identifier=self.plan,
-            pretrained_weights=None,
-            num_gpus=num_gpus,
-            export_validation_probabilities=False,
-            continue_training=continue_training,
-            only_run_validation=only_run_validation,
-            disable_checkpointing=False,
-            val_with_best=False,
-            device=torch.device("cuda"),
-            save_every=self.save_every,
-            oversample_foreground_percent=self.oversample_foreground_percent,
-            class_sampling_probabilities=self.class_sampling_probabilities,
-            batch_element_class_probabilities=self.batch_element_class_probabilities,
-            clean_validation_folder=self.clean_validation_folder,
-            initialize_fed_training=initialize_fed_training,
-            num_epochs=num_epochs,
-            current_epoch=current_epoch,
-            epochs_per_round=epochs_per_round,
-            last_fl_round=last_fl_round,
-            current_model_weights=self.current_model_weights,
-            very_last_fl_predict_round=very_last_fl_predict_round,
-            experiment_id=self.experiment_id,
-            fl_strategy=fl_strategy,
-            fl_client_id=fl_client_id,
-            feddm_client_peers=feddm_client_peers,
-            noisy_train_folder=self.noisy_train_folder,
-            noise_ratio=self.noise_ratio,
-            is_fedcorr_noisyclient=is_fedcorr_noisyclient,
-            is_fedcorr_preproc_stage=is_fedcorr_preproc_stage,
-            is_fedcorr_finetune_stage=is_fedcorr_finetune_stage,
-            is_fedcorr_fulltrain_stage=is_fedcorr_fulltrain_stage,
-            is_fedselect_selected_client=is_fedselect_selected_client,
+        kwargs = self._build_run_training_kwargs(
+            num_gpus,
+            initialize_fed_training,
+            continue_training,
+            num_epochs,
+            current_epoch,
+            epochs_per_round,
+            last_fl_round,
+            very_last_fl_predict_round,
+            only_run_validation,
+            fl_strategy,
+            fl_client_id,
+            feddm_client_peers,
+            is_fedcorr_noisyclient,
+            is_fedcorr_preproc_stage,
+            is_fedcorr_finetune_stage,
+            is_fedcorr_fulltrain_stage,
+            is_fedselect_selected_client,
         )
+        self.current_model_weights, self.nnunet_trainer = run_training(**kwargs)

@@ -4,7 +4,6 @@ import copy
 
 import torch
 
-from client import Client
 from methods.fedavg.fedavg import FedAvg
 from methods.feda3i.feda3i import FedA3I
 from methods.feddm.feddm import FedDM
@@ -14,7 +13,8 @@ from methods.fedselect.fedselect import FedSelect
 
 
 class Orchestrator:
-    def __init__(self, clients: list, fl_args: dict = {}):
+    def __init__(self, clients: list, fl_args: dict = None):
+        fl_args = fl_args or {}
         self.clients = clients
         self.num_rounds = fl_args["num_rounds"]
         self.server_model_weights = None
@@ -24,42 +24,47 @@ class Orchestrator:
             f"Orchestrator initialized for {self.num_rounds} FL rounds, starting from FL round {self.start_fl_round}!"
         )
 
-        # set FL strategy
-        if fl_args["strategy"].lower() == "fedavg":
-            self.fl_strategy = FedAvg(self.clients)
-        elif fl_args["strategy"].lower() == "feda3i":
-            self.fl_strategy = FedA3I(
+        self.fl_strategy = self._build_fl_strategy(fl_args)
+
+    def _build_fl_strategy(self, fl_args: dict):
+        strategy_name = fl_args["strategy"].lower()
+        fl_strategy_state = fl_args.get("fl_strategy_state", None)
+
+        if strategy_name == "fedavg":
+            return FedAvg(self.clients)
+        if strategy_name == "feda3i":
+            return FedA3I(
                 self.clients,
                 int(fl_args["feda3i_warmup_rounds_frac"] * self.num_rounds),
                 fl_args["feda3i_interw"],
-                fl_strategy_state=fl_args.get("fl_strategy_state", None),
+                fl_strategy_state=fl_strategy_state,
             )
-        elif fl_args["strategy"].lower() == "feddm":
-            self.fl_strategy = FedDM(
+        if strategy_name == "feddm":
+            return FedDM(
                 self.clients,
                 fl_args["feddm_gamma_hgd_smoothing"],
                 fl_args["feddm_ratio_cac_pixelselection"],
                 fl_args["feddm_cac_label_correction"],
                 fl_args["feddm_loss"],
             )
-        elif fl_args["strategy"].lower() == "iopfl":
-            self.fl_strategy = IOPFL(
+        if strategy_name == "iopfl":
+            return IOPFL(
                 self.clients,
                 fl_args["iopfl_alpha"],
-                fl_strategy_state=fl_args.get("fl_strategy_state", None),
+                fl_strategy_state=fl_strategy_state,
             )
-        elif fl_args["strategy"].lower() == "fedcorr":
-            self.fl_strategy = FedCorr(
+        if strategy_name == "fedcorr":
+            return FedCorr(
                 self.clients,
                 self.num_rounds,
                 fl_args["fedcorr_preproc_rounds_frac"],
                 fl_args["fedcorr_relabel_ratio"],
                 fl_args["fedcorr_relabel_confidence_thres"],
                 fl_args["fedcorr_proxterm_beta"],
-                fl_strategy_state=fl_args.get("fl_strategy_state", None),
+                fl_strategy_state=fl_strategy_state,
             )
-        elif fl_args["strategy"].lower() == "fedselect":
-            self.fl_strategy = FedSelect(
+        if strategy_name == "fedselect":
+            return FedSelect(
                 self.clients,
                 self.num_rounds,
                 fl_args["fedselect_warmup_rounds_frac"],
@@ -68,12 +73,11 @@ class Orchestrator:
                 fl_args["fedselect_meta_momentum"],
                 fl_args["fedselect_reward_data_size_frac"],
                 fl_args["fedselect_proxy_batch_size"],
-                fl_strategy_state=fl_args.get("fl_strategy_state", None),
+                fl_strategy_state=fl_strategy_state,
             )
-        else:
-            raise NotImplementedError(
-                f"Federated learning strategy {fl_args['strategy']} not implemented!"
-            )
+        raise NotImplementedError(
+            f"Federated learning strategy {fl_args['strategy']} not implemented!"
+        )
 
     def fl_run(self):
         orchestrator_start_time = time.time()
@@ -102,134 +106,9 @@ class Orchestrator:
                 client.fed_round(fl_round, fl_strategy=self.fl_strategy)
 
             orchestrator_start_time = time.time()
+            self._run_server_step(fl_round)
 
-            # aggregation with selected FL strategy
-            # FEDAVG
-            if self.fl_strategy.name == "fedavg":
-                logging.info("Aggregating model weights with FedAvg strategy!")
-                # compute server_model_weights via FedAvg
-                self.aggregate(strategy=self.fl_strategy.name)
-
-            # FEDA3I
-            elif self.fl_strategy.name == "feda3i":
-                # warm up phase
-                if fl_round <= self.fl_strategy.feda3i_warmup_rounds:
-                    logging.info(
-                        "FedA3I warum up stage; aggregating model weights with FedAvg strategy!"
-                    )
-                    # compute server_model_weights via FedAvg
-                    self.aggregate(strategy="fedavg")
-                    # last fl_round of warmup phase
-                    if fl_round == self.fl_strategy.feda3i_warmup_rounds:
-                        logging.info(
-                            f"FedA3I warmup phase finished; starting to compute quality-based aggregation weights!"
-                        )
-                        # compute quality aggregation weights
-                        self.fl_strategy.feda3i_compute_quality_agg_weights()
-                # training phase
-                else:
-                    logging.info("Aggregating model weights with FedA3I strategy!")
-                    # compute server_model_weights via FedA3I
-                    self.aggregate(strategy=self.fl_strategy.name)
-
-            # FEDDM
-            elif self.fl_strategy.name == "feddm":
-                logging.info(
-                    "Central steps of FedDM strategy: "
-                    "Collaborative Annotation Calibration and Hierarchical Gradient De-Conflicting!"
-                )
-                # compute server_model_weights via FedDM
-                self.aggregate(strategy=self.fl_strategy.name)
-
-            # IOP-FL
-            elif self.fl_strategy.name == "iopfl":
-                logging.info(
-                    "Aggregating model weights with FedAvg strategy for IOP-FL!"
-                )
-                # compute server_model_weights via FedAvg
-                self.aggregate(strategy="fedavg")
-
-            # FedCorr
-            elif self.fl_strategy.name == "fedcorr":
-                # Aggregation
-                # do normal FedAvg aggregation in FedCorr's pre-processing and full-training rounds
-                if (fl_round < self.fl_strategy.fedcorr_preproc_rounds) or (
-                    fl_round
-                    >= self.fl_strategy.fedcorr_preproc_rounds
-                    + self.fl_strategy.fedcorr_finetune_rounds
-                ):
-                    # compute server_model_weights via FedAvg
-                    logging.info(
-                        "Aggregating model weights with FedAvg strategy for FedCorr!"
-                    )
-                    self.aggregate(strategy="fedavg")
-                # do FedCorr's adapted FedAvg aggregation in fine-tuning rounds
-                else:
-                    logging.info(
-                        "Aggregating model weights with FedCorr's adapted FedAvg strategy for fine-tuning stage!"
-                    )
-                    self.aggregate(strategy="fedcorr")
-
-                # Further central steps for FedCorr
-
-                # FedCorr's pre-processing round: do noisy client identification
-                if fl_round < self.fl_strategy.fedcorr_preproc_rounds:
-                    # identify noisy clients and noisy samples
-                    self.fl_strategy.central_noisy_client_identification(fl_round)
-
-                # FedCorr's pre-processing or fine-tuning: do noise level estimation
-                if (fl_round < self.fl_strategy.fedcorr_preproc_rounds) or (
-                    fl_round
-                    < self.fl_strategy.fedcorr_preproc_rounds
-                    + self.fl_strategy.fedcorr_finetune_rounds
-                ):
-                    self.fl_strategy.central_noise_level_estimation(fl_round)
-
-                # FedCorr's last fine-tuning round: set global model weights for full-training stage
-                if fl_round == (
-                    self.fl_strategy.fedcorr_preproc_rounds
-                    + self.fl_strategy.fedcorr_finetune_rounds
-                    - 1
-                ):
-                    logging.info(
-                        "FedCorr fine-tuning stage finished: Set global model weights for full-training stage!"
-                    )
-                    self.fl_strategy.global_fl_model_weights = copy.deepcopy(
-                        self.server_model_weights
-                    )
-
-                    # also save it to disk to have it availble for potential restart
-                    self.fl_strategy.save_global_model_weights()
-
-            # FedSelect
-            elif self.fl_strategy.name == "fedselect":
-                # FedSelect's aggregation
-                logging.info("Aggregating model weights with FedSelect strategy!")
-                self.aggregate(strategy=self.fl_strategy.name, fl_round=fl_round)
-
-                # train meta model of most influential selected clients
-                most_influential_client_id = (
-                    self.fl_strategy.get_most_influential_client()
-                )
-                self._log_cuda_memory("FedSelect before trainer offload")
-                self._move_all_clients_trainers_to_device(torch.device("cpu"))
-                torch.cuda.empty_cache()
-                self._log_cuda_memory("FedSelect after trainer offload+empty_cache")
-                try:
-                    self._log_cuda_memory("FedSelect before meta model training")
-                    self.fl_strategy.train_meta_model(
-                        most_influential_client_id, fl_round
-                    )
-                finally:
-                    self._move_all_clients_trainers_to_device(torch.device("cuda"))
-                    torch.cuda.empty_cache()
-                    self._log_cuda_memory("FedSelect after trainer restore+empty_cache")
-            else:
-                raise NotImplementedError(
-                    f"Federated learning strategy {self.fl_strategy.name} not implemented!"
-                )
-
-        # distiribute flinal fl models to clients
+        # distribute final FL models to clients
         self.update_clients(checkpoint_name="server_checkpoint_final.pth")
         torch.cuda.empty_cache()
 
@@ -245,6 +124,104 @@ class Orchestrator:
             )
 
         return self.server_model_weights
+
+    def _run_server_step(self, fl_round: int):
+        strategy_name = self.fl_strategy.name
+        if strategy_name == "fedavg":
+            self._run_fedavg_server_step()
+        elif strategy_name == "feda3i":
+            self._run_feda3i_server_step(fl_round)
+        elif strategy_name == "feddm":
+            self._run_feddm_server_step()
+        elif strategy_name == "iopfl":
+            self._run_iopfl_server_step()
+        elif strategy_name == "fedcorr":
+            self._run_fedcorr_server_step(fl_round)
+        elif strategy_name == "fedselect":
+            self._run_fedselect_server_step(fl_round)
+        else:
+            raise NotImplementedError(
+                f"Federated learning strategy {strategy_name} not implemented!"
+            )
+
+    def _run_fedavg_server_step(self):
+        logging.info("Aggregating model weights with FedAvg strategy!")
+        self.aggregate(strategy="fedavg")
+
+    def _run_feda3i_server_step(self, fl_round: int):
+        if fl_round <= self.fl_strategy.feda3i_warmup_rounds:
+            logging.info("FedA3I warmup stage; aggregating model weights with FedAvg strategy!")
+            self.aggregate(strategy="fedavg")
+            if fl_round == self.fl_strategy.feda3i_warmup_rounds:
+                logging.info(
+                    "FedA3I warmup phase finished; computing quality-based aggregation weights!"
+                )
+                self.fl_strategy.feda3i_compute_quality_agg_weights()
+            return
+
+        logging.info("Aggregating model weights with FedA3I strategy!")
+        self.aggregate(strategy="feda3i")
+
+    def _run_feddm_server_step(self):
+        logging.info(
+            "Central steps of FedDM strategy: "
+            "Collaborative Annotation Calibration and Hierarchical Gradient De-Conflicting!"
+        )
+        self.aggregate(strategy="feddm")
+
+    def _run_iopfl_server_step(self):
+        logging.info("Aggregating model weights with FedAvg strategy for IOP-FL!")
+        self.aggregate(strategy="fedavg")
+
+    def _run_fedcorr_server_step(self, fl_round: int):
+        in_preproc = fl_round < self.fl_strategy.fedcorr_preproc_rounds
+        in_finetune = fl_round < (
+            self.fl_strategy.fedcorr_preproc_rounds
+            + self.fl_strategy.fedcorr_finetune_rounds
+        )
+
+        if in_preproc or not in_finetune:
+            logging.info("Aggregating model weights with FedAvg strategy for FedCorr!")
+            self.aggregate(strategy="fedavg")
+        else:
+            logging.info(
+                "Aggregating model weights with FedCorr's adapted FedAvg strategy for fine-tuning stage!"
+            )
+            self.aggregate(strategy="fedcorr")
+
+        if in_preproc:
+            self.fl_strategy.central_noisy_client_identification(fl_round)
+        if in_preproc or in_finetune:
+            self.fl_strategy.central_noise_level_estimation(fl_round)
+        if fl_round == (
+            self.fl_strategy.fedcorr_preproc_rounds
+            + self.fl_strategy.fedcorr_finetune_rounds
+            - 1
+        ):
+            logging.info(
+                "FedCorr fine-tuning stage finished: Set global model weights for full-training stage!"
+            )
+            self.fl_strategy.global_fl_model_weights = copy.deepcopy(
+                self.server_model_weights
+            )
+            self.fl_strategy.save_global_model_weights()
+
+    def _run_fedselect_server_step(self, fl_round: int):
+        logging.info("Aggregating model weights with FedSelect strategy!")
+        self.aggregate(strategy="fedselect", fl_round=fl_round)
+
+        most_influential_client_id = self.fl_strategy.get_most_influential_client()
+        self._log_cuda_memory("FedSelect before trainer offload")
+        self._move_all_clients_trainers_to_device(torch.device("cpu"))
+        torch.cuda.empty_cache()
+        self._log_cuda_memory("FedSelect after trainer offload+empty_cache")
+        try:
+            self._log_cuda_memory("FedSelect before meta model training")
+            self.fl_strategy.train_meta_model(most_influential_client_id, fl_round)
+        finally:
+            self._move_all_clients_trainers_to_device(torch.device("cuda"))
+            torch.cuda.empty_cache()
+            self._log_cuda_memory("FedSelect after trainer restore+empty_cache")
 
     def aggregate(self, strategy: str = None, fl_round: int = 0):
         """
