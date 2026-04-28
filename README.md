@@ -39,6 +39,331 @@ python3 ./src/data/utils/nnunet_fed_preparation.py --dataset_ids "505 506 507 50
 3. Clean the environment:
 ```make clean```
 
+## Adding a new FNLL method
+
+This benchmark treats a federated noisy-label learning (FNLL) method as an FL
+strategy. Existing examples live in `src/methods/` (`fedavg`, `feda3i`,
+`feddm`, `fedcorr`, `fedselect`, `iopfl`) and are wired through
+`src/fed/main.py`, `src/fed/orchestrator.py`, `src/fed/client.py`, and, if the
+method changes the local training step, the nnU-Net trainer.
+
+### 1. Decide where your method acts
+
+Most methods need one or more of these integration points:
+
+- **Server-side aggregation only:** implement a custom aggregation function in
+  `src/methods/<method>/<method>.py` and call it from
+  `Orchestrator.aggregate`.
+- **Client-side pre/post local training logic:** add a method-specific branch in
+  `Client._run_strategy_round` or after `self.model.run(...)` in
+  `Client.fed_round`.
+- **Custom loss, sample weighting, label correction, or per-batch logic:** pass
+  method flags/state through `src/fed/model.py` into
+  `nnUNet/nnunetv2/training/nnUNetTrainer/nnUNetTrainer.py`, then use them in
+  `compute_training_loss`, `train_step`, validation, or dataloader setup.
+- **Persistent method state for restarts:** store paths and hyperparameters in
+  `self.fl_strategy_state` and implement `save_state`, following `IOPFL` or
+  `FedCorr`.
+
+### 2. Add the method class
+
+Create a new package under `src/methods/`, for example:
+
+```text
+src/methods/myfnll/
+  myfnll.py
+```
+
+Start from `FedAvg` if the method still needs standard weighted averaging:
+
+```python
+from methods.fedavg.fedavg import FedAvg
+
+
+class MyFNLL(FedAvg):
+    def __init__(self, clients, myfnll_lambda=1.0, fl_strategy_state=None):
+        super().__init__(clients)
+        self.name = "myfnll"
+        self.myfnll_lambda = (
+            myfnll_lambda
+            if fl_strategy_state is None
+            else fl_strategy_state["myfnll_lambda"]
+        )
+        self.fl_strategy_state = {
+            "myfnll_lambda": self.myfnll_lambda,
+        }
+
+    def myfnll_aggregate(self, client_checkpoints):
+        # Return a state_dict-like dict containing the new server model weights.
+        return self.fed_avg(client_checkpoints)
+
+    def save_state(self, exp_id: str = None, client_id: int = None):
+        self.save_fl_strategy_state_to_file(self.fl_strategy_state, exp_id)
+```
+
+The orchestrator expects strategy objects to expose `name`, `clients`, and any
+method-specific functions called from the server or client flow.
+
+### 3. Register CLI arguments
+
+In `src/fed/main.py`:
+
+1. Add the method name and its hyperparameters to `METHOD_ARG_KEYS`.
+
+```python
+METHOD_ARG_KEYS = {
+    ...
+    "myfnll": ("myfnll_lambda",),
+}
+```
+
+2. Add parser arguments near the other method arguments.
+
+```python
+parser.add_argument(
+    "--myfnll_lambda",
+    type=float,
+    default=1.0,
+    help="Regularization weight for MyFNLL.",
+)
+```
+
+`build_fl_args` automatically copies all keys listed in `METHOD_ARG_KEYS` into
+the orchestrator's `fl_args`.
+
+### 4. Build the strategy in the orchestrator
+
+In `src/fed/orchestrator.py`, import the class:
+
+```python
+from methods.myfnll.myfnll import MyFNLL
+```
+
+Add it to `_build_fl_strategy`:
+
+```python
+if strategy_name == "myfnll":
+    return MyFNLL(
+        self.clients,
+        fl_args["myfnll_lambda"],
+        fl_strategy_state=fl_strategy_state,
+    )
+```
+
+Add a server step in `_run_server_step`:
+
+```python
+elif strategy_name == "myfnll":
+    self._run_myfnll_server_step(fl_round)
+```
+
+Then implement the step:
+
+```python
+def _run_myfnll_server_step(self, fl_round: int):
+    self.aggregate(strategy="myfnll", fl_round=fl_round)
+```
+
+Finally, route the aggregation in `aggregate`:
+
+```python
+elif strategy == "myfnll":
+    self.server_model_weights = self.fl_strategy.myfnll_aggregate(
+        client_checkpoints
+    )
+```
+
+If your method uses FedAvg unchanged, you can call `self.aggregate(strategy="fedavg")`
+inside `_run_myfnll_server_step` instead.
+
+### 5. Add client-side hooks if needed
+
+For methods that compute client statistics, select samples, maintain local
+memory, or update personalized models, add a branch to
+`Client._run_strategy_round`:
+
+```python
+elif strategy_name == "myfnll":
+    self._run_myfnll_round(run_kwargs, fl_round, fl_strategy)
+```
+
+and implement:
+
+```python
+def _run_myfnll_round(self, run_kwargs: dict, fl_round: int, fl_strategy):
+    run_kwargs.update(
+        {
+            "fl_client_id": self.client_id,
+            "is_myfnll_active": True,
+        }
+    )
+    self.model.run(**run_kwargs)
+    fl_strategy.update_client_state(self.model.nnunet_trainer, self.client_id)
+```
+
+If the method only needs information after local training, follow the IOP-FL
+pattern in `Client.fed_round`: call the strategy after `self.model.run(...)`
+using `self.model.current_model_weights` or `self.model.nnunet_trainer`.
+
+### 6. Pass training-step flags through `src/fed/model.py`
+
+If the nnU-Net trainer needs method-specific values, add them to both
+`nnUNetv2_fed.run(...)` and `_build_run_training_kwargs(...)` in
+`src/fed/model.py`, then include them in the returned kwargs passed to
+`run_training`.
+
+Example additions:
+
+```python
+def run(..., is_myfnll_active: bool = False):
+    kwargs = self._build_run_training_kwargs(..., is_myfnll_active)
+```
+
+```python
+return {
+    ...
+    "is_myfnll_active": is_myfnll_active,
+}
+```
+
+Also make sure `Client._base_run_kwargs` or your method-specific client branch
+sets the value.
+
+### 7. Create a method-specific nnU-Net trainer if needed
+
+If your method changes the local training behavior, prefer a method-specific
+trainer class over editing the base `nnUNetTrainer` directly. The benchmark
+already follows this pattern in:
+
+```text
+nnUNet/nnunetv2/training/nnUNetTrainer/variants/fl/nnUNetTrainer_FL.py
+```
+
+That file contains simple aliases such as `nnUNetTrainer_FedAvg` and mixin-based
+trainers such as `nnUNetTrainer_FedCorr`, `nnUNetTrainer_FedDM`, and
+`nnUNetTrainer_FedSelect`.
+
+Add your trainer to the same file, or create a new Python file below
+`nnUNet/nnunetv2/training/nnUNetTrainer/variants/`. nnU-Net discovers trainers
+by class name, so the class name you pass via `--trainer` must match the Python
+class name.
+
+Minimal example:
+
+```python
+from nnunetv2.training.nnUNetTrainer.nnUNetTrainer import nnUNetTrainer
+
+
+class MyFNLLTrainerMixin:
+    def compute_training_loss(self, batch, data, output, target):
+        loss = super().compute_training_loss(batch, data, output, target)
+        if getattr(self.fl_strategy, "name", None) == "myfnll":
+            loss = loss + self.fl_strategy.myfnll_regularizer(
+                batch=batch,
+                output=output,
+                target=target,
+                trainer=self,
+            )
+        return loss
+
+
+class nnUNetTrainer_MyFNLL(MyFNLLTrainerMixin, nnUNetTrainer):
+    pass
+```
+
+If you use a custom base trainer, such as `nnUNetTrainerDiceCELoss_noSmooth`,
+compose the mixin with that base instead:
+
+```python
+class nnUNetTrainerDiceCELoss_noSmooth_MyFNLL(
+    MyFNLLTrainerMixin,
+    nnUNetTrainerDiceCELoss_noSmooth,
+):
+    pass
+```
+
+Then launch the benchmark with the new trainer:
+
+```bash
+python3 ./src/fed/main.py \
+    --noise_mitigation_method myfnll \
+    --trainer nnUNetTrainer_MyFNLL \
+    ...
+```
+
+Use this trainer-subclass route for changes to `_build_loss`,
+`compute_training_loss`, `train_step`, `run_train_iterations`, dataloaders,
+augmentation, validation behavior, or any method-specific local training state.
+Use the strategy class in `src/methods/<method>/` for server aggregation and
+state that belongs to the FL algorithm.
+
+### 8. Use method flags inside nnU-Net training if needed
+
+For loss or per-batch behavior, extend your method-specific trainer class:
+
+1. Add constructor arguments with defaults, for example
+   `is_myfnll_active: bool = False`.
+2. Store them as instance attributes near the existing FL args.
+3. Use the attributes in `compute_training_loss` or `train_step`.
+
+Example:
+
+```python
+def compute_training_loss(self, batch, data, output, target):
+    loss = self.loss(output, target)
+    if self.is_myfnll_active:
+        loss = loss + self.fl_strategy.myfnll_regularizer(
+            batch=batch,
+            output=output,
+            target=target,
+            trainer=self,
+        )
+    return loss
+```
+
+Keep tensor operations on `self.device`, avoid storing GPU tensors in long-lived
+strategy state unless necessary, and move persistent state to CPU before saving
+when possible.
+
+### 9. Save and restart method state
+
+If your method has state that must survive restarts, keep JSON-serializable
+metadata in `self.fl_strategy_state`. Save large tensors or model weights as
+separate `.pth` files and store only their paths in the JSON. `IOPFL.save_state`
+is the reference pattern for per-client tensor checkpoints, while
+`FedCorr.save_global_model_weights` is the reference pattern for global model
+state.
+
+Restart support is driven by the `fl_strategy_state` entry in the experiment
+args JSON. In your method constructor, accept `fl_strategy_state=None` and load
+saved values from it when present.
+
+### 10. Run a small smoke test
+
+Before launching a full benchmark, run a tiny experiment with a few rounds and
+one local epoch:
+
+```bash
+python3 ./src/fed/main.py \
+    --noise_mitigation_method myfnll \
+    --dataset_ids "505 506 507 508" \
+    --num_clients 4 \
+    --num_rounds 2 \
+    --num_local_epochs 1 \
+    --configuration 3d_fullres \
+    --plan nnUNetResEncUNetMPlans \
+    --trainer nnUNetTrainer_MyFNLL \
+    --myfnll_lambda 1.0
+```
+
+Check that:
+
+- the method name appears in the generated `ExperimentArgs_*.json`;
+- local training finishes for every client;
+- `Orchestrator.aggregate` produces `server_model_weights`;
+- final checkpoints are written in each client result folder;
+- any method-specific state can be saved and loaded again by the restart script.
+
 ## Figure generation
 
 ### Data analysis results figures
