@@ -11,13 +11,13 @@ The suite combines the curation of diverse, real-world noisy medical image segme
 To demonstrate its capabilities, we compare representative FNLL methods across approaches, including noise-aware aggregation, robust personalization, label correction, and sample selection.
 
 **Results:**
-In-depth data analysis shows that real-world segmentation label noise occurs both in isolation and in combinations of characterized noise types. % contour disagreement, missing or additional target structures, and class swapping.
-The benchmark identifies \textit{FedSelect} as the strongest overall FNLL method, underlines \textit{FedAvg} as a competitive baseline, and provides an actionable decision guide to support selection of suitable FNLL strategies based on label-noise type and client-noise scenario.
+In-depth data analysis shows that real-world segmentation label noise occurs both in isolation and in combinations of characterized noise types.
+The benchmark identifies *FedSelect* as the strongest overall FNLL method, underlines *FedAvg* as a competitive baseline, and provides an actionable decision guide to support selection of suitable FNLL strategies based on label-noise type and client-noise scenario.
 
 **Discussion & Conclusion:**
 The presented suite provides a realistic and discriminative basis for FNLL evaluation in medical image segmentation and establishes a reusable foundation for fair benchmarking, dataset-specific label-noise characterization, and future method development under realistic federated settings. Code is available at [https://github.com](https://github.com).
 
-![](./docs/FNLL_benchmarksuite_figure1.png)
+![](./docs/assets/FNLL_benchmarksuite_figure1.png)
 *Figure 1: Segmentation label noise of various forms degrades model training and poses a particular challenge in FL, where noisy annotations are distributed across clients and cannot be centrally inspected. While FNLL methods aim to address this problem, existing literature is often limited to few and synthetic noise types, restricted client-noise scenarios, and narrow data scope. Our benchmark suite closes this gap by combining diverse real-world noisy segmentation datasets, a federated benchmarking framework, and comprehensive noise-targeted evaluation, thereby enabling FNLL method selection, dataset characterization, benchmarking on new data, and evaluation of newly developed FNLL methods.*
 
 ### Citation
