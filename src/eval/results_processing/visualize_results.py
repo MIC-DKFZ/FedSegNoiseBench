@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import glob
 import numpy as np
+from typing import Optional
 
 # -------------------------------------------------------------------
 # Config
@@ -264,6 +265,150 @@ def summarize_bootstrap_values(values: list[float] | np.ndarray) -> tuple[float,
     return mean_val, float(ci_low), float(ci_high)
 
 
+def _bootstrap_metric_array(raw_values) -> Optional[np.ndarray]:
+    """Return one bootstrap vector as float array, preserving NaNs for aligned averaging."""
+    if raw_values is None:
+        return None
+    if isinstance(raw_values, list):
+        values = raw_values
+    else:
+        values = [raw_values]
+
+    try:
+        arr = np.asarray(values, dtype=float).reshape(-1)
+    except (TypeError, ValueError):
+        return None
+    if arr.size == 0:
+        return None
+
+    arr = arr.astype(float, copy=False)
+    arr[~np.isfinite(arr)] = np.nan
+    return arr
+
+
+def _average_bootstrap_vectors(vectors: list[np.ndarray]) -> Optional[np.ndarray]:
+    valid_vectors = []
+    for vec in vectors:
+        if vec is None:
+            continue
+        arr = np.asarray(vec, dtype=float).reshape(-1)
+        if arr.size == 0:
+            continue
+        valid_vectors.append(arr)
+
+    if not valid_vectors:
+        return None
+
+    min_len = min(len(v) for v in valid_vectors)
+    if min_len == 0:
+        return None
+
+    stacked = np.vstack([v[:min_len] for v in valid_vectors])
+    with np.errstate(invalid="ignore"):
+        mean_vec = np.nanmean(stacked, axis=0)
+
+    if np.all(np.isnan(mean_vec)):
+        return None
+    return mean_vec.astype(float, copy=False)
+
+
+def _load_bootstrap_vectors_by_class(
+    bootstrap_file: Path,
+    metric_name: str,
+) -> dict[str, np.ndarray]:
+    if not bootstrap_file.is_file():
+        return {}
+
+    with open(bootstrap_file, "r") as f:
+        results = json.load(f)
+
+    vectors_by_class = {}
+    for class_label, metrics in results.items():
+        if class_label == "stats" or not isinstance(metrics, dict):
+            continue
+        arr = _bootstrap_metric_array(metrics.get(metric_name, None))
+        if arr is not None:
+            vectors_by_class[str(class_label)] = arr
+    return vectors_by_class
+
+
+def _client_bootstrap_vector(
+    bootstrap_file: Path,
+    metric_name: str,
+    class_label: Optional[str] = None,
+) -> Optional[np.ndarray]:
+    vectors_by_class = _load_bootstrap_vectors_by_class(bootstrap_file, metric_name)
+    if class_label is not None:
+        return vectors_by_class.get(str(class_label))
+    return _average_bootstrap_vectors(list(vectors_by_class.values()))
+
+
+def _sorted_exp_paths_with_bootstrap(exp_id: str) -> list[Path]:
+    return sorted(
+        [Path(p) for p in get_exp_paths_with_bootstrap(exp_id)],
+        key=lambda p: str(p),
+    )
+
+
+def _available_bootstrap_class_labels(
+    exp_ids: list[str],
+    metric_name: str,
+) -> list[str]:
+    labels = set()
+    for exp_id in exp_ids:
+        for exp_path in _sorted_exp_paths_with_bootstrap(exp_id):
+            bootstrap_file = exp_path / "validation" / "bootstrap_evaluation_results.json"
+            labels.update(_load_bootstrap_vectors_by_class(bootstrap_file, metric_name))
+
+    return sorted(
+        labels,
+        key=lambda x: (
+            0,
+            int(str(x).replace("(", "").replace(")", "").split(",")[0]),
+        )
+        if str(x).replace("(", "").replace(")", "").split(",")[0].isdigit()
+        else (
+            1,
+            str(x),
+        ),
+    )
+
+
+def aggregate_final_bootstrap_vector(
+    exp_ids: list[str],
+    metric_name: str,
+    class_label: Optional[str] = None,
+) -> Optional[np.ndarray]:
+    """
+    Aggregate bootstrap vectors in the same hierarchy as ranking stability:
+    1. optionally average classes within each client vector,
+    2. average clients within each experiment/fold,
+    3. average folds/experiments for the final dataset/scenario/method vector.
+    """
+    per_experiment_vectors = []
+    for exp_id in exp_ids:
+        exp_paths = _sorted_exp_paths_with_bootstrap(exp_id)
+        if not exp_paths:
+            continue
+
+        client_vectors = []
+        for exp_path in exp_paths:
+            bootstrap_file = exp_path / "validation" / "bootstrap_evaluation_results.json"
+            client_vec = _client_bootstrap_vector(
+                bootstrap_file,
+                metric_name,
+                class_label=class_label,
+            )
+            if client_vec is not None:
+                client_vectors.append(client_vec)
+
+        exp_vec = _average_bootstrap_vectors(client_vectors)
+        if exp_vec is not None:
+            per_experiment_vectors.append(exp_vec)
+
+    return _average_bootstrap_vectors(per_experiment_vectors)
+
+
 def _format_bootstrap_summary(
     summary: tuple[float, float, float] | None,
     metric_name: str,
@@ -422,48 +567,19 @@ def build_bootstrap_summary_table(
                 if df_scenario.empty:
                     continue
 
-                bootstrap_values = []
                 exp_ids = df_scenario["Experiment ID"].dropna().unique().tolist()
-                for exp_id in exp_ids:
-                    exp_paths = get_exp_paths_with_bootstrap(exp_id)
-                    expected_clients = dataset_to_numclients.get(ds, None)
-                    if expected_clients and len(exp_paths) != expected_clients:
-                        print(
-                            f"Skipping Exp_ID {exp_id} for {ds}/{algo}/{scenario}: expected "
-                            f"{expected_clients} clients with bootstrap results, found {len(exp_paths)}"
-                        )
-                        continue
-                    if len(exp_paths) == 0:
-                        print(
-                            f"No experiment paths with bootstrap results found for Exp_ID {exp_id} "
-                            f"({ds}/{algo}/{scenario})"
-                        )
-                        continue
+                final_vec = aggregate_final_bootstrap_vector(
+                    exp_ids,
+                    classwise_metric,
+                )
+                if final_vec is None:
+                    print(
+                        f"No aggregated bootstrap vector for {ds}/{algo}/{scenario}."
+                    )
 
-                    for exp_path in exp_paths:
-                        bootstrap_file = (
-                            Path(exp_path)
-                            / "validation"
-                            / "bootstrap_evaluation_results.json"
-                        )
-                        if not bootstrap_file.is_file():
-                            print(
-                                f"Missing bootstrap_evaluation_results.json at {bootstrap_file}"
-                            )
-                            continue
-                        with open(bootstrap_file, "r") as f:
-                            results_summary = json.load(f)
-
-                        for class_label, metrics in results_summary.items():
-                            if class_label == "stats":
-                                continue
-                            bootstrap_values.extend(
-                                extract_finite_metric_values(
-                                    metrics.get(classwise_metric, None)
-                                )
-                            )
-
-                summary = summarize_bootstrap_values(bootstrap_values)
+                summary = summarize_bootstrap_values(
+                    [] if final_vec is None else final_vec
+                )
                 mean_table.loc[(ds, scenario), algo] = (
                     np.nan if summary is None else summary[0]
                 )
@@ -2033,7 +2149,7 @@ def plot_boxplots_clean_roa_roc_noisy_bootstrapping(
         "roc(p)": "roc(p)",
         "100": "noisy",
     }
-    # data[dataset][algo][class][noise_state] = [dice_values]
+    # data[dataset][algo][class][noise_state] = final aggregated bootstrap vector
     data = {ds: {algo: {} for algo in target_algos} for ds in target_datasets}
 
     for ds in target_datasets:
@@ -2048,71 +2164,41 @@ def plot_boxplots_clean_roa_roc_noisy_bootstrapping(
                 continue
             # only keep desired buckets
             df_algo = df_algo[df_algo[noise_col].isin(noise_states.keys())]
+            if df_algo.empty:
+                continue
 
-            exp_ids = df_algo["Experiment ID"].dropna().unique().tolist()
-            for exp_id in exp_ids:
-                exp_rows = df_algo[df_algo["Experiment ID"] == exp_id]
-                exp_paths = get_exp_paths_with_bootstrap(exp_id)
-                expected_clients = dataset_to_numclients.get(ds, None)
-                if expected_clients and len(exp_paths) != expected_clients:
-                    print(
-                        f"Skipping Exp_ID {exp_id} for {ds}/{algo}: expected {expected_clients} clients with bootstrap results, found {len(exp_paths)}"
-                    )
-                    continue
-                if len(exp_paths) == 0:
-                    print(
-                        f"No experiment paths with bootstrap results found for Exp_ID {exp_id} ({ds}/{algo})"
-                    )
+            for noise_val, state_key in noise_states.items():
+                exp_ids = (
+                    df_algo[df_algo[noise_col] == noise_val]["Experiment ID"]
+                    .dropna()
+                    .unique()
+                    .tolist()
+                )
+                if not exp_ids:
                     continue
 
-                client_classwise_metrics = []
-                for exp_path in exp_paths:
-                    bootstrap_file = (
-                        Path(exp_path)
-                        / "validation"
-                        / "bootstrap_evaluation_results.json"
+                if classwise:
+                    class_labels = _available_bootstrap_class_labels(
+                        exp_ids,
+                        classwise_metric,
                     )
-                    if not bootstrap_file.is_file():
-                        print(
-                            f"Missing bootstrap_evaluation_results.json at {bootstrap_file}"
-                        )
+                else:
+                    class_labels = ["all"]
+
+                for class_label in class_labels:
+                    final_vec = aggregate_final_bootstrap_vector(
+                        exp_ids,
+                        classwise_metric,
+                        class_label=None if class_label == "all" else class_label,
+                    )
+                    if final_vec is None:
                         continue
-                    with open(bootstrap_file, "r") as f:
-                        results_summary = json.load(f)
-                    client_classwise_metrics.append(results_summary)
-                if not client_classwise_metrics:
-                    continue
-
-                for noise_val in exp_rows[noise_col].unique():
-                    state_key = noise_states[noise_val]
-                    for client_bootstrap_res in client_classwise_metrics:
-                        for class_label, metrics in client_bootstrap_res.items():
-                            if class_label == "stats":
-                                continue
-                            if class_label not in data[ds][algo]:
-                                data[ds][algo][class_label] = {
-                                    noise_state: []
-                                    for noise_state in noise_states.values()
-                                }
-                            vals = metrics.get(classwise_metric, None)
-                            if vals is None:
-                                continue
-                            if isinstance(vals, list):
-                                data[ds][algo][class_label][state_key].extend(vals)
-                            else:
-                                data[ds][algo][class_label][state_key].append(vals)
-
-    # Optionally aggregate across classes
-    if not classwise:
-        for ds in target_datasets:
-            for algo in target_algos:
-                if not data.get(ds) or algo not in data[ds]:
-                    continue
-                agg = {noise_state: [] for noise_state in noise_states.values()}
-                for cl in data[ds][algo].keys():
-                    for state_key, vals in data[ds][algo][cl].items():
-                        agg[state_key].extend(vals)
-                data[ds][algo] = {"all": agg}
+                    if class_label not in data[ds][algo]:
+                        data[ds][algo][class_label] = {
+                            noise_state: []
+                            for noise_state in noise_states.values()
+                        }
+                    data[ds][algo][class_label][state_key] = final_vec.tolist()
 
     # Build boxplot structure (per dataset → class → noise state → algorithm)
     algo_colors = {algo: plt.cm.tab10(i % 10) for i, algo in enumerate(target_algos)}

@@ -115,16 +115,16 @@ def extract_client_id_from_path(path: Path) -> Optional[int]:
     return int(m2.group(1)) if m2 else None
 
 
-def compute_bootstrap_metric_mean(
+def compute_bootstrap_metric_vector(
     bootstrap_file: Path, metric_name: str = classwise_metric
-) -> Optional[float]:
+) -> Optional[np.ndarray]:
     if not bootstrap_file.is_file():
         return None
 
     with open(bootstrap_file, "r") as f:
         res = json.load(f)
 
-    values: List[float] = []
+    class_vectors: List[np.ndarray] = []
     for class_label, metrics in res.items():
         if class_label == "stats" or not isinstance(metrics, dict):
             continue
@@ -134,25 +134,49 @@ def compute_bootstrap_metric_mean(
             continue
 
         if isinstance(metric_vals, list):
-            for v in metric_vals:
-                try:
-                    fv = float(v)
-                except (TypeError, ValueError):
-                    continue
-                if np.isfinite(fv):
-                    values.append(fv)
-        else:
             try:
-                fv = float(metric_vals)
+                arr = np.asarray(metric_vals, dtype=float).reshape(-1)
             except (TypeError, ValueError):
                 continue
-            if np.isfinite(fv):
-                values.append(fv)
+        else:
+            try:
+                arr = np.asarray([float(metric_vals)], dtype=float)
+            except (TypeError, ValueError):
+                continue
 
-    if not values:
+        if arr.size == 0:
+            continue
+        arr = arr.astype(float, copy=False)
+        arr[~np.isfinite(arr)] = np.nan
+        class_vectors.append(arr)
+
+    if not class_vectors:
         return None
 
-    return float(np.mean(values))
+    min_len = min(len(v) for v in class_vectors)
+    if min_len == 0:
+        return None
+
+    stacked = np.vstack([v[:min_len] for v in class_vectors])
+    with np.errstate(invalid="ignore"):
+        mean_vec = np.nanmean(stacked, axis=0)
+
+    if np.all(np.isnan(mean_vec)):
+        return None
+    return mean_vec.astype(float, copy=False)
+
+
+def compute_bootstrap_metric_mean(
+    bootstrap_file: Path, metric_name: str = classwise_metric
+) -> Optional[float]:
+    metric_vector = compute_bootstrap_metric_vector(bootstrap_file, metric_name)
+    if metric_vector is None:
+        return None
+
+    finite_values = metric_vector[np.isfinite(metric_vector)]
+    if finite_values.size == 0:
+        return None
+    return float(np.mean(finite_values))
 
 
 def load_and_preprocess_results() -> pd.DataFrame:

@@ -431,7 +431,16 @@ def summarize_rank_group(
             mean_rank = float(np.mean(rank_values))
             rank_ci_low = float(np.quantile(rank_values, 0.025))
             rank_ci_high = float(np.quantile(rank_values, 0.975))
-            mean_score = float(score_df[algo].mean())
+            score_values = score_df[algo].to_numpy(dtype=float)
+            score_values = score_values[np.isfinite(score_values)]
+            if score_values.size:
+                mean_score = float(np.mean(score_values))
+                score_ci_low = float(np.percentile(score_values, 2.5))
+                score_ci_high = float(np.percentile(score_values, 97.5))
+            else:
+                mean_score = np.nan
+                score_ci_low = np.nan
+                score_ci_high = np.nan
         else:
             rank_values = np.asarray([], dtype=float)
             median_rank = np.nan
@@ -439,6 +448,8 @@ def summarize_rank_group(
             rank_ci_low = np.nan
             rank_ci_high = np.nan
             mean_score = np.nan
+            score_ci_low = np.nan
+            score_ci_high = np.nan
 
         for rank in range(1, len(target_algos) + 1):
             if available:
@@ -460,6 +471,8 @@ def summarize_rank_group(
                     "rank_ci_low": rank_ci_low,
                     "rank_ci_high": rank_ci_high,
                     "mean_score": mean_score,
+                    "score_ci_low": score_ci_low,
+                    "score_ci_high": score_ci_high,
                     "n_bootstrap": n_bootstrap,
                     "n_algorithms_present": n_algorithms_present,
                 }
