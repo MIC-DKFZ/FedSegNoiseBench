@@ -530,7 +530,7 @@ def metric_axis_label(metric_name: str) -> str:
 def boxplot_legend_location() -> str:
     return (
         "upper right"
-        if classwise_metric in {"HD95", "ClassConfusion"}
+        if classwise_metric in {"HD95", "ClassConfusion", "FgBgInstanceF1"}
         else "lower right"
     )
 
