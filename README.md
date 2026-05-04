@@ -62,7 +62,12 @@ python3 ./src/data/utils/nnunet_fed_preparation.py --dataset_ids "505 506 507 50
 3. Clean the environment:
 ```make clean```
 
-## Adding a new FNLL method
+## Contribution guide
+
+<details>
+<summary>Incorporating a new FNLL method.</summary>
+
+### Incorporation of a new FNLL method
 
 This benchmark treats a federated noisy-label learning (FNLL) method as an FL
 strategy. Existing examples live in `src/methods/` (`fedavg`, `feda3i`,
@@ -70,7 +75,7 @@ strategy. Existing examples live in `src/methods/` (`fedavg`, `feda3i`,
 `src/fed/main.py`, `src/fed/orchestrator.py`, `src/fed/client.py`, and, if the
 method changes the local training step, the nnU-Net trainer.
 
-### 1. Decide where your method acts
+#### 1. Decide where your method acts
 
 Most methods need one or more of these integration points:
 
@@ -88,7 +93,7 @@ Most methods need one or more of these integration points:
   `self.fl_strategy_state` and implement `save_state`, following `IOPFL` or
   `FedCorr`.
 
-### 2. Add the method class
+#### 2. Add the method class
 
 Create a new package under `src/methods/`, for example:
 
@@ -127,7 +132,7 @@ class MyFNLL(FedAvg):
 The orchestrator expects strategy objects to expose `name`, `clients`, and any
 method-specific functions called from the server or client flow.
 
-### 3. Register CLI arguments
+#### 3. Register CLI arguments
 
 In `src/fed/main.py`:
 
@@ -154,7 +159,7 @@ parser.add_argument(
 `build_fl_args` automatically copies all keys listed in `METHOD_ARG_KEYS` into
 the orchestrator's `fl_args`.
 
-### 4. Build the strategy in the orchestrator
+#### 4. Build the strategy in the orchestrator
 
 In `src/fed/orchestrator.py`, import the class:
 
@@ -199,7 +204,7 @@ elif strategy == "myfnll":
 If your method uses FedAvg unchanged, you can call `self.aggregate(strategy="fedavg")`
 inside `_run_myfnll_server_step` instead.
 
-### 5. Add client-side hooks if needed
+#### 5. Add client-side hooks if needed
 
 For methods that compute client statistics, select samples, maintain local
 memory, or update personalized models, add a branch to
@@ -228,7 +233,7 @@ If the method only needs information after local training, follow the IOP-FL
 pattern in `Client.fed_round`: call the strategy after `self.model.run(...)`
 using `self.model.current_model_weights` or `self.model.nnunet_trainer`.
 
-### 6. Pass training-step flags through `src/fed/model.py`
+#### 6. Pass training-step flags through `src/fed/model.py`
 
 If the nnU-Net trainer needs method-specific values, add them to both
 `nnUNetv2_fed.run(...)` and `_build_run_training_kwargs(...)` in
@@ -252,7 +257,7 @@ return {
 Also make sure `Client._base_run_kwargs` or your method-specific client branch
 sets the value.
 
-### 7. Create a method-specific nnU-Net trainer if needed
+#### 7. Create a method-specific nnU-Net trainer if needed
 
 If your method changes the local training behavior, prefer a method-specific
 trainer class over editing the base `nnUNetTrainer` directly. The benchmark
@@ -320,7 +325,7 @@ augmentation, validation behavior, or any method-specific local training state.
 Use the strategy class in `src/methods/<method>/` for server aggregation and
 state that belongs to the FL algorithm.
 
-### 8. Use method flags inside nnU-Net training if needed
+#### 8. Use method flags inside nnU-Net training if needed
 
 For loss or per-batch behavior, extend your method-specific trainer class:
 
@@ -348,7 +353,7 @@ Keep tensor operations on `self.device`, avoid storing GPU tensors in long-lived
 strategy state unless necessary, and move persistent state to CPU before saving
 when possible.
 
-### 9. Save and restart method state
+#### 9. Save and restart method state
 
 If your method has state that must survive restarts, keep JSON-serializable
 metadata in `self.fl_strategy_state`. Save large tensors or model weights as
@@ -361,7 +366,7 @@ Restart support is driven by the `fl_strategy_state` entry in the experiment
 args JSON. In your method constructor, accept `fl_strategy_state=None` and load
 saved values from it when present.
 
-### 10. Run a small smoke test
+#### 10. Run a small smoke test
 
 Before launching a full benchmark, run a tiny experiment with a few rounds and
 one local epoch:
@@ -386,6 +391,75 @@ Check that:
 - `Orchestrator.aggregate` produces `server_model_weights`;
 - final checkpoints are written in each client result folder;
 - any method-specific state can be saved and loaded again by the restart script.
+
+</details>
+
+
+<details>
+<summary>Incorporating a new dataset with segmentation label noise.</summary>
+
+### Incorporation of a new dataset
+
+New datasets should enter the benchmark through the nnU-Net dataset interface.
+Keep raw data, preprocessed data, and experiment results outside the repository
+and point the suite to them with the standard environment variables:
+
+```bash
+export nnUNet_raw="/path/to/nnUNet_raw"
+export nnUNet_preprocessed="/path/to/nnUNet_preprocessed"
+export nnUNet_results="/path/to/nnUNet_results"
+```
+
+#### 1. Convert the dataset to nnU-Net format
+
+Create a `DatasetXXX_<Name>` folder under `nnUNet_raw` with the standard
+`imagesTr`, `labelsTr`, and `dataset.json` layout. Use a unique dataset ID for
+each client dataset that participates in FL. If you add noisy labels, keep the
+clean reference and noisy labels in clearly named folders so the benchmark CLI
+can select them via `--clean_validation_dataset` and `--noisy_train_folder`.
+
+#### 2. Check label-noise metadata and splits
+
+Make sure each client dataset exposes the same label set, image channels, and
+compatible train/validation splits. FL aggregation assumes all clients train the
+same model architecture, so mismatched labels, modalities, or planning outputs
+will break aggregation.
+
+#### 3. Run federated planning and preprocessing
+
+Use `src/data/utils/nnunet_fed_preparation.py` across all client dataset IDs.
+This computes client fingerprints, averages them centrally, and writes common
+plans so all clients use compatible network weights.
+
+```bash
+python3 ./src/data/utils/nnunet_fed_preparation.py \
+    --dataset_ids "505 506 507 508" \
+    --configuration "3d_fullres" \
+    --planner "nnUNetPlannerResEncM" \
+    --plans_name "nnUNetResEncUNetMPlans" \
+    --verify_dataset_integrity
+```
+
+#### 4. Smoke-test the dataset in FL
+
+Run a short FedAvg experiment before evaluating FNLL methods:
+
+```bash
+python3 ./src/fed/main.py \
+    --noise_mitigation_method fedavg \
+    --dataset_ids "505 506 507 508" \
+    --num_clients 4 \
+    --num_rounds 2 \
+    --num_local_epochs 1 \
+    --configuration 3d_fullres \
+    --plan nnUNetResEncUNetMPlans \
+    --trainer nnUNetTrainer_FedAvg
+```
+
+Check that every client trains, aggregation finishes, validation runs, and the
+result folders are created below `nnUNet_results`.
+
+</details>
 
 ## Figure generation
 
