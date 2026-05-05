@@ -25,42 +25,365 @@ The presented suite provides a realistic and discriminative basis for FNLL evalu
 some citation
 ```
 
-## Data
+## Usage
 
-### Datasets and Noise
-...
+### Setup
 
-### `nnUNet-FL`'s Planning and Preprocessing
-The nnUNet model is a self-configuring model adjusting its architecture, training scheme and more based on the processed data.
-For the FL case that distributed data of FL clients is very heterogene, it can be the case that different FL clients configure different models in the self-configuration phase.
-For this case, the aggregation of model weights during the FL training would fail!
+Create and populate the Python environment from the repository requirements:
 
-The solve this problem, we need to do not only the model training in a federated manner, but also already the self-configuration phase.
-To configure the model accordingly, we have to run the scipt `nnunet_fed_preparation.py`, which extracts data fingerprints per Fl client, centrally averages them and subsequently plans the experiments and preprocesses the data accordingly.
-
-**Example:**
-Prepare envs:
-```
-export nnUNet_raw="/home/m391k/Documents/my_documents/Publications/fed_noisy_label_benchmark/data/MAMA-MIA/nnUNet_raw"
-export nnUNet_preprocessed="/home/m391k/cluster-data-1/data_noisy-seg-label-benchi/nnunet-preprocessed-blosc_4real"
-export nnUNet_results=""    # not necessary for planning and preprocessing
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
 ```
 
-Execute planning and preprocessing:
+The repository also provides Make targets for the local development environment:
+
+```bash
+make
+make update
+make clean
 ```
-python3 ./src/data/utils/nnunet_fed_preparation.py --dataset_ids "505 506 507 508 509" --configuration "3d_fullres" --planner "nnUNetPlannerResEncM" --plans_name "nnUNetResEncUNetMPlans" --verify_dataset_integrity
+
+Set the nnU-Net paths before preparing data or running experiments:
+
+```bash
+export nnUNet_raw="/path/to/nnUNet_raw"
+export nnUNet_preprocessed="/path/to/nnUNet_preprocessed"
+export nnUNet_results="/path/to/nnUNet_results"
 ```
 
-### Reqirements in virtual environment .venv:
+### Data
 
-1. Initialize the environment and install dependencies:
-```make```
+#### Download
 
-2. Update the environment with new packages or submodule changes:
-```make update```
+Download the raw source datasets from their original providers and keep them
+outside the repository. The benchmark expects the source data to be converted
+into nnU-Net-style `DatasetXXX_<Name>` folders before training.
 
-3. Clean the environment:
-```make clean```
+Dataset-specific preparation entry points currently live in:
+
+```text
+src/data/gleason2019/prepare.py
+src/data/gleasonxai/prepare.py
+src/data/mama-mia/prepare.py
+src/data/mmis/prepare.py
+src/data/mouse-tumor/prepare.py
+src/data/riga/prepare.py
+```
+
+#### Preparation
+
+Prepare each dataset into nnU-Net raw folders for the consensus or clean labels
+and the noisy-label variants. The target layout should follow nnU-Net
+conventions:
+
+```text
+nnUNet_raw/
+  DatasetXXX_<DatasetNameClientA>/
+    imagesTr/
+    labelsTr/
+    dataset.json
+  DatasetYYY_<DatasetNameClientB>/
+    imagesTr/
+    labelsTr/
+    dataset.json
+```
+
+For partially noisy scenarios, keep clean validation labels and noisy training
+labels in explicit folders so they can be selected later with:
+
+```bash
+--clean_validation_dataset "<clean-validation-folder-per-client>"
+--noisy_train_folder "<noisy-train-folder-per-client>"
+```
+
+#### Federated adaption of nnU-Net plan and preprocess
+
+The nnU-Net model is self-configuring and adapts architecture, patch size, and
+training settings to the processed data. In FL, independently planned clients
+can produce incompatible model architectures, which breaks weight aggregation.
+
+For this reason, planning and preprocessing must also be adapted to the
+federated setting. The script `src/data/utils/nnunet_fed_preparation.py`
+extracts fingerprints per client, averages them centrally, plans one compatible
+experiment configuration, and preprocesses all participating clients with this
+shared plan.
+
+```bash
+python3 ./src/data/utils/nnunet_fed_preparation.py \
+    --dataset_ids "505 506 507 508 509" \
+    --configuration "3d_fullres" \
+    --planner "nnUNetPlannerResEncM" \
+    --plans_name "nnUNetResEncUNetMPlans" \
+    --verify_dataset_integrity
+```
+
+#### In-depth data analysis
+
+##### Multi-rater vs. consensus mask analysis
+
+First compute the multi-rater consensus analysis, then visualize the resulting
+agreement and error metrics:
+
+```bash
+python3 ./src/data/data_analysis/analyze_multirater_consensus.py \
+    --dataset_ids "500 501 502 503 504" \
+    --multirater_dir /path/to/multirater_masks \
+    --consensus_dir /path/to/consensus_masks
+```
+
+```bash
+python3 ./src/data/data_analysis/visualize_multirater_consensus_violin.py \
+    --input_json ./results/consensus_analysis/<YOUR-DATASET>/multirater_consensus.json \
+    --output_png ./results/consensus_analysis/<YOUR-DATASET>/fk_dice_hd95_if1_clsconf.png
+```
+
+The visualization covers class-wise Fleiss' kappa, Dice, HD95, instance-level
+F1, and class-confusion statistics against the consensus mask.
+
+##### Noisy masks vs. consensus/clean mask analysis
+
+Compare noisy masks against the consensus or clean reference masks:
+
+```bash
+python3 ./src/data/data_analysis/analyze_noise_clean_noisy.py \
+    --clean_dataset_ids "500 501 502 503 504" \
+    --noisy_dataset_ids "505 506 507 508 509" \
+    --output_dir ./results/noise_analysis
+```
+
+Generate per-class boxplots:
+
+```bash
+python3 ./src/data/data_analysis/visualize_perclass_boxplots.py \
+    --input_json ./results/noise_analysis/noise_analysis_results_clean<DATASET-IDS-OF-YOUR-DATASET>.json \
+    --output_dir ./results/noise_analysis/<YOUR-DATASET>/ \
+    --requested_row_width 27 \
+    --requested_row_height 5.4 \
+    --requested_row_keep_ratio
+```
+
+Generate scatter plots for contour differences, missing/additional labels, and
+swapped labels:
+
+```bash
+python3 ./src/data/data_analysis/visualize_hd95_f1_confusion.py \
+    --json_path ./results/noise_analysis/noise_analysis_results_clean<DATASET-IDS-OF-YOUR-DATASET>.json \
+    --output ./results/noise_analysis/<YOUR-DATASET>/hd95_vs_f1_vs_confusion.png \
+    --level instance \
+    --figsize 12.4 10.8
+```
+
+### Run benchmarking
+
+Run FL experiments with `src/fed/main.py`. The core switches are the dataset
+IDs, client count, FL rounds, local epochs, trainer, and FNLL method.
+
+FedAvg baseline on a three-client RIGA setup:
+
+```bash
+python3 ./src/fed/main.py \
+    --noise_mitigation_method fedavg \
+    --dataset_ids "300 301 302" \
+    --num_clients 3 \
+    --num_rounds 100 \
+    --num_local_epochs 5 \
+    --configuration 3d_fullres \
+    --plan nnUNetResEncUNetMPlans \
+    --trainer nnUNetTrainer_FedAvg
+```
+
+IOP-FL personalization on a five-client MouseTumor setup:
+
+```bash
+python3 ./src/fed/main.py \
+    --noise_mitigation_method iopfl \
+    --dataset_ids "505 506 507 508 509" \
+    --num_clients 5 \
+    --num_rounds 100 \
+    --num_local_epochs 5 \
+    --configuration 3d_fullres \
+    --plan nnUNetResEncUNetMPlans \
+    --trainer nnUNetTrainer_IOPFL \
+    --iopfl_alpha 0.9
+```
+
+FedSelect sample/client selection on a four-client MMIA setup:
+
+```bash
+python3 ./src/fed/main.py \
+    --noise_mitigation_method fedselect \
+    --dataset_ids "600 601 602 603" \
+    --num_clients 4 \
+    --num_rounds 100 \
+    --num_local_epochs 5 \
+    --configuration 3d_fullres \
+    --plan nnUNetResEncUNetMPlans \
+    --trainer nnUNetTrainer_FedSelect \
+    --fedselect_warmup_rounds_frac 0.1 \
+    --fedselect_client_select_ratio 0.4 \
+    --fedselect_sample_select_ratio 0.6
+```
+
+For partially noisy client scenarios, add the clean validation and noisy train
+folders:
+
+```bash
+python3 ./src/fed/main.py \
+    --noise_mitigation_method fedavg \
+    --dataset_ids "600 601 602 603" \
+    --num_clients 4 \
+    --num_rounds 100 \
+    --num_local_epochs 5 \
+    --configuration 3d_fullres \
+    --plan nnUNetResEncUNetMPlans \
+    --trainer nnUNetTrainer_FedAvg \
+    --clean_validation_dataset "<clean-val-client0> <clean-val-client1> <clean-val-client2> <clean-val-client3>" \
+    --noisy_train_folder "<noisy-train-client0> <noisy-train-client1> <noisy-train-client2> <noisy-train-client3>" \
+    --noise_ratio 0.5
+```
+
+### Evaluation and compilation of FNLL decisions
+
+By default, result-processing scripts combine checkpoints from:
+
+```text
+/home/m391k/cluster-data/checkpoints/nnUNet_results
+/home/m391k/juwels/checkpoints/nnUNet_results
+```
+
+Set `nnUNet_results` or pass `--nnunet-results-root` where supported to use a
+single results root.
+
+#### Run evaluation
+
+Run nnU-Net evaluation for a single experiment ID:
+
+```bash
+python3 ./src/eval/results_processing/bootstrap_nnunet_eval.py \
+    --exp_id <EXPERIMENT_ID> \
+    --num-workers 8
+```
+
+Run evaluation for all registered experiments from the benchmark sheet:
+
+```bash
+python3 ./src/eval/results_processing/bootstrap_parent.py \
+    --folds 0 1 2 \
+    --num-workers 8
+```
+
+#### Run bootstrapping
+
+The bootstrap evaluation files are generated by `bootstrap_nnunet_eval.py` and
+`bootstrap_parent.py`. To recompute all bootstrap metrics, use:
+
+```bash
+python3 ./src/eval/results_processing/bootstrap_parent.py \
+    --folds 0 1 2 \
+    --force \
+    --num-workers 8
+```
+
+To recompute only selected metrics:
+
+```bash
+python3 ./src/eval/results_processing/bootstrap_parent.py \
+    --folds 0 1 2 \
+    --force-metrics HD95 Dice \
+    --num-workers 8
+```
+
+##### Result boxplot and table generation
+
+Generate bootstrap-based result boxplots and LaTeX tables:
+
+```bash
+python3 ./src/eval/results_processing/visualize_results.py \
+    --metric Dice
+```
+
+Optional dataset subset:
+
+```bash
+python3 ./src/eval/results_processing/visualize_results.py \
+    --metric Dice \
+    --datasets LIDC RIGA Gleason MouseTumor MMIA MMIS
+```
+
+#### Run ranking for ranking stability plot generation
+
+Build the ranking table:
+
+```bash
+python3 ./src/eval/results_processing/ranking.py \
+    --output-csv ./results/segmentation_results/bootstrap_method_rankings.csv
+```
+
+Generate ranking stability plots:
+
+```bash
+python3 ./src/eval/results_processing/visualize_ranking.py \
+    --output-dir ./results/segmentation_results/ranking_stability \
+    --metric Dice
+```
+
+#### Run statistical tests against FedAvg
+
+Run paired Wilcoxon signed-rank tests comparing each FNLL method against FedAvg,
+with Holm-Bonferroni correction across the four method comparisons within each
+reported group:
+
+```bash
+python3 ./src/eval/results_processing/statistical_tests.py \
+    --metrics Dice HD95 FgBgInstanceF1 ClassConfusion \
+    --noise-scenarios clean roa roc noisy \
+    --datasets LIDC RIGA Gleason MouseTumor MMIA MMIS \
+    --datasets-for-metric Dice=LIDC,RIGA,Gleason,MouseTumor,MMIA,MMIS \
+    --datasets-for-metric HD95=LIDC,RIGA,Gleason,MouseTumor,MMIA,MMIS \
+    --datasets-for-metric FgBgInstanceF1=LIDC,RIGA,Gleason,MouseTumor,MMIA,MMIS \
+    --datasets-for-metric ClassConfusion=LIDC,RIGA,Gleason,MouseTumor,MMIA,MMIS
+```
+
+The test uses the same final bootstrap-vector aggregation as the result tables
+and ranking stability plots. It reports the original per-metric/per-scenario
+dataset pairing, plus pooled pairings over dataset times scenario per metric.
+
+#### Compile decision guide from ranking stability
+
+Use the rank-frequency summaries produced by `visualize_ranking.py` together
+with the ranking table from `ranking.py` to compile the FNLL decision guide.
+The relevant generated artifacts are:
+
+```text
+results/segmentation_results/bootstrap_method_rankings.csv
+results/segmentation_results/ranking_stability/rank_frequency_summary_<metric>_<datasets>.csv
+```
+
+The ranking stability plot shows how consistently each method ranks across
+bootstrap resamples and noise scenarios; use these summaries to identify robust
+method choices for each dataset and client-noise setting.
+
+Additional comparison figures:
+
+```bash
+python3 ./src/eval/results_processing/partial_noisy_scenarios_global_comparison.py \
+    --output-dir ./results/segmentation_results/partial_noise_comparison \
+    --figure paired_dot
+```
+
+```bash
+python3 ./src/eval/results_processing/roc_clean_vs_noisy_clients_global_comparison.py \
+    --output-dir ./results/segmentation_results/partial_noise_comparison \
+    --figure paired_dot
+```
+
+```bash
+python3 ./src/eval/results_processing/robustness_analysis_noisy_scenarios_global.py \
+    --figure separate_dot \
+    --delta-mode abs
+```
 
 ## Contribution guide
 
@@ -460,97 +783,3 @@ Check that every client trains, aggregation finishes, validation runs, and the
 result folders are created below `nnUNet_results`.
 
 </details>
-
-## Figure generation
-
-### Data analysis results figures
-
-#### Multi-rater label analysis
-To visualize the variability among the raters leading to label noise, we visualize:
-- class-wise Fleiss' Kappa scores among the rater's masks
-- class-wise mean Dice scores of consensus masks vs each of the rater's masks (mean over raters)
-- class-wise mean HD95 scores of consensus masks vs each of the rater's masks (mean over raters)
-- class-wise instance-level mean F1 score of consensus masks vs each of the rater's masks (mean over raters)
-- mean Class-confusion matrix of consensus masks vs each of the rater's masks (mean over raters)
-
-Generate plot via:
-```
-python3 ./src/data/data_analysis/visualize_multirater_consensus_violin.py \
-    --input_json ./results/consensus_analysis/<YOUR-DATASET>/multirater_consensus.json \
-    --output_png ./results/consensus_analysis/<YOUR-DATASET>/fk_dice_hd95_if1_clsconf.png 
-```
-
-#### Consensus- vs. noisy label analysis
-To visualize the degree and type of label noise, we compare the noisy label masks against their consensus counterpart:
-- class-wise Dice scores of consensus masks vs noisy mask
-- class-wise HD95 scores of consensus masks vs noisy mask
-- class-wise instance-level F1 score of consensus masks vs noisy mask
-- Class-confusion matrix of consensus masks vs noisy mask
-
-Generate plot via:
-```
-python3 ./src/data/data_analysis/visualize_perclass_boxplots.py \
-    --input_json ./results/noise_analysis/noise_analysis_results_clean<DATASET-IDS-OF-YOUR-DATASET>.json \
-    --output_dir ./results/noise_analysis/<YOUR-DATASET>/ \
-    --requested_row_width 27 \
-    --requested_row_height 5.4 \
-    --requested_row_keep_ratio
-```
-
-To visualize scatter points manifesting different label noise types, we plot:
-- HD95 to capture contour differences
-- instance-level F1 score to capture missing/additional labels
-- class-confusion score to capture swapped labels
-
-Generate plot via:
-```
-python3 ./src/data/data_analysis/visualize_hd95_f1_confusion.py \
-    --json_path /results/noise_analysis/noise_analysis_results_clean<DATASET-IDS-OF-YOUR-DATASET>.json \
-    --output ./results/noise_analysis/<YOUR-DATASET>/hd95_vs_f1_vs_confusion.png \
-    --level instance \
-    --figsize 12.4 10.8
-```
-
-### Segmentation results figures
-
-By default, the result-processing scripts that load `nnUNet` evaluation outputs for plots combine checkpoints from both of these roots:
-
-```
-/home/m391k/cluster-data/checkpoints/nnUNet_results
-/home/m391k/juwels/checkpoints/nnUNet_results
-```
-
-This currently applies to:
-
-- `src/eval/results_processing/visualize_results.py`
-- `src/eval/results_processing/visualize_ranking.py`
-- `src/eval/results_processing/partial_noisy_scenarios_global_comparison.py`
-- `src/eval/results_processing/roc_clean_vs_noisy_clients_global_comparison.py`
-
-The scripts merge experiment paths from both locations and deduplicate them before filtering to the configured folds.
-If you set the environment variable `nnUNet_results` or pass `--nnunet-results-root` to scripts that support it, that single path is used instead of the two default roots.
-
-Overall segmentation performance boxplots:
-```
-python3 ./src/eval/results_processing/visualize_results.py --metric Dice
-```
-
-Overall ranking stability plots:
-```
-python3 ./src/eval/results_processing/visualize_ranking.py --output-dir ./results/segmentation_results/ranking_stability --metric Dice
-```
-
-Overall partial noise settings (`roa` vs `roc`) comparison:
-```
-python3 ./src/eval/results_processing/partial_noisy_scenarios_global_comparison.py --output-dir ./results/segmentation_results/partial_noise_comparison --figure paired_dot
-```
-
-Per-client -- roc-clean vs roc-noisy clients comparison:
-```
-python3 ./src/eval/results_processing/roc_clean_vs_noisy_clients_global_comparison.py --output-dir ./results/segmentation_results/partial_noise_comparison --figure paired_dot
-```
-
-Overall clean-referenced robustness analysis:
-```
-python ./src/eval/results_processing/robustness_analysis_noisy_scenarios_global.py --figure separate_dot --delta-mode abs
-```
