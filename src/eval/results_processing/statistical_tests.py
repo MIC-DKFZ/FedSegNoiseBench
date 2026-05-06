@@ -34,8 +34,21 @@ except ImportError:
 
 BASELINE = "FedAvg"
 METHODS = ["FedSelect", "IOP-FL", "FedCorr", "FedA3I"]
+LATEX_METHOD_ORDER = ["FedA3I", "IOP-FL", "FedCorr", "FedSelect"]
 DEFAULT_METRICS = ["Dice", "HD95", "FgBgInstanceF1", "ClassConfusion"]
 DEFAULT_OUTPUT = OUTPUT_DIR / "fnll_vs_fedavg_wilcoxon_holm.csv"
+LATEX_METRIC_ORDER = ["Dice", "HD95", "FgBgInstanceF1", "ClassConfusion"]
+LATEX_METRIC_LABELS = {
+    "Dice": "Dice",
+    "HD95": "HD95",
+    "FgBgInstanceF1": "F1",
+    "ClassConfusion": "ClsConf",
+}
+LATEX_SCENARIO_ORDER = ["clean", "roa", "roc", "noisy", "ALL"]
+LATEX_SCOPES = {
+    "per_metric_per_scenario": "Per-metric, per-scenario Wilcoxon signed-rank tests against FedAvg.",
+    "pooled_dataset_x_scenario_per_metric": "Pooled dataset-by-scenario Wilcoxon signed-rank tests against FedAvg.",
+}
 PAIR_COLUMNS = [
     "case_id",
     "method_score",
@@ -176,6 +189,149 @@ def wilcoxon_greater(improvements):
     return float(res.statistic), float(res.pvalue), ""
 
 
+def format_delta(value):
+    if not np.isfinite(value):
+        return ""
+    return f"{float(value):+.4f}"
+
+
+def format_p_value(value):
+    if not np.isfinite(value):
+        return ""
+    value = float(value)
+    if value < 1e-3:
+        return f"{value:.2e}"
+    return f"{value:.4f}"
+
+
+def format_uncorrected_p_value(value, reject):
+    formatted = format_p_value(value)
+    return rf"\underline{{{formatted}}}" if formatted and bool(reject) else formatted
+
+
+def format_holm_p_value(value, reject):
+    formatted = format_p_value(value)
+    return rf"\textbf{{{formatted}}}" if formatted and bool(reject) else formatted
+
+
+def row_value(row, *names):
+    for name in names:
+        if hasattr(row, name):
+            return getattr(row, name)
+    return np.nan
+
+
+def latex_output_path(output_csv, scope):
+    return output_csv.with_name(f"{output_csv.stem}_{scope}.tex")
+
+
+def latex_sort_key(row):
+    metric_rank = {metric: i for i, metric in enumerate(LATEX_METRIC_ORDER)}
+    scenario_rank = {scenario: i for i, scenario in enumerate(LATEX_SCENARIO_ORDER)}
+    method_rank = {method: i for i, method in enumerate(LATEX_METHOD_ORDER)}
+    return (
+        metric_rank.get(row.metric, len(metric_rank)),
+        scenario_rank.get(row.noise_scenario, len(scenario_rank)),
+        method_rank.get(row.method, len(method_rank)),
+    )
+
+
+def build_latex_table(result, scope):
+    scoped = result[result["scope"] == scope].copy()
+    rows = sorted(scoped.itertuples(index=False), key=latex_sort_key)
+    caption = LATEX_SCOPES[scope]
+    use_longtable = scope == "per_metric_per_scenario"
+
+    header = [
+        r"\toprule",
+        r"Metric & Scenario & Method & $n$ & $\Delta_{mean}$ & $\Delta_{median}$ & $p$ & $p_{Holm}$ \\",
+        r"\midrule",
+    ]
+
+    if use_longtable:
+        lines = [
+            r"\begin{longtable}{lllrrrrr}",
+            rf"\caption{{{caption}}}\label{{tab:fnll_wilcoxon_{scope}}}\\",
+            *header,
+            r"\endfirsthead",
+            rf"\caption[]{{{caption} (continued)}}\\",
+            *header,
+            r"\endhead",
+            r"\midrule",
+            r"\multicolumn{8}{r}{Continued on next page} \\",
+            r"\endfoot",
+            r"\bottomrule",
+            r"\endlastfoot",
+        ]
+    else:
+        lines = [
+            r"\begin{table}",
+            r"\centering",
+            rf"\caption{{{caption}}}",
+            rf"\label{{tab:fnll_wilcoxon_{scope}}}",
+            r"\begin{tabular}{lllrrrrr}",
+            *header,
+        ]
+
+    if rows:
+        metric_counts = {}
+        scenario_counts = {}
+        for row in rows:
+            metric_counts[row.metric] = metric_counts.get(row.metric, 0) + 1
+            scenario_key = (row.metric, row.noise_scenario)
+            scenario_counts[scenario_key] = scenario_counts.get(scenario_key, 0) + 1
+
+        seen_metrics = set()
+        seen_scenarios = set()
+        previous_metric = None
+        previous_scenario_key = None
+        for row in rows:
+            scenario_key = (row.metric, row.noise_scenario)
+            if previous_metric is not None and row.metric != previous_metric:
+                lines.append(r"\midrule")
+            elif previous_scenario_key is not None and scenario_key != previous_scenario_key:
+                lines.append(r"\cmidrule(lr){2-8}")
+
+            metric_label = LATEX_METRIC_LABELS.get(row.metric, row.metric)
+            metric_cell = ""
+            if row.metric not in seen_metrics:
+                metric_cell = rf"\multirow{{{metric_counts[row.metric]}}}{{*}}{{{metric_label}}}"
+                seen_metrics.add(row.metric)
+
+            scenario_cell = ""
+            if scenario_key not in seen_scenarios:
+                scenario_cell = rf"\multirow{{{scenario_counts[scenario_key]}}}{{*}}{{{row.noise_scenario}}}"
+                seen_scenarios.add(scenario_key)
+
+            p_value = format_uncorrected_p_value(row.p_value, row.reject_uncorrected_alpha)
+            p_holm = format_holm_p_value(row.p_value_holm, row.reject_holm_alpha)
+            delta_mean = row_value(row, "delta_mean", "mean_improvement")
+            lines.append(
+                f"{metric_cell} & {scenario_cell} & {row.method} & "
+                f"{int(row.n_pairs)} & {format_delta(delta_mean)} & "
+                f"{format_delta(row.median_improvement)} & "
+                f"{p_value} & {p_holm} \\\\"
+            )
+            previous_metric = row.metric
+            previous_scenario_key = scenario_key
+
+    if use_longtable:
+        lines.extend([r"\end{longtable}", ""])
+    else:
+        lines.extend([r"\bottomrule", r"\end{tabular}", r"\end{table}", ""])
+    return "\n".join(lines)
+
+
+def write_latex_tables(result, output_csv):
+    paths = []
+    for scope in LATEX_SCOPES:
+        path = latex_output_path(output_csv, scope)
+        latex = build_latex_table(result, scope)
+        path.write_text(latex)
+        paths.append(path)
+    return paths
+
+
 def result_row(scope, metric, scenario, method, paired, alpha):
     improvements = paired.improvement.to_numpy(dtype=float) if not paired.empty else np.asarray([])
     stat, p, note = wilcoxon_greater(improvements)
@@ -194,7 +350,7 @@ def result_row(scope, metric, scenario, method, paired, alpha):
         "pairing_unit": "case",
         "method_mean": paired.method_score.mean() if not paired.empty else np.nan,
         "baseline_mean": paired.baseline_score.mean() if not paired.empty else np.nan,
-        "mean_improvement": paired.improvement.mean() if not paired.empty else np.nan,
+        "delta_mean": paired.improvement.mean() if not paired.empty else np.nan,
         "median_improvement": paired.improvement.median() if not paired.empty else np.nan,
         "improvement_unit": "metric_native_directional",
         "wilcoxon_statistic": stat,
@@ -248,6 +404,10 @@ def main():
     args.output_csv.parent.mkdir(parents=True, exist_ok=True)
     result.to_csv(args.output_csv, index=False)
     print(f"\nSaved Wilcoxon/Holm results to {args.output_csv.resolve()}")
+    latex_paths = write_latex_tables(result, args.output_csv)
+    print("Saved LaTeX tables:")
+    for path in latex_paths:
+        print(f"  - {path.resolve()}")
     if not result.empty:
         print(result.to_string(index=False))
 
