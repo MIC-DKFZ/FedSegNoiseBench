@@ -105,8 +105,25 @@ src/data/mama-mia/prepare.py
 </details>
 
 <details>
-<summary>Prepare MouseTumor dataset
-...
+<summary>Prepare MouseTumor dataset</summary>
+
+Prepare data to clean FL clients (STAPLE consensus):
+```bash
+python src/data/mouse-tumor/prepare.py \
+  --raw_data_path /path/to/mouse-tumor \
+  --single_seg_mode staple \
+  --dataset_ids "301 302 303"
+```
+
+Prepare data to noisy FL clients (random annotator per sample):
+```bash
+python src/data/mouse-tumor/prepare.py \
+  --raw_data_path /path/to/mouse-tumor \
+  --single_seg_mode random \
+  --dataset_ids "304 305 306"
+```
+
+`$nnUNet_raw` is read from the environment (no CLI arg needed).
 </details>
 
 <details>
@@ -114,6 +131,7 @@ src/data/mama-mia/prepare.py
 Prepare data to clean FL clients:
 ```
 python src/data/mmis/prepare.py \
+  --raw_data_path /path/to/mmis \
   --single_seg_mode majority \
   --dataset_ids "700 701 702 703"
 ```
@@ -121,6 +139,7 @@ python src/data/mmis/prepare.py \
 Prepare data to noisy FL clients:
 ```
 python src/data/mmis/prepare.py \
+  --raw_data_path /path/to/mmis \
   --single_seg_mode rater \
   --dataset_ids "704 705 706 707"
 ```
@@ -134,7 +153,7 @@ Prepare data to clean FL clients (expert segmentations):
 python src/data/mama-mia/prepare.py \
   --raw_data_path /path/to/mama-mia \
   --single_seg_mode expert \
-  --dataset_ids "501 502 503 504"
+  --dataset_ids "600 601 602 603"
 ```
 
 Prepare data to noisy FL clients (automatic segmentations):
@@ -142,7 +161,7 @@ Prepare data to noisy FL clients (automatic segmentations):
 python src/data/mama-mia/prepare.py \
   --raw_data_path /path/to/mama-mia \
   --single_seg_mode automatic \
-  --dataset_ids "505 506 507 508"
+  --dataset_ids "604 605 606 607"
 ```
 
 `$nnUNet_raw` is read from the environment (no CLI arg needed).
