@@ -176,7 +176,7 @@ Prepare data to clean FL clients (STAPLE consensus):
 python src/data/mouse-tumor/prepare.py \
   --raw_data_path /path/to/mouse-tumor \
   --single_seg_mode staple \
-  --dataset_ids "301 302 303"
+  --dataset_ids "500 501 502 503 504"
 ```
 
 Prepare data to noisy FL clients (random annotator per sample):
@@ -184,7 +184,7 @@ Prepare data to noisy FL clients (random annotator per sample):
 python src/data/mouse-tumor/prepare.py \
   --raw_data_path /path/to/mouse-tumor \
   --single_seg_mode random \
-  --dataset_ids "304 305 306"
+  --dataset_ids "505 506 507 508 509"
 ```
 
 `$nnUNet_raw` is read from the environment (no CLI arg needed).

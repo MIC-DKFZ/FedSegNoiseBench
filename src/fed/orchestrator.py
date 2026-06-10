@@ -6,7 +6,6 @@ import torch
 
 from methods.fedavg.fedavg import FedAvg
 from methods.feda3i.feda3i import FedA3I
-from methods.feddm.feddm import FedDM
 from methods.iopfl.iopfl import IOPFL
 from methods.fedcorr.fedcorr import FedCorr
 from methods.fedselect.fedselect import FedSelect
@@ -38,14 +37,6 @@ class Orchestrator:
                 int(fl_args["feda3i_warmup_rounds_frac"] * self.num_rounds),
                 fl_args["feda3i_interw"],
                 fl_strategy_state=fl_strategy_state,
-            )
-        if strategy_name == "feddm":
-            return FedDM(
-                self.clients,
-                fl_args["feddm_gamma_hgd_smoothing"],
-                fl_args["feddm_ratio_cac_pixelselection"],
-                fl_args["feddm_cac_label_correction"],
-                fl_args["feddm_loss"],
             )
         if strategy_name == "iopfl":
             return IOPFL(
@@ -131,8 +122,6 @@ class Orchestrator:
             self._run_fedavg_server_step()
         elif strategy_name == "feda3i":
             self._run_feda3i_server_step(fl_round)
-        elif strategy_name == "feddm":
-            self._run_feddm_server_step()
         elif strategy_name == "iopfl":
             self._run_iopfl_server_step()
         elif strategy_name == "fedcorr":
@@ -162,12 +151,6 @@ class Orchestrator:
         logging.info("Aggregating model weights with FedA3I strategy!")
         self.aggregate(strategy="feda3i")
 
-    def _run_feddm_server_step(self):
-        logging.info(
-            "Central steps of FedDM strategy: "
-            "Collaborative Annotation Calibration and Hierarchical Gradient De-Conflicting!"
-        )
-        self.aggregate(strategy="feddm")
 
     def _run_iopfl_server_step(self):
         logging.info("Aggregating model weights with FedAvg strategy for IOP-FL!")
@@ -241,10 +224,6 @@ class Orchestrator:
         elif strategy == "feda3i":
             self.server_model_weights = self.fl_strategy.feda3i_aggregate(
                 client_checkpoints
-            )
-        elif strategy == "feddm":
-            self.server_model_weights = self.fl_strategy.feddm_central_steps(
-                client_checkpoints, self.server_model_weights
             )
         elif strategy == "fedcorr":
             if len(self.fl_strategy.clean_clients) > 0:
