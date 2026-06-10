@@ -144,6 +144,6 @@ def create_missing_seg_masks(directory, cropping=False):
     print(f"Created {monitor_created_files} files and found {monitor_already_existing_files} already existing files.")
     print(f"Created {monitor_nonodule_created_files} files for non-existing nodules.")
 
-# Set the directory containing the NIfTI files
-nifti_directory = "/home/m391k/E132-Projekte/Projects/2024_Bujotzek_Noisy-Seg-Label-Benchi/data/LIDC-IDRI_raw/LIDC_seg-per-nodule-and-rater_nifti-cropped"  # Replace with your directory path
-create_missing_seg_masks(nifti_directory, cropping=True)
+if __name__ == "__main__":
+    nifti_directory = "/home/m391k/E132-Projekte/Projects/2024_Bujotzek_Noisy-Seg-Label-Benchi/data/LIDC-IDRI_raw/LIDC_seg-per-nodule-and-rater_nifti-cropped"
+    create_missing_seg_masks(nifti_directory, cropping=True)

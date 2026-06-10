@@ -293,11 +293,10 @@ def process_lidc_dataset(input_dir, output_mask_dir, log_csv, mode, multi_class:
 
 #     process_lidc_dataset(args.input_directory, args.output_directory, args.log_file, args.mode, args.multi_class, args.cropping)
 
-# Define paths
-input_directory = "/home/m391k/E132-Projekte/Projects/2024_Bujotzek_Noisy-Seg-Label-Benchi/data/LIDC-IDRI_raw/LIDC_seg-per-nodule-and-rater_nifti-cropped"
-output_directory = "/home/m391k/E132-Projekte/Projects/2024_Bujotzek_Noisy-Seg-Label-Benchi/data/LIDC-IDRI_raw/LIDC-single_seg_nifti/cropped_annotator_majority"
-log_file = os.path.join(output_directory, "single_seg_per_ct.csv")
-# Run the function
-process_lidc_dataset(
-    input_directory, output_directory, log_file, mode="annotator_majority", multi_class=False, cropping=True
-)  # mode="random", "union", "lesion_majority", "annotator_majority"
+if __name__ == "__main__":
+    input_directory = "/home/m391k/E132-Projekte/Projects/2024_Bujotzek_Noisy-Seg-Label-Benchi/data/LIDC-IDRI_raw/LIDC_seg-per-nodule-and-rater_nifti-cropped"
+    output_directory = "/home/m391k/E132-Projekte/Projects/2024_Bujotzek_Noisy-Seg-Label-Benchi/data/LIDC-IDRI_raw/LIDC-single_seg_nifti/cropped_annotator_majority"
+    log_file = os.path.join(output_directory, "single_seg_per_ct.csv")
+    process_lidc_dataset(
+        input_directory, output_directory, log_file, mode="annotator_majority", multi_class=False, cropping=True
+    )

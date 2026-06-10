@@ -33,7 +33,7 @@ def main(
     clientid_dsname_dict = {}
     for client_id, client_ds_id in enumerate(client_ds_ids):
         clientid_dsname_dict[client_id] = (
-            data_folder.replace(src_ds_id, f"Dataset{client_ds_id}")
+            datafolder.replace(src_ds_id, f"Dataset{client_ds_id}")
             + f"_fedclient{client_id}"
         )
         any(

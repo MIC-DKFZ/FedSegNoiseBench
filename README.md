@@ -93,8 +93,31 @@ src/data/mama-mia/prepare.py
 The script creates one nnUNet dataset per FL client, split by data source.
 
 <details>
-<summary>Prepare LIDC dataset
-...
+<summary>Prepare LIDC dataset</summary>
+
+Requires pylidc configured with the local LIDC-IDRI DICOM files (`~/.pylidcrc`) and the TCIA download manifest CSV.
+
+Prepare data to clean FL clients (pixelwise annotator majority consensus):
+```bash
+python src/data/lidc-idri/prepare.py \
+  --raw_data_path /path/to/lidc-working-dir \
+  --single_seg_mode annotator_majority \
+  --dataset_ids "041 042 043 044" \
+  --lidc_manifest /path/to/tcia_manifest/metadata.csv
+```
+
+Prepare data to noisy FL clients (randomly selected rater per nodule):
+```bash
+python src/data/lidc-idri/prepare.py \
+  --raw_data_path /path/to/lidc-working-dir \
+  --single_seg_mode random \
+  --dataset_ids "045 046 047 048" \
+  --lidc_manifest /path/to/tcia_manifest/metadata.csv
+```
+
+`$nnUNet_raw` is read from the environment (no CLI arg needed).
+Intermediate files are written to `<raw_data_path>/nifti/` and `<raw_data_path>/single_seg_<mode>/`.
+4 FL clients, one per CT scanner manufacturer (split via FLamby LIDC metadata bundled at `src/data/lidc-idri/flamby_lidc_federated_split_metadata.csv`).
 </details>
 
 <details>
