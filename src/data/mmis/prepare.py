@@ -330,12 +330,6 @@ if __name__ == "__main__":
         help="Dataset IDs for nnUNet (space-separated, e.g., '401 402 403').",
     )
     parser.add_argument(
-        "--nnUNet_raw_data_path",
-        type=str,
-        default="",
-        help="Path to nnUNet raw data directory.",
-    )
-    parser.add_argument(
         "--log_level",
         type=str,
         default="INFO",
@@ -344,9 +338,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--action",
         type=str,
-        choices=["h5_to_nifti", "generate_single_rater_masks", "to_clients_nnunet_ds"],
-        default="h5_to_nifti",
-        help="Action to perform: h5_to_nifti, generate_single_rater_masks, or to_clients_nnunet_ds.",
+        choices=["all", "h5_to_nifti", "generate_single_rater_masks", "to_clients_nnunet_ds"],
+        default="all",
+        help="Action to perform (default: all, runs the full pipeline).",
     )
     args = parser.parse_args()
 
@@ -356,17 +350,29 @@ if __name__ == "__main__":
         format="%(asctime)s - %(levelname)s - %(message)s",
     )
 
+    # auto-derive nifti_output_path next to raw_data_path if not provided
+    if not args.nifti_output_path:
+        args.nifti_output_path = os.path.join(args.raw_data_path, "nifti")
+
+    nnunet_raw = os.getenv("nnUNet_raw")
+    assert nnunet_raw, "Environment variable $nnUNet_raw is not set."
+
     # initialize dataset processor
     processor = MMIS_dataset_processor(
         raw_data_path=args.raw_data_path,
         nifti_output_path=args.nifti_output_path,
         single_seg_mode=args.single_seg_mode,
         dataset_ids=args.dataset_ids,
-        nnUNet_raw_data_path=args.nnUNet_raw_data_path,
+        nnUNet_raw_data_path=nnunet_raw,
     )
 
     # execute action
-    if args.action == "h5_to_nifti":
+    if args.action == "all":
+        logging.info("Running full pipeline: h5_to_nifti -> generate_single_rater_masks -> to_clients_nnunet_ds")
+        processor.convert_all_h5_to_nifti()
+        processor.generate_all_singlerater_masks()
+        processor.to_clients_nnUNet_raw_dataset()
+    elif args.action == "h5_to_nifti":
         logging.info("Converting .h5 files to NIfTI format...")
         processor.convert_all_h5_to_nifti()
     elif args.action == "generate_single_rater_masks":
