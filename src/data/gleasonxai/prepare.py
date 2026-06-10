@@ -1,5 +1,6 @@
 import argparse
 import json
+import os
 from pathlib import Path
 from glob import glob
 import pandas as pd
@@ -89,10 +90,12 @@ class GleasonXAIDataPreparer:
                 parents=True, exist_ok=True
             )
 
-    def init_convert_images_task(self, output_dir, convert_images_mode="jpg_to_png"):
+    def init_convert_images_task(self, output_dir, convert_images_mode="jpg_to_png", labels_dir=None, label_mode=None):
         self.convert_img_mode = convert_images_mode
         self.convert_output_dir = Path(output_dir)
         self.convert_output_dir.mkdir(parents=True, exist_ok=True)
+        self.convert_labels_dir = Path(labels_dir) if labels_dir else None
+        self.convert_label_mode = label_mode
 
     def init_to_nnunet_raw_dataset_task(
         self,
@@ -368,7 +371,7 @@ class GleasonXAIDataPreparer:
 
                 # load corresponding mask and check size match
                 mask = Image.open(
-                    f"{self.raw_data_dir}/generated_labels/{datasource}/random_rater/{tma_identifier}_random_rater_mask.png"
+                    self.convert_labels_dir / datasource / self.convert_label_mode / f"{tma_identifier}_{self.convert_label_mode}_mask.png"
                 )
                 mask_size = mask.size  # (W, H)
                 if img_size != mask_size:
@@ -784,88 +787,70 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Prepare Gleason XAI dataset")
     parser.add_argument(
-        "--task",
-        type=str,
-        required=True,
-        help="Task to perform: 'generate_labels', 'convert_images', 'to_nnunet_raw_dataset'",
-    )
-
-    parser.add_argument(
         "--raw_data_dir", type=str, required=True, help="Path to the raw data directory"
     )
-
-    # args for 'generate_labels' task
     parser.add_argument(
-        "--generate_labels_mode",
+        "--single_seg_mode",
         type=str,
-        required=False,
-        help="Mode for label generation: 'consensus_staple', 'random_rater', 'all_raters' (or alias 'all')",
+        required=True,
+        choices=["consensus_staple", "random_rater"],
+        help="Label mode: 'consensus_staple' for clean clients, 'random_rater' for noisy clients.",
     )
     parser.add_argument(
-        "--generate_labels_output_dir",
+        "--dataset_ids",
         type=str,
-        required=False,
-        help="Output directory for generated labels",
-    )
-
-    # args for 'convert_images' task
-    parser.add_argument(
-        "--convert_images_mode",
-        type=str,
-        required=False,
-        help="Mode for image conversion: 'jpg_to_png', ...",
-    )
-    parser.add_argument(
-        "--convert_images_output_dir",
-        type=str,
-        required=False,
-        help="Output directory for converted images.",
-    )
-
-    # args for 'to_nnunet_raw_dataset' task
-    parser.add_argument(
-        "--nnunet_dataset_ids",
-        type=str,
-        required=False,
+        required=True,
         help="Three space-separated dataset IDs for the 3 FL clients (e.g., '430 431 432')",
     )
     parser.add_argument(
-        "--nnunet_label_mode",
+        "--log_level",
         type=str,
-        required=False,
-        help="Label mode to use (e.g., 'consensus_staple', 'random_rater')",
+        default="INFO",
+        help="Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)",
     )
-    parser.add_argument(
-        "--nnunet_labels_input_dir",
-        type=str,
-        required=False,
-        help="Input directory containing generated labels (output from generate_labels task)",
-    )
-    parser.add_argument(
-        "--nnunet_images_input_dir",
-        type=str,
-        required=False,
-        help="Input directory containing converted images (output from convert_images task)",
-    )
-    parser.add_argument(
-        "--nnunet_output_dir",
-        type=str,
-        required=False,
-        help="Output directory for nnUNet raw datasets",
-    )
-    parser.add_argument(
-        "--nnunet_split_mode",
-        type=str,
-        required=False,
-        help="Mode for splitting datasets: 'separate_sources', 'single_source'",
-    )
-    parser.add_argument(
-        "--nnunet_single_source",
-        type=str,
-        required=False,
-        help="If split_mode is 'single_source', specify which source to use: 'tissue_array', 'harvard_dataverse', 'gleason2019'",
-    )
-
     args = parser.parse_args()
 
-    main(args)
+    import logging
+    logging.basicConfig(
+        level=getattr(logging, args.log_level.upper(), logging.INFO),
+        format="%(asctime)s - %(levelname)s - %(message)s",
+    )
+
+    nnunet_raw = os.getenv("nnUNet_raw")
+    assert nnunet_raw, "Environment variable $nnUNet_raw is not set."
+
+    # auto-derive intermediate paths from raw_data_dir
+    generated_labels_dir = Path(args.raw_data_dir) / "generated_labels"
+    converted_images_dir = Path(args.raw_data_dir) / "converted_images"
+
+    preparer = GleasonXAIDataPreparer(raw_data_dir=args.raw_data_dir)
+
+    # Step 1: Generate labels
+    logging.info(f"Generating {args.single_seg_mode} labels...")
+    preparer.init_generate_labels_task(
+        label_mode=args.single_seg_mode,
+        output_dir=generated_labels_dir,
+    )
+    preparer.generate_labels()
+
+    # Step 2: Convert images to PNG (uses generated labels for size reference)
+    logging.info("Converting images to PNG...")
+    preparer.init_convert_images_task(
+        output_dir=converted_images_dir,
+        labels_dir=generated_labels_dir,
+        label_mode=args.single_seg_mode,
+    )
+    preparer.convert_images()
+
+    # Step 3: To nnUNet raw dataset format
+    logging.info("Creating nnUNet raw datasets...")
+    preparer.init_to_nnunet_raw_dataset_task(
+        dataset_ids=args.dataset_ids,
+        label_mode=args.single_seg_mode,
+        labels_input_dir=generated_labels_dir,
+        images_input_dir=converted_images_dir,
+        output_dir=nnunet_raw,
+        split_mode="single_source",
+        single_source="harvard_dataverse",
+    )
+    preparer.to_nnunet_raw_dataset_single_source()

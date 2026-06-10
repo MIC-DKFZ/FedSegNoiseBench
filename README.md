@@ -115,11 +115,34 @@ python src/data/riga/prepare.py \
   --single_seg_mode random \
   --dataset_ids "303 304 305"
 ```
+
+`$nnUNet_raw` is read from the environment (no CLI arg needed).
+Intermediate files are written to `<raw_data_path>/img_segmask_tif/` and `<raw_data_path>/single_seg_<mode>/`.
+3 FL clients, one per sub-dataset (BinRushed, Magrabia, MESSIDOR).
 </details>
 
 <details>
-<summary>Prepare GleasonHD dataset
-...
+<summary>Prepare GleasonHD dataset</summary>
+
+Prepare data to clean FL clients (STAPLE consensus across raters):
+```bash
+python src/data/gleasonxai/prepare.py \
+  --raw_data_dir /path/to/gleasonxai \
+  --single_seg_mode consensus_staple \
+  --dataset_ids "436 437 438"
+```
+
+Prepare data to noisy FL clients (random rater per sample):
+```bash
+python src/data/gleasonxai/prepare.py \
+  --raw_data_dir /path/to/gleasonxai \
+  --single_seg_mode random_rater \
+  --dataset_ids "439 440 441"
+```
+
+`$nnUNet_raw` is read from the environment (no CLI arg needed).
+Intermediate files are written to `<raw_data_dir>/generated_labels/` and `<raw_data_dir>/converted_images/`.
+Only the Harvard Dataverse subset is used (476 samples), split uniformly across 3 FL clients (159/158/159).
 </details>
 
 <details>
@@ -140,12 +163,15 @@ python src/data/mouse-tumor/prepare.py \
   --single_seg_mode random \
   --dataset_ids "304 305 306"
 ```
+
+`$nnUNet_raw` is read from the environment (no CLI arg needed).
+3 FL clients, samples distributed across clients by annotator assignment.
 </details>
 
 <details>
 <summary>Prepare MMIS dataset</summary>
 Prepare data to clean FL clients:
-```
+```bash
 python src/data/mmis/prepare.py \
   --raw_data_path /path/to/mmis \
   --single_seg_mode majority \
@@ -153,12 +179,16 @@ python src/data/mmis/prepare.py \
 ```
 
 Prepare data to noisy FL clients:
-```
+```bash
 python src/data/mmis/prepare.py \
   --raw_data_path /path/to/mmis \
   --single_seg_mode rater \
   --dataset_ids "704 705 706 707"
 ```
+
+`$nnUNet_raw` is read from the environment (no CLI arg needed).
+Intermediate NIfTI files are written to `<raw_data_path>/nifti/`.
+4 FL clients, one per annotator (label_a1–label_a4).
 </details>
 
 <details>
@@ -179,6 +209,9 @@ python src/data/mama-mia/prepare.py \
   --single_seg_mode automatic \
   --dataset_ids "604 605 606 607"
 ```
+
+`$nnUNet_raw` is read from the environment (no CLI arg needed).
+4 FL clients, one per data source (DUKE, ISPY1, ISPY2, NACT).
 </details>
 
 These preparation files convert the datasets into the nnU-Net raw folder structure, and the have to follow the nnU-Net dataset naming conventions.
