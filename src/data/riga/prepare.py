@@ -442,23 +442,11 @@ if __name__ == "__main__":
         help="Path to raw data and masks RIGA dataset.",
     )
     parser.add_argument(
-        "--img_segmask_tif_data_path",
-        type=str,
-        default="",
-        help="Path to dense segmentation masks of RIGA dataset.",
-    )
-    parser.add_argument(
         "--single_seg_mode",
         type=str,
         default="",
         help="Mode to generate single segmentation mask per retina image."
         "Options: 'union', 'annotator_majority', 'random'.",
-    )
-    parser.add_argument(
-        "--single_seg_data_path",
-        type=str,
-        default="",
-        help="Path to single, dense segmentation mask per retina image.",
     )
     parser.add_argument(
         "--log_level",
@@ -472,13 +460,6 @@ if __name__ == "__main__":
         default="",
         help="Raw nnUNet Dataset ID to generate from raw data.",
     )
-    parser.add_argument(
-        "--nnUNet_raw_data_path",
-        type=str,
-        default="",
-        help="Path to nnUNet raw dataset.",
-    )
-
     args = parser.parse_args()
 
     # setup logging
@@ -487,20 +468,30 @@ if __name__ == "__main__":
         format="%(asctime)s - %(levelname)s - %(message)s",
     )
 
-    riga_ds_processor = RIGA_dataset_processor(
+    nnunet_raw = os.getenv("nnUNet_raw")
+    assert nnunet_raw, "Environment variable $nnUNet_raw is not set."
+
+    # auto-derive intermediate paths from raw_data_path and single_seg_mode
+    img_segmask_tif_data_path = os.path.join(args.raw_data_path, "img_segmask_tif")
+    single_seg_data_path = os.path.join(
         args.raw_data_path,
-        args.img_segmask_tif_data_path,
-        args.single_seg_mode,
-        args.single_seg_data_path,
-        args.dataset_ids,
-        args.nnUNet_raw_data_path,
+        f"single_seg_{args.single_seg_mode.replace('_', '')}",
     )
 
-    # Step 1: Convert masks to dense segmentation masks
-    # riga_ds_processor.mask_contours_to_seg_masks()
+    riga_ds_processor = RIGA_dataset_processor(
+        args.raw_data_path,
+        img_segmask_tif_data_path,
+        args.single_seg_mode,
+        single_seg_data_path,
+        args.dataset_ids,
+        nnunet_raw,
+    )
 
-    # Step 2: Generate consensus and random-rater masks
-    # riga_ds_processor.generate_consensus_random_rater_masks()
+    # Step 1: Convert contour masks to dense segmentation masks
+    riga_ds_processor.mask_contours_to_seg_masks()
+
+    # Step 2: Generate consensus / random-rater masks
+    riga_ds_processor.generate_consensus_random_rater_masks()
 
     # Step 3: To nnUNet_raw dataset format
     riga_ds_processor.to_nnUNet_raw_dataset(consecutive_label_order=False)

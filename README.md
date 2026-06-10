@@ -89,14 +89,32 @@ src/data/mmis/prepare.py
 src/data/mama-mia/prepare.py
 ```
 
+`$nnUNet_raw` is read from the environment (no CLI arg needed).
+The script creates one nnUNet dataset per FL client, split by data source.
+
 <details>
 <summary>Prepare LIDC dataset
 ...
 </details>
 
 <details>
-<summary>Prepare RIGA dataset
-...
+<summary>Prepare RIGA dataset</summary>
+
+Prepare data to clean FL clients (annotator majority consensus):
+```bash
+python src/data/riga/prepare.py \
+  --raw_data_path /path/to/riga \
+  --single_seg_mode annotator_majority \
+  --dataset_ids "300 301 302"
+```
+
+Prepare data to noisy FL clients (random annotator per sample):
+```bash
+python src/data/riga/prepare.py \
+  --raw_data_path /path/to/riga \
+  --single_seg_mode random \
+  --dataset_ids "303 304 305"
+```
 </details>
 
 <details>
@@ -122,8 +140,6 @@ python src/data/mouse-tumor/prepare.py \
   --single_seg_mode random \
   --dataset_ids "304 305 306"
 ```
-
-`$nnUNet_raw` is read from the environment (no CLI arg needed).
 </details>
 
 <details>
@@ -163,9 +179,6 @@ python src/data/mama-mia/prepare.py \
   --single_seg_mode automatic \
   --dataset_ids "604 605 606 607"
 ```
-
-`$nnUNet_raw` is read from the environment (no CLI arg needed).
-The script creates one nnUNet dataset per FL client, split by data source (DUKE, ISPY1, ISPY2, NACT).
 </details>
 
 These preparation files convert the datasets into the nnU-Net raw folder structure, and the have to follow the nnU-Net dataset naming conventions.
