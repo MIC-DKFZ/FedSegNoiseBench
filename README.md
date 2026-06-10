@@ -582,6 +582,33 @@ python3 ./src/eval/results_processing/robustness_analysis_noisy_scenarios_global
 
 </details>
 
+## Reproducibility
+
+<details>
+<summary>Experiment reproducibility information</summary>
+
+The `splits_final.json` files that define the train/validation splits used in all benchmark experiments are included in the repository under `data/splits_final/`. nnU-Net writes these files during preprocessing and uses them to assign cases to training and validation folds. Including them here ensures that any re-run of the benchmark uses the exact same splits.
+
+To use them, copy the relevant files into the corresponding dataset folders under `$nnUNet_preprocessed` before training:
+
+```bash
+cp data/splits_final/splits_final_Dataset<ID>_<Name>.json \
+   $nnUNet_preprocessed/Dataset<ID>_<Name>/splits_final.json
+```
+
+The following splits are provided, covering all six datasets in both clean and noisy client-noise configurations:
+
+| Dataset | Clean IDs | Noisy IDs | # Clients | Label mode |
+|---|---|---|---|---|
+| LIDC-IDRI | 041–044 | 045–048 | 4 | annotator majority / random rater |
+| RIGA | 300–302 | 303–305 | 3 | annotator majority / random rater |
+| GleasonXAI | 436–438 | 439–441 | 3 | STAPLE consensus / random rater |
+| MouseTumor | 500–504 | 505–509 | 5 | STAPLE consensus / random annotator |
+| MAMA-MIA | 600–603 | 604–607 | 4 | expert segmentation / automatic segmentation |
+| MMIS | 700–703 | 704–707 | 4 | annotator majority / single rater |
+
+</details>
+
 ## Contribution guide
 
 <details>
