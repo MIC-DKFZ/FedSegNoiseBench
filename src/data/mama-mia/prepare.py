@@ -157,13 +157,6 @@ if __name__ == "__main__":
         default="",
         help="Raw nnUNet Dataset ID to generate from raw data.",
     )
-    parser.add_argument(
-        "--nnUNet_raw_data_path",
-        type=str,
-        default="",
-        help="Path to nnUNet raw dataset.",
-    )
-
     args = parser.parse_args()
 
     # setup logging
@@ -172,11 +165,14 @@ if __name__ == "__main__":
         format="%(asctime)s - %(levelname)s - %(message)s",
     )
 
+    nnunet_raw = os.getenv("nnUNet_raw")
+    assert nnunet_raw, "Environment variable $nnUNet_raw is not set."
+
     mamamia_ds_processor = MamaMia_dataset_processor(
         args.raw_data_path,
         args.single_seg_mode,
         args.dataset_ids,
-        args.nnUNet_raw_data_path,
+        nnunet_raw,
     )
 
     mamamia_ds_processor.to_nnUNet_raw_dataset()
