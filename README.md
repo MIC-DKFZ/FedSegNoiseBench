@@ -1,4 +1,4 @@
-# Benchmark of data-centric AI methods mitigating segmentation label noise in federated learning
+# A Benchmark Suite for Method Selection in Federated Noisy Label Learning
 
 ## Abstract
 
@@ -22,7 +22,7 @@ The presented suite provides a realistic and discriminative basis for FNLL evalu
 
 ### Citation
 ```
-Will be updated upon manuscript acceptance.
+Will be updated upon acceptance of manuscript "Federated Medical Image Segmentation under Real-World Label Noise: A Benchmark Suite for Noisy Label Learning Method Selection".
 ```
 
 ## Usage
