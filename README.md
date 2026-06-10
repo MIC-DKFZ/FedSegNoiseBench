@@ -27,6 +27,9 @@ Will be updated upon manuscript acceptance.
 
 ## Usage
 
+<details>
+<summary>Setup</summary>
+
 ### Setup
 
 Create and populate the Python environment from the repository requirements:
@@ -52,6 +55,11 @@ export nnUNet_raw="/path/to/nnUNet_raw"
 export nnUNet_preprocessed="/path/to/nnUNet_preprocessed"
 export nnUNet_results="/path/to/nnUNet_results"
 ```
+
+</details>
+
+<details>
+<summary>Data</summary>
 
 ### Data
 
@@ -186,6 +194,11 @@ python3 ./src/data/data_analysis/visualize_perclass_boxplots.py \
     --output_dir ./results/noise_analysis/<YOUR-DATASET>/ \
 ```
 
+</details>
+
+<details>
+<summary>Run benchmarking</summary>
+
 ### Run benchmarking
 
 Run FL experiments with `src/fed/main.py`. The core switches are the dataset
@@ -268,6 +281,11 @@ python3 ./src/fed/main.py \
     <FNLL method-specific flags> \
     --clean_validation_dataset <Dataset001_XXX Dataset002_XXX Dataset003_XXX> 
 ```
+
+</details>
+
+<details>
+<summary>Evaluation and compilation of FNLL decisions</summary>
 
 ### Evaluation and compilation of FNLL decisions
 
@@ -413,6 +431,8 @@ python3 ./src/eval/results_processing/robustness_analysis_noisy_scenarios_global
     --figure separate_dot \
     --delta-mode abs
 ```
+
+</details>
 
 ## Contribution guide
 
@@ -726,8 +746,8 @@ one local epoch:
 ```bash
 python3 ./src/fed/main.py \
     --noise_mitigation_method myfnll \
-    --dataset_ids "505 506 507 508" \
-    --num_clients 4 \
+    --dataset_ids "001 002 003" \
+    --num_clients 3 \
     --num_rounds 2 \
     --num_local_epochs 1 \
     --configuration 3d_fullres \
@@ -785,7 +805,7 @@ plans so all clients use compatible network weights.
 
 ```bash
 python3 ./src/data/utils/nnunet_fed_preparation.py \
-    --dataset_ids "505 506 507 508" \
+    --dataset_ids "001 002 003" \
     --configuration "3d_fullres" \
     --planner "nnUNetPlannerResEncM" \
     --plans_name "nnUNetResEncUNetMPlans" \
@@ -799,8 +819,8 @@ Run a short FedAvg experiment before evaluating FNLL methods:
 ```bash
 python3 ./src/fed/main.py \
     --noise_mitigation_method fedavg \
-    --dataset_ids "505 506 507 508" \
-    --num_clients 4 \
+    --dataset_ids "001 002 003" \
+    --num_clients 3 \
     --num_rounds 2 \
     --num_local_epochs 1 \
     --configuration 3d_fullres \
