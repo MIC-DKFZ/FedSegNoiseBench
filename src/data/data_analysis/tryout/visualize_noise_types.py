@@ -96,19 +96,25 @@ for sample_id, entry in data.items():
     I = overall.get("delta_total_num_cc", np.nan)
     I = abs(float(I)) if is_finite_number(I) else np.nan
 
-    # Swap disagreement S:
-    # For multiclass foreground (>=2 fg classes): mean (1 - diag overlap).
-    # For binary/1-foreground-class datasets: set 0.0 (no swap concept).
+    # Swap disagreement S: foreground-to-other-foreground transitions only.
     if len(fg_classes) >= 2:
         swap_scores = []
-        for c in fg_classes:
-            row_map = overlap.get(str(c), {})
-            diag = row_map.get(str(c), np.nan)
-            if is_finite_number(diag):
-                swap_scores.append(1.0 - float(diag))
+        for source_class in fg_classes:
+            row_map = overlap.get(str(source_class), {})
+            if not any(
+                is_finite_number(value) and float(value) > 0.0
+                for value in row_map.values()
+            ):
+                continue
+            swap_scores.append(sum(
+                float(row_map.get(str(target_class), 0.0))
+                for target_class in fg_classes
+                if target_class != source_class
+                and is_finite_number(row_map.get(str(target_class), 0.0))
+            ))
         S = float(np.mean(swap_scores)) if len(swap_scores) else np.nan
     else:
-        S = 0.0
+        S = np.nan
 
     rows.append({
         "sample_id": sample_id,
@@ -155,7 +161,7 @@ for _, row in df.iterrows():
 plt.xlabel("Boundary disagreement (percentile of mean HD95 within dataset)")
 plt.ylabel("Missed/additional disagreement (percentile of |ΔV| and |ΔCC| within dataset)")
 cbar = plt.colorbar(sc)
-cbar.set_label("Swap / class-confusion (percentile of 1 - diagonal overlap)")
+cbar.set_label("Swap / class-confusion (percentile of foreground-class transitions)")
 plt.title("Sample-level label-noise map: contour vs missed/additional vs swapped labels")
 plt.xlim(0, 1)
 plt.ylim(0, 1)

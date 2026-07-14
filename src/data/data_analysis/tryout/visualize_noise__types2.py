@@ -41,36 +41,25 @@ def robust_z(x: pd.Series, eps=1e-12) -> pd.Series:
 
 def compute_confusion_evidence(overlap: dict, fg_classes: list) -> float:
     """
-    Confusion evidence S:
-    - Multi-foreground: mean(1 - diag overlap) over fg classes.
-    - Binary (single fg class): leakage = mean(P(0->1), P(1->0)) from overlap matrix rows.
-      This makes S meaningful for binary datasets where your old S_swap became NaN.
-    overlap format example:
-      overlap["0"]["1"] = ...
-      overlap["1"]["0"] = ...
+    Foreground-to-other-foreground confusion, excluding background transitions.
     """
-    # If we have >=2 foreground classes, use "1 - diagonal overlap" across them
-    if len(fg_classes) >= 2:
-        vals = []
-        for c in fg_classes:
-            row_map = overlap.get(str(c), {})
-            diag = row_map.get(str(c), np.nan)
-            if is_finite_number(diag):
-                vals.append(1.0 - float(diag))
-        return float(np.mean(vals)) if vals else np.nan
-
-    # Binary case: use leakage between background (0) and fg (1)
-    # (Works even if fg class isn't literally "1", but most of your data uses 1.)
-    leak_vals = []
-    row0 = overlap.get("0", {})
-    row1 = overlap.get("1", {})
-    v01 = row0.get("1", np.nan)
-    v10 = row1.get("0", np.nan)
-    if is_finite_number(v01):
-        leak_vals.append(float(v01))
-    if is_finite_number(v10):
-        leak_vals.append(float(v10))
-    return float(np.mean(leak_vals)) if leak_vals else np.nan
+    if len(fg_classes) < 2:
+        return np.nan
+    values = []
+    for source_class in fg_classes:
+        row_map = overlap.get(str(source_class), {})
+        if not any(
+            is_finite_number(value) and float(value) > 0.0
+            for value in row_map.values()
+        ):
+            continue
+        values.append(sum(
+            float(row_map.get(str(target_class), 0.0))
+            for target_class in fg_classes
+            if target_class != source_class
+            and is_finite_number(row_map.get(str(target_class), 0.0))
+        ))
+    return float(np.mean(values)) if values else np.nan
 
 # ---------------- LOAD ----------------
 with open(JSON_PATH, "r") as f:
@@ -105,7 +94,7 @@ for sample_id, entry in data.items():
     I = safe_float(overall.get("delta_total_num_cc", np.nan))
     I = abs(I) if np.isfinite(I) else np.nan
 
-    # S: confusion evidence (binary-safe)
+    # S: foreground-class confusion evidence (undefined for binary datasets)
     S = compute_confusion_evidence(overlap, fg_classes)
 
     rows.append({
@@ -186,7 +175,7 @@ for ds in datasets:
     plt.xlabel("Boundary evidence B (robust z of mean HD95)")
     plt.ylabel("Extent evidence V (robust z of mean |relative volume diff|)")
     cb = plt.colorbar(sc_neu)
-    cb.set_label("Confusion evidence S (robust z of leakage / 1 - diag overlap)")
+    cb.set_label("Confusion evidence S (robust z of foreground-class transitions)")
 
     plt.title(
         f"{ds}: 4D noise map\n"

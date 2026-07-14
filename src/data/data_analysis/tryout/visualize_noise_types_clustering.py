@@ -99,23 +99,25 @@ for json_file in json_files:
         I = overall.get("delta_total_num_cc", np.nan)
         I = abs(float(I)) if is_finite_number(I) else np.nan
 
-        # S: confusion feature that works for binary and multiclass
+        # S: foreground-to-other-foreground confusion; undefined for binary data.
         if len(fg_classes) >= 2:
             ss = []
-            for c in fg_classes:
-                diag = overlap.get(str(c), {}).get(str(c), np.nan)
-                if is_finite_number(diag):
-                    ss.append(1.0 - float(diag))
+            for source_class in fg_classes:
+                row_map = overlap.get(str(source_class), {})
+                if not any(
+                    is_finite_number(value) and float(value) > 0.0
+                    for value in row_map.values()
+                ):
+                    continue
+                ss.append(sum(
+                    float(row_map.get(str(target_class), 0.0))
+                    for target_class in fg_classes
+                    if target_class != source_class
+                    and is_finite_number(row_map.get(str(target_class), 0.0))
+                ))
             S = float(np.mean(ss)) if len(ss) else np.nan
         else:
-            o01 = overlap.get("0", {}).get("1", np.nan)
-            o10 = overlap.get("1", {}).get("0", np.nan)
-            vals = []
-            if is_finite_number(o01):
-                vals.append(float(o01))
-            if is_finite_number(o10):
-                vals.append(float(o10))
-            S = float(np.mean(vals)) if len(vals) else np.nan
+            S = np.nan
 
         row = {
             "sample_id": sample_id,

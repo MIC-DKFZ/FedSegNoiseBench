@@ -34,32 +34,22 @@ def is_finite_number(value) -> bool:
 
 def compute_swap_score(overlap_matrix: Dict, fg_classes: List[int]) -> float:
     """
-    Compute swap score from class overlap matrix.
-
-    For multiclass: average of (1 - diagonal) over foreground classes.
-    For binary: average of off-diagonal confusion rates (0->1, 1->0).
-    Returns NaN if undefined.
+    Compute foreground-to-other-foreground swaps, excluding background.
     """
-    if len(fg_classes) >= 2:
-        per_class_misclassification = []
-        for class_id in fg_classes:
-            diag = overlap_matrix.get(str(class_id), {}).get(str(class_id), np.nan)
-            if is_finite_number(diag):
-                per_class_misclassification.append(1.0 - float(diag))
-        return (
-            float(np.mean(per_class_misclassification))
-            if per_class_misclassification
-            else np.nan
-        )
-
-    off_01 = overlap_matrix.get("0", {}).get("1", np.nan)
-    off_10 = overlap_matrix.get("1", {}).get("0", np.nan)
-    vals = []
-    if is_finite_number(off_01):
-        vals.append(float(off_01))
-    if is_finite_number(off_10):
-        vals.append(float(off_10))
-    return float(np.mean(vals)) if vals else np.nan
+    foreground_classes = sorted({int(c) for c in fg_classes if int(c) != 0})
+    if len(foreground_classes) < 2:
+        return np.nan
+    values = []
+    for source_class in foreground_classes:
+        row = overlap_matrix.get(str(source_class), {})
+        if not any(is_finite_number(v) and float(v) > 0.0 for v in row.values()):
+            continue
+        values.append(sum(
+            float(row.get(str(target), 0.0))
+            for target in foreground_classes
+            if target != source_class and is_finite_number(row.get(str(target), 0.0))
+        ))
+    return float(np.mean(values)) if values else np.nan
 
 
 def resolve_json_files(json_path: str) -> List[str]:

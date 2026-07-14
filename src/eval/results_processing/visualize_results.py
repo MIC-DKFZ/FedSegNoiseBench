@@ -535,6 +535,343 @@ def boxplot_legend_location() -> str:
     )
 
 
+def _sorted_class_labels(class_labels):
+    return sorted(
+        class_labels,
+        key=lambda x: (
+            int(x)
+            if isinstance(x, (int, str))
+            and str(x).replace("(", "").replace(")", "").split(",")[0].isdigit()
+            else str(x)
+        ),
+    )
+
+
+def _build_clean_roa_roc_noisy_boxplot_payload(
+    data: dict,
+    datasets: list[str],
+    algo_colors: dict,
+) -> dict | None:
+    """Build axis-local boxplot positions and labels for selected datasets."""
+    positions = []
+    box_data = []
+    colors = []
+    meta_info = []
+    dataset_boundaries = []
+    class_boundaries = []
+    noise_boundaries = []
+    label_positions = []
+    label_texts = []
+
+    pos = 0.0
+    gap_algo = 0.1
+    gap_noise = 0.05
+    gap_class = 0.0
+    gap_dataset = 0.0
+    bplot_width = 0.1
+    state_keys_ordered = ["clean", "roa(p)", "roc(p)", "noisy"]
+
+    for ds in datasets:
+        if not data.get(ds):
+            continue
+
+        dataset_start = pos
+        dataset_has_data = False
+        class_labels_sorted = _sorted_class_labels(
+            {cl for algo_data in data[ds].values() for cl in algo_data.keys()}
+        )
+
+        for cl in class_labels_sorted:
+            class_has_data = False
+            class_positions = []
+            state_groups = {}
+            for state_key in state_keys_ordered:
+                state_has_data = False
+                state_positions = []
+                for algo in target_algos:
+                    vals = data[ds].get(algo, {}).get(cl, {}).get(state_key, [])
+                    if not vals:
+                        print(
+                            f"No data for {ds}/{algo}/class {cl}/{state_key}, skipping..."
+                        )
+                        continue
+                    arr = np.asarray(vals, dtype=float)
+                    arr = arr[np.isfinite(arr)]
+                    if arr.size == 0:
+                        print(
+                            f"No finite plot values for {ds}/{algo}/class {cl}/{state_key}, skipping..."
+                        )
+                        continue
+                    positions.append(pos)
+                    box_data.append(arr.tolist())
+                    colors.append(algo_colors[algo])
+                    meta_info.append(
+                        {
+                            "ds": ds,
+                            "class": cl,
+                            "state": state_key,
+                            "algo": algo,
+                            "n": int(arr.size),
+                        }
+                    )
+                    state_positions.append(pos)
+                    class_positions.append(pos)
+                    pos += gap_algo
+                    state_has_data = True
+                    dataset_has_data = True
+                    class_has_data = True
+                if state_has_data:
+                    state_groups[state_key] = state_positions
+                    label_positions.append(np.mean(state_positions))
+                    label_texts.append(_plot_scenario_label(state_key))
+                    pos += gap_noise
+
+            if class_has_data:
+                for i in range(len(state_keys_ordered) - 1):
+                    curr_state = state_keys_ordered[i]
+                    next_state = state_keys_ordered[i + 1]
+                    if curr_state in state_groups and next_state in state_groups:
+                        noise_sep = (
+                            max(state_groups[curr_state])
+                            + min(state_groups[next_state])
+                        ) / 2.0
+                        noise_boundaries.append(noise_sep)
+
+                class_boundaries.append(max(class_positions))
+                pos += gap_class
+
+        if dataset_has_data:
+            dataset_boundaries.append((dataset_start, positions[-1], ds))
+            pos += gap_dataset
+
+    if not box_data:
+        return None
+
+    return {
+        "positions": positions,
+        "box_data": box_data,
+        "colors": colors,
+        "meta_info": meta_info,
+        "dataset_boundaries": dataset_boundaries,
+        "class_boundaries": class_boundaries,
+        "noise_boundaries": noise_boundaries,
+        "label_positions": label_positions,
+        "label_texts": label_texts,
+        "bplot_width": bplot_width,
+        "gap_dataset": gap_dataset,
+    }
+
+
+def _finite_payload_values(payload: dict) -> np.ndarray:
+    values = []
+    for vals in payload["box_data"]:
+        arr = np.asarray(vals, dtype=float)
+        arr = arr[np.isfinite(arr)]
+        if arr.size:
+            values.append(arr)
+    if not values:
+        return np.asarray([], dtype=float)
+    return np.concatenate(values)
+
+
+def _bounded_metric_limits(ymin: float, ymax: float, span: float) -> tuple[float, float]:
+    if classwise_metric not in BOUNDED_ZERO_ONE_METRICS:
+        return ymin, ymax
+    if span >= 1.0:
+        return 0.0, 1.0
+    if ymin < 0.0:
+        ymin = 0.0
+        ymax = span
+    if ymax > 1.0:
+        ymax = 1.0
+        ymin = 1.0 - span
+    return ymin, ymax
+
+
+def _multipanel_y_limits(
+    panel_payloads: list[tuple[str, dict]],
+) -> dict[str, tuple[float, float]]:
+    panel_ranges = {}
+
+    if classwise_metric == "HD95":
+        for ds, payload in panel_payloads:
+            values = _finite_payload_values(payload)
+            values = values[values > 0.0]
+            if values.size:
+                log_values = np.log10(values)
+                panel_ranges[ds] = (float(log_values.min()), float(log_values.max()))
+        if not panel_ranges:
+            return {}
+        spans = [hi - lo for lo, hi in panel_ranges.values()]
+        common_span = max(spans) * 1.12
+        if common_span <= 0.0:
+            common_span = 0.2
+        limits = {}
+        for ds, (lo, hi) in panel_ranges.items():
+            center = (lo + hi) / 2.0
+            limits[ds] = (
+                10 ** (center - common_span / 2.0),
+                10 ** (center + common_span / 2.0),
+            )
+        return limits
+
+    for ds, payload in panel_payloads:
+        values = _finite_payload_values(payload)
+        if values.size:
+            panel_ranges[ds] = (float(values.min()), float(values.max()))
+    if not panel_ranges:
+        return {}
+
+    spans = [hi - lo for lo, hi in panel_ranges.values()]
+    common_span = max(spans) * 1.12
+    if common_span <= 0.0:
+        common_span = 0.08 if classwise_metric in BOUNDED_ZERO_ONE_METRICS else 1.0
+    if classwise_metric in BOUNDED_ZERO_ONE_METRICS:
+        common_span = min(common_span, 1.0)
+
+    limits = {}
+    for ds, (lo, hi) in panel_ranges.items():
+        center = (lo + hi) / 2.0
+        ymin = center - common_span / 2.0
+        ymax = center + common_span / 2.0
+        limits[ds] = _bounded_metric_limits(ymin, ymax, common_span)
+    return limits
+
+
+def _draw_clean_roa_roc_noisy_boxplot_payload(
+    ax,
+    payload: dict,
+    algo_colors: dict,
+    show_dataset_labels: bool = True,
+    show_legend: bool = True,
+    show_ylabel: bool = True,
+    y_limits: tuple[float, float] | None = None,
+    legend_location: str | None = None,
+):
+    positions = payload["positions"]
+    box_data = payload["box_data"]
+    colors = payload["colors"]
+    meta_info = payload["meta_info"]
+    bplot_width = payload["bplot_width"]
+
+    bp = ax.boxplot(
+        box_data,
+        positions=positions,
+        widths=bplot_width,
+        patch_artist=True,
+        showfliers=False,
+    )
+
+    for patch, c, meta in zip(bp["boxes"], colors, meta_info):
+        patch.set_facecolor(c)
+        patch.set_alpha(0.75)
+
+    for median, meta in zip(bp["medians"], meta_info):
+        median.set_linewidth(1.5)
+        median.set_color("black")
+        median.set_alpha(1.0)
+
+    for i, (whisker, meta) in enumerate(
+        zip(bp["whiskers"], [meta_info[i // 2] for i in range(len(bp["whiskers"]))])
+    ):
+        whisker.set_color("black")
+        whisker.set_alpha(1.0)
+
+    for i, (cap, meta) in enumerate(
+        zip(bp["caps"], [meta_info[i // 2] for i in range(len(bp["caps"]))])
+    ):
+        cap.set_color("black")
+        cap.set_alpha(1.0)
+
+    for boundary in payload["noise_boundaries"]:
+        ax.axvline(boundary, color="gray", linestyle=":", linewidth=0.8, alpha=0.6)
+
+    for boundary in payload["class_boundaries"]:
+        ax.axvline(boundary, color="gray", linestyle="--", linewidth=0.8, alpha=0.7)
+
+    if show_dataset_labels:
+        for ds_start, ds_end, ds_name in payload["dataset_boundaries"]:
+            ds_center = (ds_start + ds_end) / 2.0
+            ax.text(
+                ds_center,
+                -0.06,
+                _plot_dataset_label(ds_name),
+                ha="center",
+                va="top",
+                fontsize=BOXPLOT_LABEL_FONTSIZE,
+                transform=ax.get_xaxis_transform(),
+            )
+            ax.axvline(
+                ds_end + payload["gap_dataset"] / 2.0,
+                color="gray",
+                linestyle="-",
+                linewidth=1.0,
+                alpha=0.5,
+            )
+
+    ax.set_xticks(payload["label_positions"])
+    ax.set_xticklabels(
+        payload["label_texts"],
+        rotation=0,
+        ha="center",
+        fontsize=BOXPLOT_LABEL_FONTSIZE - 2,
+    )
+    if show_ylabel:
+        ax.set_ylabel(
+            metric_axis_label(classwise_metric),
+            fontsize=BOXPLOT_LABEL_FONTSIZE,
+        )
+    xmin = min(positions) - bplot_width
+    xmax = max(positions) + bplot_width
+    ax.set_xlim(xmin, xmax)
+    ax.margins(x=0)
+    if y_limits is None:
+        apply_metric_axis_limits(ax)
+    else:
+        if classwise_metric == "HD95":
+            ax.set_yscale("log")
+        ax.set_ylim(*y_limits)
+    ax.grid(axis="y", linestyle="--", alpha=0.5)
+    ax.tick_params(axis="y", labelsize=BOXPLOT_TICK_FONTSIZE)
+
+    means = []
+    for vals in box_data:
+        arr = np.asarray(vals, dtype=float)
+        arr = arr[np.isfinite(arr)]
+        means.append(float(np.mean(arr)) if arr.size else np.nan)
+    for pos_i, mean, color in zip(positions, means, colors):
+        ax.scatter(
+            pos_i,
+            mean,
+            marker="D",
+            c=[color],
+            edgecolors="k",
+            zorder=4,
+            s=30,
+            linewidths=0.6,
+            alpha=1.0,
+        )
+
+    for vals, m, meta in zip(box_data, means, meta_info):
+        if np.isnan(m):
+            continue
+        print(
+            f"{meta['ds']} | class {meta['class']} | {meta['state']} | {meta['algo']}: "
+            f"mean={m:.4f} (n={meta['n']})"
+        )
+
+    if show_legend:
+        algo_patches = [
+            plt.matplotlib.patches.Patch(facecolor=algo_colors[a], alpha=0.75, label=a)
+            for a in target_algos
+        ]
+        ax.legend(
+            handles=algo_patches,
+            loc=legend_location or boxplot_legend_location(),
+            fontsize=BOXPLOT_LEGEND_FONTSIZE,
+        )
+
+
 def build_bootstrap_summary_table(
     df_all: pd.DataFrame,
     datasets: list[str] | None = None,
@@ -2134,7 +2471,7 @@ def plot_classwise_boxplots_clean_roc_noisy_bootstrapping(df_all: pd.DataFrame):
 
 
 def plot_boxplots_clean_roa_roc_noisy_bootstrapping(
-    df_all: pd.DataFrame, classwise=False
+    df_all: pd.DataFrame, classwise=False, multipanel=False
 ):
     """
     Create boxplots with hierarchical structure:
@@ -2200,229 +2537,95 @@ def plot_boxplots_clean_roa_roc_noisy_bootstrapping(
                         }
                     data[ds][algo][class_label][state_key] = final_vec.tolist()
 
-    # Build boxplot structure (per dataset → class → noise state → algorithm)
     algo_colors = {algo: plt.cm.tab10(i % 10) for i, algo in enumerate(target_algos)}
-    positions = []
-    box_data = []
-    colors = []
-    meta_info = []
-    dataset_boundaries = []
-    class_boundaries = []
-    noise_boundaries = []
-    label_positions = []
-    label_texts = []
 
-    pos = 0.0
-    gap_algo = 0.1
-    gap_noise = 0.05
-    gap_class = 0.0
-    gap_dataset = 0.0
-    bplot_width = 0.1
+    if multipanel:
+        panel_payloads = []
+        for ds in target_datasets:
+            ds_payload = _build_clean_roa_roc_noisy_boxplot_payload(
+                data,
+                datasets=[ds],
+                algo_colors=algo_colors,
+            )
+            if ds_payload is not None:
+                panel_payloads.append((ds, ds_payload))
 
-    for ds in target_datasets:
-        if not data.get(ds):
-            continue
+        if not panel_payloads:
+            print("No bootstrapping boxplot data collected for multipanel figure.")
+            return
 
-        dataset_start = pos
-        dataset_has_data = False
-        class_labels_sorted = sorted(
-            {cl for algo_data in data[ds].values() for cl in algo_data.keys()},
-            key=lambda x: (
-                int(x)
-                if isinstance(x, (int, str))
-                and str(x).replace("(", "").replace(")", "").split(",")[0].isdigit()
-                else str(x)
-            ),
+        ncols = 2 if len(panel_payloads) > 1 else 1
+        nrows = int(np.ceil(len(panel_payloads) / ncols))
+        panel_y_limits = _multipanel_y_limits(panel_payloads)
+        fig, axes = plt.subplots(
+            nrows,
+            ncols,
+            figsize=(7.8 * ncols, 3.8 * nrows),
+            sharey=False,
+            squeeze=False,
         )
-
-        for cl in class_labels_sorted:
-            class_has_data = False
-            class_positions = []
-            state_groups = {}
-            for state_key in ["clean", "roa(p)", "roc(p)", "noisy"]:
-                state_has_data = False
-                state_positions = []
-                for algo in target_algos:
-                    vals = data[ds].get(algo, {}).get(cl, {}).get(state_key, [])
-                    if not vals:
-                        print(f"No data for {ds}/{algo}/class {cl}/{state_key}, skipping...")
-                        continue
-                    arr = np.asarray(vals, dtype=float)
-                    arr = arr[np.isfinite(arr)]
-                    if arr.size == 0:
-                        print(
-                            f"No finite plot values for {ds}/{algo}/class {cl}/{state_key}, skipping..."
-                        )
-                        continue
-                    positions.append(pos)
-                    box_data.append(arr.tolist())
-                    colors.append(algo_colors[algo])
-                    meta_info.append(
-                        {
-                            "ds": ds,
-                            "class": cl,
-                            "state": state_key,
-                            "algo": algo,
-                            "n": int(arr.size),
-                        }
-                    )
-                    state_positions.append(pos)
-                    class_positions.append(pos)
-                    pos += gap_algo
-                    state_has_data = True
-                    dataset_has_data = True
-                    class_has_data = True
-                if state_has_data:
-                    state_groups[state_key] = state_positions
-                    label_positions.append(np.mean(state_positions))
-                    label_texts.append(_plot_scenario_label(state_key))
-                    pos += gap_noise
-
-            if class_has_data:
-                state_keys_present = ["clean", "roa(p)", "roc(p)", "noisy"]
-                for i in range(len(state_keys_present) - 1):
-                    curr_state = state_keys_present[i]
-                    next_state = state_keys_present[i + 1]
-                    if curr_state in state_groups and next_state in state_groups:
-                        noise_sep = (
-                            max(state_groups[curr_state])
-                            + min(state_groups[next_state])
-                        ) / 2.0
-                        noise_boundaries.append(noise_sep)
-
-                class_boundaries.append(max(class_positions))
-                pos += gap_class
-
-        if dataset_has_data:
-            dataset_boundaries.append((dataset_start, positions[-1], ds))
-            pos += gap_dataset
-
-    if not box_data:
-        print("No bootstrapping boxplot data collected.")
-        return
-
-    # Create figure
-    fig, ax = plt.subplots(figsize=BOXPLOT_STANDARD_FIGSIZE)
-
-    bp = ax.boxplot(
-        box_data,
-        positions=positions,
-        widths=bplot_width,
-        patch_artist=True,
-        showfliers=False,
-    )
-
-    for patch, c, meta in zip(bp["boxes"], colors, meta_info):
-        patch.set_facecolor(c)
-        patch.set_alpha(0.75)
-
-    for median, meta in zip(bp["medians"], meta_info):
-        median.set_linewidth(1.5)
-        median.set_color("black")
-        median.set_alpha(1.0)
-
-    for i, (whisker, meta) in enumerate(
-        zip(bp["whiskers"], [meta_info[i // 2] for i in range(len(bp["whiskers"]))])
-    ):
-        whisker.set_color("black")
-        whisker.set_alpha(1.0)
-
-    for i, (cap, meta) in enumerate(
-        zip(bp["caps"], [meta_info[i // 2] for i in range(len(bp["caps"]))])
-    ):
-        cap.set_color("black")
-        cap.set_alpha(1.0)
-
-    # Add vertical lines
-    for boundary in noise_boundaries:
-        ax.axvline(boundary, color="gray", linestyle=":", linewidth=0.8, alpha=0.6)
-
-    for boundary in class_boundaries:
-        ax.axvline(boundary, color="gray", linestyle="--", linewidth=0.8, alpha=0.7)
-
-    # Add dataset labels and separators
-    for ds_start, ds_end, ds_name in dataset_boundaries:
-        ds_center = (ds_start + ds_end) / 2.0
-        ax.text(
-            ds_center,
-            -0.06,
-            _plot_dataset_label(ds_name),
-            ha="center",
-            va="top",
-            fontsize=BOXPLOT_LABEL_FONTSIZE,
-            # fontweight="bold",
-            transform=ax.get_xaxis_transform(),
+        axes_flat = axes.ravel()
+        for idx, (ds, ds_payload) in enumerate(panel_payloads):
+            ax = axes_flat[idx]
+            _draw_clean_roa_roc_noisy_boxplot_payload(
+                ax,
+                ds_payload,
+                algo_colors=algo_colors,
+                show_dataset_labels=False,
+                show_legend=False,
+                show_ylabel=idx % ncols == 0,
+                y_limits=panel_y_limits.get(ds),
+            )
+            ax.set_title(
+                _plot_dataset_label(ds),
+                fontsize=BOXPLOT_LABEL_FONTSIZE,
+                fontweight="bold",
+            )
+        for ax in axes_flat[len(panel_payloads) :]:
+            ax.axis("off")
+        algo_patches = [
+            plt.matplotlib.patches.Patch(facecolor=algo_colors[a], alpha=0.75, label=a)
+            for a in target_algos
+        ]
+        fig.legend(
+            handles=algo_patches,
+            loc="upper center",
+            bbox_to_anchor=(0.5, 0.995),
+            ncol=len(target_algos),
+            fontsize=BOXPLOT_LEGEND_FONTSIZE,
+            frameon=False,
         )
-        ax.axvline(
-            ds_end + gap_dataset / 2.0,
-            color="gray",
-            linestyle="-",
-            linewidth=1.0,
-            alpha=0.5,
+        fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.94))
+        fig.subplots_adjust(bottom=0.08)
+    else:
+        payload = _build_clean_roa_roc_noisy_boxplot_payload(
+            data,
+            datasets=target_datasets,
+            algo_colors=algo_colors,
         )
+        if payload is None:
+            print("No bootstrapping boxplot data collected.")
+            return
 
-    ax.set_xticks(label_positions)
-    ax.set_xticklabels(label_texts, rotation=0, ha="center", fontsize=BOXPLOT_LABEL_FONTSIZE-2)
-    ax.set_ylabel(metric_axis_label(classwise_metric), fontsize=BOXPLOT_LABEL_FONTSIZE)
-    xmin = min(positions) - bplot_width
-    xmax = max(positions) + bplot_width
-    ax.set_xlim(xmin, xmax)
-    ax.margins(x=0)
-    apply_metric_axis_limits(ax)
-    # prefix = "Class-wise" if classwise else "Overall"
-    # suffix = "per dataset/class/algorithm" if classwise else "per dataset/algorithm"
-    # ax.set_title(
-    #     f"{prefix} {classwise_metric} (bootstrapping): clean vs roa(p) vs roc(p) vs noisy {suffix}",
-    #     fontsize=BOXPLOT_TITLE_FONTSIZE,
-    #     fontweight="bold",
-    # )
-    ax.grid(axis="y", linestyle="--", alpha=0.5)
-    ax.tick_params(axis="y", labelsize=BOXPLOT_TICK_FONTSIZE)
-
-    # Overlay mean markers
-    means = []
-    for vals in box_data:
-        arr = np.asarray(vals, dtype=float)
-        arr = arr[np.isfinite(arr)]
-        means.append(float(np.mean(arr)) if arr.size else np.nan)
-    for pos_i, mean, color in zip(positions, means, colors):
-        ax.scatter(
-            pos_i,
-            mean,
-            marker="D",
-            c=[color],
-            edgecolors="k",
-            zorder=4,
-            s=30,
-            linewidths=0.6,
-            alpha=1.0,
+        fig, ax = plt.subplots(figsize=BOXPLOT_STANDARD_FIGSIZE)
+        _draw_clean_roa_roc_noisy_boxplot_payload(
+            ax,
+            payload,
+            algo_colors=algo_colors,
+            show_dataset_labels=True,
+            show_legend=True,
+            show_ylabel=True,
         )
+        fig.tight_layout()
+        fig.subplots_adjust(bottom=0.14)
 
-    for vals, m, meta in zip(box_data, means, meta_info):
-        if np.isnan(m):
-            continue
-        print(
-            f"{meta['ds']} | class {meta['class']} | {meta['state']} | {meta['algo']}: "
-            f"mean={m:.4f} (n={meta['n']})"
-        )
-
-    algo_patches = [
-        plt.matplotlib.patches.Patch(facecolor=algo_colors[a], alpha=0.75, label=a)
-        for a in target_algos
-    ]
-    ax.legend(
-        handles=algo_patches,
-        loc=boxplot_legend_location(),
-        fontsize=BOXPLOT_LEGEND_FONTSIZE,
-    )
-
-    fig.tight_layout()
-    fig.subplots_adjust(bottom=0.14)
     out_name = (
         f"classwise_boxplots_clean_vs_roa(p)_vs_roc(p)_vs_noisy_bootstrapping_{metric_slug(classwise_metric)}.png"
         if classwise
         else f"boxplots_clean_vs_roa(p)_vs_roc(p)_vs_noisy_bootstrapping_{metric_slug(classwise_metric)}.png"
     )
+    if multipanel:
+        out_name = out_name.replace(".png", "_multipanel.png")
     fig.savefig(OUTPUT_DIR / out_name, dpi=200, bbox_inches="tight")
     print(f"Saved boxplot to {OUTPUT_DIR / out_name}")
 
@@ -3096,6 +3299,14 @@ def main():
         action="store_true",
         help="If set, the LaTeX table shows only the mean value and omits the 95% CI.",
     )
+    parser.add_argument(
+        "--multipanel-main-figure",
+        action="store_true",
+        help=(
+            "If set, split the main clean/roa/roc/noisy boxplot into one subplot "
+            "per dataset with a single shared method legend centered above the panels."
+        ),
+    )
     args = parser.parse_args()
 
     classwise_metric = args.metric
@@ -3133,7 +3344,9 @@ def main():
     )
 
     plot_boxplots_clean_roa_roc_noisy_bootstrapping(
-        df_selected, classwise=args.classwise
+        df_selected,
+        classwise=args.classwise,
+        multipanel=args.multipanel_main_figure,
     )
     # plot_boxplots_roa_per_client_bootstrapping(df_selected, classwise=args.classwise)
     # plot_boxplots_roc_per_client_bootstrapping(df_selected, classwise=args.classwise)

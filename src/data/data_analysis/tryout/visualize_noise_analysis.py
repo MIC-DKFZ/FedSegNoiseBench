@@ -40,25 +40,38 @@ def load_noise_analysis(json_file: str) -> Dict:
         return json.load(f)
 
 
+def is_finite_number(value) -> bool:
+    try:
+        return np.isfinite(float(value))
+    except (TypeError, ValueError):
+        return False
+
+
 def compute_swap_score(class_overlap_matrix: Dict[str, Dict[str, float]]) -> float:
     """
-    Compute swap score: off-diagonal mass indicating class swaps.
+    Compute foreground-to-other-foreground class swaps.
 
-    For each class, compute the fraction of predicted pixels assigned to other classes.
-    Average across foreground classes.
+    Transitions involving background are excluded in both directions.
     """
+    foreground_classes = sorted(
+        int(class_id) for class_id in class_overlap_matrix if int(class_id) != 0
+    )
+    if len(foreground_classes) < 2:
+        return np.nan
+
     swap_scores = []
-    for class_id_str, overlaps in class_overlap_matrix.items():
-        class_id = int(class_id_str)
-        if class_id == 0:  # Skip background
+    for source_class in foreground_classes:
+        overlaps = class_overlap_matrix.get(str(source_class), {})
+        if not any(is_finite_number(value) and float(value) > 0.0 for value in overlaps.values()):
             continue
+        swap_scores.append(sum(
+            float(overlaps.get(str(target_class), 0.0))
+            for target_class in foreground_classes
+            if target_class != source_class
+            and is_finite_number(overlaps.get(str(target_class), 0.0))
+        ))
 
-        # Off-diagonal mass (predicted assigned to other classes)
-        diagonal_mass = overlaps.get(class_id_str, 0.0)
-        off_diagonal = 1.0 - diagonal_mass
-        swap_scores.append(off_diagonal)
-
-    return np.mean(swap_scores) if swap_scores else 0.0
+    return float(np.mean(swap_scores)) if swap_scores else np.nan
 
 
 def create_dataframe(results: Dict) -> pd.DataFrame:

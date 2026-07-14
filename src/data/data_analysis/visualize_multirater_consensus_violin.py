@@ -18,6 +18,7 @@ from typing import Dict, List, Tuple
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from matplotlib.ticker import FormatStrFormatter
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 try:
@@ -35,6 +36,7 @@ TITLE_FONT_SIZE = BASE_FONT_SIZE # + 1
 TICK_FONT_SIZE = BASE_FONT_SIZE # - 1
 ANNOTATION_FONT_SIZE = BASE_FONT_SIZE # - 1
 HEATMAP_CMAP = "Blues"
+CONFUSION_COLORBAR_LABEL_SIZE = BASE_FONT_SIZE - 6
 # DEFAULT_MAX_SAMPLES = 50
 DEFAULT_MAX_SAMPLES = None
 
@@ -164,25 +166,54 @@ def infer_riga_mode(file_path: str) -> bool:
     return "riga" in lower_path and infer_file_ending(file_path) in {".png", ".tif", ".tiff"}
 
 
-def compute_class_overlap_matrix(
+def compute_class_confusion_matrix(
     consensus_mask: np.ndarray, rater_mask: np.ndarray, classes: List[int]
 ) -> Dict[int, Dict[int, float]]:
-    overlap_matrix: Dict[int, Dict[int, float]] = {}
+    """Compute a foreground-only class-transition matrix.
 
+    For a foreground source class, off-diagonal entries contain only the
+    fraction relabeled as another foreground class. The diagonal is the
+    complement of those foreground swaps, so foreground/background changes do
+    not affect this matrix. Background is retained for display as an identity
+    row/column: M[0, 0] = 1 and M[0, c] = M[c, 0] = 0.
+
+    Rows for source classes absent from the consensus mask contain NaNs and are
+    ignored when matrices are averaged.
+    """
+    confusion_matrix: Dict[int, Dict[int, float]] = {}
+    classes = sorted({int(class_id) for class_id in classes} | {0})
     for src_class in classes:
+        confusion_matrix[int(src_class)] = {}
+
+        if src_class == 0:
+            for dst_class in classes:
+                confusion_matrix[src_class][dst_class] = (
+                    1.0 if dst_class == 0 else 0.0
+                )
+            continue
+
         consensus_class = consensus_mask == src_class
         consensus_volume = np.sum(consensus_class)
-        overlap_matrix[int(src_class)] = {}
+        if consensus_volume == 0:
+            for dst_class in classes:
+                confusion_matrix[src_class][dst_class] = np.nan
+            continue
 
+        foreground_swap_sum = 0.0
         for dst_class in classes:
-            if consensus_volume == 0:
-                overlap_ratio = 0.0
-            else:
+            if dst_class == 0:
+                confusion_matrix[src_class][dst_class] = 0.0
+            elif dst_class != src_class:
                 rater_class = rater_mask == dst_class
-                overlap_ratio = np.sum(consensus_class & rater_class) / consensus_volume
-            overlap_matrix[int(src_class)][int(dst_class)] = float(overlap_ratio)
+                swap_fraction = (
+                    np.sum(consensus_class & rater_class) / consensus_volume
+                )
+                confusion_matrix[src_class][dst_class] = float(swap_fraction)
+                foreground_swap_sum += float(swap_fraction)
 
-    return overlap_matrix
+        confusion_matrix[src_class][src_class] = float(1.0 - foreground_swap_sum)
+
+    return confusion_matrix
 
 
 def extract_avg_confusion_matrix(results: Dict) -> Tuple[np.ndarray, List[int]]:
@@ -216,11 +247,11 @@ def extract_avg_confusion_matrix(results: Dict) -> Tuple[np.ndarray, List[int]]:
                 continue
 
             classes = sorted(
-                set(np.unique(consensus_mask)) | set(np.unique(rater_mask))
+                set(np.unique(consensus_mask)) | set(np.unique(rater_mask)) | {0}
             )
             all_classes.update(int(c) for c in classes)
             per_rater_matrices.append(
-                compute_class_overlap_matrix(consensus_mask, rater_mask, classes)
+                compute_class_confusion_matrix(consensus_mask, rater_mask, classes)
             )
 
         if not per_rater_matrices:
@@ -237,17 +268,31 @@ def extract_avg_confusion_matrix(results: Dict) -> Tuple[np.ndarray, List[int]]:
             }
         )
         for src_class in sample_classes:
+            source_rows = [
+                mat[src_class] for mat in per_rater_matrices if src_class in mat
+            ]
+            if not any(
+                any(is_finite_number(value) for value in row.values())
+                for row in source_rows
+            ):
+                continue
+
             sample_avg[src_class] = {}
             for dst_class in sample_classes:
                 vals = [
-                    mat.get(src_class, {}).get(dst_class, 0.0)
+                    mat[src_class].get(dst_class, 0.0)
                     for mat in per_rater_matrices
+                    if src_class in mat
+                    and any(
+                        is_finite_number(value)
+                        for value in mat[src_class].values()
+                    )
                 ]
                 sample_avg[src_class][dst_class] = float(np.mean(vals))
 
         sample_level_matrices.append(sample_avg)
 
-    sorted_classes = sorted(all_classes)
+    sorted_classes = sorted(all_classes | {0})
     if not sorted_classes:
         return np.zeros((0, 0), dtype=float), []
 
@@ -257,8 +302,9 @@ def extract_avg_confusion_matrix(results: Dict) -> Tuple[np.ndarray, List[int]]:
     for src_class in sorted_classes:
         for dst_class in sorted_classes:
             vals = [
-                sample_matrix.get(src_class, {}).get(dst_class, 0.0)
+                sample_matrix[src_class].get(dst_class, 0.0)
                 for sample_matrix in sample_level_matrices
+                if src_class in sample_matrix
             ]
             matrix[class_to_idx[src_class], class_to_idx[dst_class]] = (
                 float(np.mean(vals)) if vals else 0.0
@@ -448,8 +494,7 @@ def plot_multirater_consensus_violin_row(
         divider = make_axes_locatable(ax_cm)
         cax = divider.append_axes("right", size="5%", pad=0.2)
         cbar = plt.colorbar(im, cax=cax, pad=0.1)
-        cbar.set_label("Class Confusion (C vs R)", fontsize=BASE_FONT_SIZE)
-        cbar.ax.tick_params(labelsize=TICK_FONT_SIZE)
+        _style_confusion_colorbar(cbar)
 
     # fig.suptitle(
     #     "Per-Class Multi-Rater vs Consensus Metrics",
@@ -537,10 +582,20 @@ def _add_confusion_heatmap_subplot(
         divider = make_axes_locatable(ax)
         cax = divider.append_axes("right", size="5%", pad=0.2)
         cbar = plt.colorbar(im, cax=cax)
-        cbar.set_label("Class Confusion (C vs R)", fontsize=BASE_FONT_SIZE)
-        cbar.ax.tick_params(labelsize=TICK_FONT_SIZE)
+        _style_confusion_colorbar(cbar)
 
     return im
+
+
+def _style_confusion_colorbar(cbar) -> None:
+    """Apply consistent, compact formatting to a confusion-matrix colorbar."""
+    cbar.set_label(
+        "FG Class Confusion (C vs R)",
+        fontsize=CONFUSION_COLORBAR_LABEL_SIZE,
+        labelpad=10,
+    )
+    cbar.ax.tick_params(labelsize=TICK_FONT_SIZE)
+    cbar.ax.yaxis.set_major_formatter(FormatStrFormatter("%.1f"))
 
 
 def plot_multirater_consensus_question1_grid(
@@ -600,8 +655,7 @@ def plot_multirater_consensus_question1_grid(
         # Keep the colorbar clearly outside the right-side rotated y tick labels.
         cax = fig.add_axes([pos.x1 + 0.06, pos.y0, 0.018, pos.height])
         cbar = fig.colorbar(im, cax=cax)
-        cbar.set_label("Class Confusion (C vs R)", fontsize=BASE_FONT_SIZE)
-        cbar.ax.tick_params(labelsize=TICK_FONT_SIZE)
+        _style_confusion_colorbar(cbar)
 
     os.makedirs(
         os.path.dirname(output_path) if os.path.dirname(output_path) else ".",

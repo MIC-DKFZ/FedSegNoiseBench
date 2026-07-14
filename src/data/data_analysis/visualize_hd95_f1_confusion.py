@@ -7,6 +7,8 @@ Single plot with:
 - Color: confusion score (class swapping/misclassification)
 """
 
+from __future__ import annotations
+
 import argparse
 import glob
 import json
@@ -45,36 +47,39 @@ def is_finite_number(value) -> bool:
 
 def compute_confusion_score(overlap_matrix: Dict, fg_classes: List[int]) -> float:
     """
-    Compute confusion score from class overlap matrix.
+    Compute foreground-to-foreground class confusion from an overlap matrix.
 
-    For multiclass: average of (1 - diagonal) over foreground classes.
-                    This represents the average misclassification rate.
-
-    For binary: average of off-diagonal confusion rates (0->1 + 1->0).
-                This represents the "leak" between classes.
-
-    Returns NaN if undefined.
+    Background transitions are excluded. For a dataset with exactly one
+    foreground class, the score is 0 because there is no alternative
+    foreground class to swap to. Returns NaN only when no clean foreground
+    source is present.
     """
-    if len(fg_classes) >= 2:
-        per_class_misclassification = []
-        for class_id in fg_classes:
-            diag = overlap_matrix.get(str(class_id), {}).get(str(class_id), np.nan)
-            if is_finite_number(diag):
-                per_class_misclassification.append(1.0 - float(diag))
-        return (
-            float(np.mean(per_class_misclassification))
-            if per_class_misclassification
-            else np.nan
-        )
+    foreground_classes = sorted({int(c) for c in fg_classes if int(c) != 0})
+    if not foreground_classes:
+        return np.nan
 
-    off_01 = overlap_matrix.get("0", {}).get("1", np.nan)
-    off_10 = overlap_matrix.get("1", {}).get("0", np.nan)
-    vals = []
-    if is_finite_number(off_01):
-        vals.append(float(off_01))
-    if is_finite_number(off_10):
-        vals.append(float(off_10))
-    return float(np.mean(vals)) if vals else np.nan
+    if len(foreground_classes) == 1:
+        row = overlap_matrix.get(str(foreground_classes[0]), {})
+        source_is_present = any(
+            is_finite_number(value) and float(value) > 0.0
+            for value in row.values()
+        )
+        return 0.0 if source_is_present else np.nan
+
+    values = []
+    for source_class in foreground_classes:
+        row = overlap_matrix.get(str(source_class), {})
+        if not any(is_finite_number(v) and float(v) > 0.0 for v in row.values()):
+            continue
+        values.append(
+            sum(
+                float(row.get(str(target_class), 0.0))
+                for target_class in foreground_classes
+                if target_class != source_class
+                and is_finite_number(row.get(str(target_class), 0.0))
+            )
+        )
+    return float(np.mean(values)) if values else np.nan
 
 
 def resolve_json_files(json_path: str) -> List[str]:
@@ -111,10 +116,16 @@ def load_hd95_f1_confusion_dataframe(json_path: str) -> pd.DataFrame:
             data = json.load(f)
 
         source_name = os.path.splitext(os.path.basename(json_file))[0]
+        dataset_fg_classes = sorted(
+            {
+                int(class_id)
+                for entry in data.values()
+                for class_id in entry.get("classes", {}).get("fg_classes", [])
+                if int(class_id) != 0
+            }
+        )
         for sample_id, entry in data.items():
             overall = entry.get("overall_metrics", {})
-            classes = entry.get("classes", {})
-            fg_classes = classes.get("fg_classes", [])
             overlap_matrix = entry.get("class_overlap_matrix", {})
             fg_bg = entry.get("foreground_vs_background_metrics", {})
 
@@ -125,9 +136,9 @@ def load_hd95_f1_confusion_dataframe(json_path: str) -> pd.DataFrame:
                 {
                     "sample_id": sample_id,
                     "source_json": source_name,
-                    "n_fg_classes": len(fg_classes),
+                    "n_fg_classes": len(dataset_fg_classes),
                     "confusion_score": compute_confusion_score(
-                        overlap_matrix, fg_classes
+                        overlap_matrix, dataset_fg_classes
                     ),
                     "mean_hd95": to_float_or_nan(overall.get("mean_hd95", np.nan)),
                     "voxel_fgbg_f1": to_float_or_nan(voxel_fg_bg.get("f1", np.nan)),
