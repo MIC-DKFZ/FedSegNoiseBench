@@ -94,7 +94,7 @@ for sample_id, entry in data.items():
     I = safe_float(overall.get("delta_total_num_cc", np.nan))
     I = abs(I) if np.isfinite(I) else np.nan
 
-    # S: foreground-class confusion evidence (undefined for binary datasets)
+    # S: PixelClsConf evidence (undefined for binary datasets)
     S = compute_confusion_evidence(overlap, fg_classes)
 
     rows.append({

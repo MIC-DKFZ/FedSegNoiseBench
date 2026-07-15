@@ -326,7 +326,7 @@ def plot_noise_type_map(df: pd.DataFrame, output_dir: str) -> None:
 
     # Add colorbar
     cbar = plt.colorbar(scatter, ax=ax)
-    cbar.set_label("Swap Score (Class Confusion)", fontsize=11, fontweight="bold")
+    cbar.set_label("PixelClsConf", fontsize=11, fontweight="bold")
 
     # Add quadrant lines
     ax.axhline(
@@ -466,7 +466,7 @@ def plot_noise_type_map_sampleid(df: pd.DataFrame, output_dir: str) -> None:
 
     # Add colorbar
     cbar = plt.colorbar(scatter, ax=ax)
-    cbar.set_label("Swap Score (Class Confusion)", fontsize=11, fontweight="bold")
+    cbar.set_label("PixelClsConf", fontsize=11, fontweight="bold")
 
     # Add quadrant lines
     ax.axhline(
@@ -594,7 +594,7 @@ def plot_noise_type_map_dice(df: pd.DataFrame, output_dir: str) -> None:
 
     # Add colorbar
     cbar = plt.colorbar(scatter, ax=ax)
-    cbar.set_label("Swap Score (Class Confusion)", fontsize=11, fontweight="bold")
+    cbar.set_label("PixelClsConf", fontsize=11, fontweight="bold")
 
     # Add quadrant lines
     ax.axhline(
@@ -695,7 +695,7 @@ def plot_noise_type_map_dice_hd(df: pd.DataFrame, output_dir: str) -> None:
 
     X-axis: mean_dice (dominant overlap metric, higher = better agreement)
     Y-axis: mean_hd95 (dominant contour-based metric, lower = better boundary match)
-    Color: swap_score (class confusion/label swapping)
+    Color: swap_score (PixelClsConf/label swapping)
     Size: relative_volume_diff_abs (volume change magnitude)
 
     Quadrants:
@@ -710,7 +710,7 @@ def plot_noise_type_map_dice_hd(df: pd.DataFrame, output_dir: str) -> None:
     scatter = ax.scatter(
         df["mean_dice"],  # X: Dice coefficient (overlap metric)
         df["mean_hd95"],  # Y: HD95 (contour-based metric)
-        c=df["swap_score"],  # Color: class confusion/swap score
+        c=df["swap_score"],  # Color: PixelClsConf/swap score
         s=df["relative_volume_diff_abs"] * 500 + 50,  # Size: volume changes
         alpha=0.6,
         cmap="RdYlGn_r",
@@ -722,7 +722,7 @@ def plot_noise_type_map_dice_hd(df: pd.DataFrame, output_dir: str) -> None:
 
     # Add colorbar
     cbar = plt.colorbar(scatter, ax=ax)
-    cbar.set_label("Swap Score (Class Confusion)", fontsize=11, fontweight="bold")
+    cbar.set_label("PixelClsConf", fontsize=11, fontweight="bold")
 
     # Add quadrant lines at medians
     dice_median = df["mean_dice"].median()

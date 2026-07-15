@@ -11,7 +11,7 @@ Creates violin plots comparing clean and noisy masks for various per-class metri
 - Per-class delta of number of connected components
 - Per-class delta of average volume of connected components
 
-Also creates a square class overlap matrix heatmap.
+Also creates a square InstanceClsConf transition-matrix heatmap.
 
 All visualizations are combined into a single figure with subplots.
 """
@@ -136,54 +136,52 @@ def finite_series_values(series: pd.Series) -> np.ndarray:
     return values[np.isfinite(values)]
 
 
-def extract_overlap_matrices(results: Dict) -> Tuple[np.ndarray, List[int]]:
-    """
-    Extract and aggregate class overlap matrices.
-    
-    Returns a square matrix where matrix[i,j] = average overlap from class i to class j.
-    Also returns the list of sorted class IDs.
-    """
-    overlap_data = {}  # class_id -> list of overlap dicts
-    all_classes = set()
-    
-    for sample_id, result in results.items():
-        overlap_matrix = result.get("class_overlap_matrix", {})
-        
-        for class_id_str, overlaps in overlap_matrix.items():
-            class_id = int(class_id_str)
-            all_classes.add(class_id)
-            if class_id not in overlap_data:
-                overlap_data[class_id] = []
-            overlap_data[class_id].append(overlaps)
-            
-            # Also track all target classes
-            for target_class_str in overlaps.keys():
-                all_classes.add(int(target_class_str))
-    
-    # Sort classes for consistent ordering
+def extract_instance_cls_conf_matrices(
+    results: Dict,
+) -> Tuple[np.ndarray, List[int]]:
+    """Average InstanceClsConf transition matrices from noise-analysis JSON."""
+    matrices = []
+    all_classes = {0}
+    for result in results.values():
+        transition_matrix = (
+            result.get("class_confusion_metrics", {})
+            .get("InstanceClsConf", {})
+            .get("transition_matrix", {})
+        )
+        if not transition_matrix:
+            continue
+        matrices.append(transition_matrix)
+        for source_class, row in transition_matrix.items():
+            all_classes.add(int(source_class))
+            all_classes.update(int(target_class) for target_class in row)
+
     sorted_classes = sorted(all_classes)
-    n_classes = len(sorted_classes)
-    class_to_idx = {cls: idx for idx, cls in enumerate(sorted_classes)}
-    
-    # Build square matrix
-    matrix = np.zeros((n_classes, n_classes))
-    
-    for source_class, overlap_list in overlap_data.items():
-        source_idx = class_to_idx[source_class]
-        
-        # Get all unique target class IDs for this source
-        all_target_classes = set()
-        for overlaps in overlap_list:
-            all_target_classes.update(int(k) for k in overlaps.keys())
-        
-        # Compute average for each target class
-        for target_class in all_target_classes:
-            target_idx = class_to_idx[target_class]
+    matrix = np.zeros((len(sorted_classes), len(sorted_classes)), dtype=float)
+    class_to_idx = {class_id: idx for idx, class_id in enumerate(sorted_classes)}
+    matrix[class_to_idx[0], class_to_idx[0]] = 1.0
+
+    for source_class in sorted_classes:
+        if source_class == 0:
+            continue
+        valid_rows = []
+        for sample_matrix in matrices:
+            row = sample_matrix.get(str(source_class), sample_matrix.get(source_class))
+            if row is None or not any(value is not None for value in row.values()):
+                continue
+            valid_rows.append(row)
+        for target_class in sorted_classes:
+            if target_class == 0:
+                continue
             values = [
-                overlaps.get(str(target_class), 0.0) for overlaps in overlap_list
+                row.get(str(target_class), row.get(target_class, 0.0))
+                for row in valid_rows
             ]
-            matrix[source_idx, target_idx] = np.mean(values)
-    
+            finite_values = [float(value) for value in values if value is not None]
+            if finite_values:
+                matrix[class_to_idx[source_class], class_to_idx[target_class]] = (
+                    float(np.mean(finite_values))
+                )
+
     return matrix, sorted_classes
 
 
@@ -342,7 +340,7 @@ def plot_all_metrics_combined(
     ax7 = fig.add_subplot(gs[2, 1])
     add_violinplot(ax7, "delta_avg_vol_cc", "Δ Avg Vol (voxels)", "Delta Avg Vol CC (Noisy - Clean)")
     
-    # Overlap matrix in last position
+    # InstanceClsConf transition matrix in last position
     ax8 = fig.add_subplot(gs[2, 2])
     im = ax8.imshow(overlap_matrix, cmap="YlOrRd", vmin=0, vmax=1, aspect="auto")
     ax8.set_xticks(range(len(sorted_classes)))
@@ -351,7 +349,7 @@ def plot_all_metrics_combined(
     ax8.set_yticklabels([f"C{c}" for c in sorted_classes], fontsize=9)
     ax8.set_xlabel("Noisy Class", fontsize=10)
     ax8.set_ylabel("Clean Class", fontsize=10)
-    ax8.set_title("Class Overlap Matrix", fontsize=11, fontweight="bold")
+    ax8.set_title("InstanceClsConf Matrix", fontsize=11, fontweight="bold")
     
     # Add text annotations to overlap matrix
     for i in range(len(sorted_classes)):
@@ -361,7 +359,7 @@ def plot_all_metrics_combined(
     
     # Add colorbar
     cbar = plt.colorbar(im, ax=ax8, fraction=0.046, pad=0.04)
-    cbar.set_label("Overlap", fontsize=9)
+    cbar.set_label("Matched-instance fraction", fontsize=9)
     
     # Main title
     fig.suptitle(
@@ -386,7 +384,7 @@ def plot_requested_metrics_single_row(
 ):
     """
     Create a single-row figure with 4 subplots:
-    Dice, HD95, Instance F1, and class confusion matrix.
+    Dice, HD95, Instance F1, and InstanceClsConf matrix.
 
     The total figure width is fixed so the row length is identical
     across datasets, independent of the number of classes.
@@ -479,7 +477,7 @@ def plot_requested_metrics_single_row(
         "Class-wise Instance F1\n(Consensus vs Noisy)",
     )
 
-    # Class confusion matrix (class overlap matrix)
+    # InstanceClsConf transition matrix among matched foreground objects.
     ax_cm = axes[3]
     im = ax_cm.imshow(overlap_matrix, cmap=HEATMAP_CMAP, vmin=0, vmax=1, aspect="equal")
     ax_cm.set_xticks(range(len(sorted_classes)))
@@ -488,7 +486,7 @@ def plot_requested_metrics_single_row(
     ax_cm.set_yticklabels([f"C{c}" for c in sorted_classes], fontsize=TICK_FONT_SIZE)
     ax_cm.set_xlabel("Noisy Classes", fontsize=BASE_FONT_SIZE)
     ax_cm.set_ylabel("Consensus Classes", fontsize=BASE_FONT_SIZE)
-    ax_cm.set_title("Class Confusion Matrix\n(Consensus vs Noisy)", fontsize=TITLE_FONT_SIZE, fontweight="bold")
+    ax_cm.set_title("InstanceClsConf Matrix\n(Consensus vs Noisy)", fontsize=TITLE_FONT_SIZE, fontweight="bold")
 
     for i in range(len(sorted_classes)):
         for j in range(len(sorted_classes)):
@@ -503,7 +501,7 @@ def plot_requested_metrics_single_row(
             )
 
     cbar = plt.colorbar(im, ax=ax_cm, fraction=0.046, pad=0.04)
-    cbar.set_label("Overlap", fontsize=BASE_FONT_SIZE)
+    cbar.set_label("Matched-instance fraction", fontsize=BASE_FONT_SIZE)
     cbar.ax.tick_params(labelsize=TICK_FONT_SIZE)
 
     plt.tight_layout()
@@ -520,7 +518,7 @@ def plot_core_metrics_single_row(
 ):
     """
     Create a single-row figure with 5 subplots:
-    Dice, NSD, HD95, delta V/V, and class confusion matrix.
+    Dice, NSD, HD95, delta V/V, and InstanceClsConf matrix.
 
     The total figure width is fixed so the row length is identical
     across datasets, independent of the number of classes.
@@ -582,7 +580,7 @@ def plot_core_metrics_single_row(
         "Per-Class ΔV / V",
     )
 
-    # Class confusion matrix (class overlap matrix)
+    # InstanceClsConf transition matrix among matched foreground objects.
     ax_cm = axes[4]
     im = ax_cm.imshow(overlap_matrix, cmap="YlOrRd", vmin=0, vmax=1, aspect="equal")
     ax_cm.set_xticks(range(len(sorted_classes)))
@@ -591,7 +589,7 @@ def plot_core_metrics_single_row(
     ax_cm.set_yticklabels([f"C{c}" for c in sorted_classes], fontsize=8)
     ax_cm.set_xlabel("Noisy Class", fontsize=9)
     ax_cm.set_ylabel("Clean Class", fontsize=9)
-    ax_cm.set_title("Class Confusion Matrix", fontsize=11, fontweight="bold")
+    ax_cm.set_title("InstanceClsConf Matrix", fontsize=11, fontweight="bold")
 
     for i in range(len(sorted_classes)):
         for j in range(len(sorted_classes)):
@@ -606,10 +604,10 @@ def plot_core_metrics_single_row(
             )
 
     cbar = plt.colorbar(im, ax=ax_cm, fraction=0.046, pad=0.04)
-    cbar.set_label("Overlap", fontsize=8)
+    cbar.set_label("Matched-instance fraction", fontsize=8)
 
     fig.suptitle(
-        "Core Per-Class Metrics + Class Confusion Matrix",
+        "Core Per-Class Metrics + InstanceClsConf Matrix",
         fontsize=14,
         fontweight="bold",
         y=1.02,
@@ -683,8 +681,8 @@ def main(args):
     os.makedirs(args.output_dir, exist_ok=True)
     
     # Extract overlap matrices
-    print("\nExtracting class overlap matrices...")
-    overlap_matrix, sorted_classes = extract_overlap_matrices(results)
+    print("\nExtracting InstanceClsConf transition matrices...")
+    overlap_matrix, sorted_classes = extract_instance_cls_conf_matrices(results)
     
     # Generate combined visualization
     print("Generating comprehensive per-class visualization...")

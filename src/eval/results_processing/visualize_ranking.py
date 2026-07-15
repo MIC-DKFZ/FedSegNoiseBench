@@ -50,9 +50,10 @@ SUPPORTED_METRICS = (
     "HD95",
     "InstanceF1",
     "FgBgInstanceF1",
-    "ClassConfusion",
+    "PixelClsConf",
+    "InstanceClsConf",
 )
-LOWER_IS_BETTER_METRICS = {"HD95", "ClassConfusion"}
+LOWER_IS_BETTER_METRICS = {"HD95", "PixelClsConf", "InstanceClsConf"}
 NOISE_LABELS = {
     "clean": "clean",
     "roa": "roa",
@@ -81,7 +82,8 @@ YLABEL_BY_METRIC = {
     "HD95": "Rank(HD95)",
     "InstanceF1": "Rank(F1)",
     "FgBgInstanceF1": "Rank(F1)",
-    "ClassConfusion": "Rank(ClsConf)",
+    "PixelClsConf": "Rank(PixClsConf)",
+    "InstanceClsConf": "Rank(InstClsConf)",
 }
 DEFAULT_NNUNET_RESULTS_ROOTS = [
     DEFAULT_NNUNET_RESULTS_ROOT,

@@ -14,7 +14,8 @@ except ImportError:
 ROWS = [
     ("Contour", "HD95", "HD95"),
     ("Instance", "F1", "FgBgInstanceF1"),
-    ("Confusion", "ClsConf", "ClassConfusion"),
+    ("Pixel confusion", "PixClsConf", "PixelClsConf"),
+    ("Instance confusion", "InstClsConf", "InstanceClsConf"),
     ("General", "Dice", "Dice"),
 ]
 SCENARIOS = ["clean", "roa", "roc", "noisy", "overall"]

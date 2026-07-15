@@ -23,6 +23,14 @@ from PIL import Image
 from scipy import ndimage
 from tqdm import tqdm
 
+try:
+    from .class_confusion_metrics import (
+        compute_instance_cls_conf,
+        compute_pixel_cls_conf,
+    )
+except ImportError:
+    from class_confusion_metrics import compute_instance_cls_conf, compute_pixel_cls_conf
+
 
 def compute_chunked_pairwise_distances(
     coords1: np.ndarray, coords2: np.ndarray, metric: str = "euclidean", chunk_size: int = 1000
@@ -405,7 +413,28 @@ def analyze_sample(
         },
         "per_class_metrics": {},
         "foreground_vs_background_metrics": {},
+        "class_confusion_metrics": {},
         "overall_metrics": {},
+    }
+
+    pixel_cls_conf = compute_pixel_cls_conf(
+        clean_mask,
+        noisy_mask,
+        foreground_classes=[int(c) for c in fg_classes],
+    )
+    instance_cls_conf = compute_instance_cls_conf(
+        clean_mask,
+        noisy_mask,
+        foreground_classes=[int(c) for c in fg_classes],
+        overlap_iou_threshold=instance_match_iou_threshold,
+    )
+    # Individual match records are useful while debugging but unnecessarily
+    # inflate the persisted analysis JSON. Counts and coverage fully document
+    # the score denominator.
+    instance_cls_conf.pop("matches", None)
+    results["class_confusion_metrics"] = {
+        "PixelClsConf": pixel_cls_conf,
+        "InstanceClsConf": instance_cls_conf,
     }
 
     # Per-class metrics
@@ -432,6 +461,15 @@ def analyze_sample(
             noisy_class_binary,
             overlap_iou_threshold=instance_match_iou_threshold,
         )
+        class_metrics["PixelClsConf"] = pixel_cls_conf["per_class"].get(
+            int(class_id)
+        )
+        class_metrics["InstanceClsConf"] = instance_cls_conf["per_class"].get(
+            int(class_id), {}
+        ).get("score")
+        class_metrics["InstanceClsConfCoverage"] = instance_cls_conf[
+            "per_class"
+        ].get(int(class_id), {}).get("coverage")
 
         # Connected components stats
         cc_clean = compute_connected_components_stats(clean_mask, class_id)
@@ -622,7 +660,19 @@ def main(args):
             )
             persisted_results = {}
 
-    processed_sample_ids = set(persisted_results.keys())
+    processed_sample_ids = {
+        sample_id
+        for sample_id, result in persisted_results.items()
+        if result.get("class_confusion_metrics", {})
+        .get("InstanceClsConf", {})
+        .get("transition_matrix") is not None
+    }
+    num_outdated = len(persisted_results) - len(processed_sample_ids)
+    if num_outdated:
+        print(
+            f"Recomputing {num_outdated} existing samples that predate "
+            "PixelClsConf/InstanceClsConf."
+        )
 
     # Process each dataset pair
     for client_idx, (clean_id, noisy_id) in enumerate(

@@ -161,7 +161,7 @@ for _, row in df.iterrows():
 plt.xlabel("Boundary disagreement (percentile of mean HD95 within dataset)")
 plt.ylabel("Missed/additional disagreement (percentile of |ΔV| and |ΔCC| within dataset)")
 cbar = plt.colorbar(sc)
-cbar.set_label("Swap / class-confusion (percentile of foreground-class transitions)")
+cbar.set_label("PixelClsConf (percentile of foreground-class transitions)")
 plt.title("Sample-level label-noise map: contour vs missed/additional vs swapped labels")
 plt.xlim(0, 1)
 plt.ylim(0, 1)

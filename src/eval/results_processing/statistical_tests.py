@@ -35,14 +35,19 @@ except ImportError:
 BASELINE = "FedAvg"
 METHODS = ["FedSelect", "IOP-FL", "FedCorr", "FedA3I"]
 LATEX_METHOD_ORDER = ["FedA3I", "IOP-FL", "FedCorr", "FedSelect"]
-DEFAULT_METRICS = ["Dice", "HD95", "FgBgInstanceF1", "ClassConfusion"]
+DEFAULT_METRICS = [
+    "Dice", "HD95", "FgBgInstanceF1", "PixelClsConf", "InstanceClsConf"
+]
 DEFAULT_OUTPUT = OUTPUT_DIR / "fnll_vs_fedavg_wilcoxon_holm.csv"
-LATEX_METRIC_ORDER = ["Dice", "HD95", "FgBgInstanceF1", "ClassConfusion"]
+LATEX_METRIC_ORDER = [
+    "Dice", "HD95", "FgBgInstanceF1", "PixelClsConf", "InstanceClsConf"
+]
 LATEX_METRIC_LABELS = {
     "Dice": "Dice",
     "HD95": "HD95",
     "FgBgInstanceF1": "F1",
-    "ClassConfusion": "ClsConf",
+    "PixelClsConf": "PixClsConf",
+    "InstanceClsConf": "InstClsConf",
 }
 LATEX_SCENARIO_ORDER = ["clean", "roa", "roc", "noisy", "ALL"]
 LATEX_SCOPES = {

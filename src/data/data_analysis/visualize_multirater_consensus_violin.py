@@ -1,12 +1,12 @@
 """
 Visualize per-class multi-rater consensus metrics as single-row violin plots.
 
-Creates one figure with 4 violin subplots plus 1 class-confusion heatmap:
+Creates one figure with 4 violin subplots plus 1 instance-confusion heatmap:
 - Fleiss' kappa (class-wise)
 - Mean Dice between consensus and raters (class-wise; averaged over raters)
 - Mean HD95 between consensus and raters (class-wise; averaged over raters)
 - Mean instance-level F1 between consensus and raters (class-wise)
-- Class Confusion consensus -> raters (averaged over raters and samples)
+- InstanceClsConf consensus -> raters (averaged over raters and samples)
 """
 
 import argparse
@@ -23,8 +23,10 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 try:
     from .analyze_multirater_consensus import load_mask
+    from .class_confusion_metrics import compute_instance_cls_conf
 except ImportError:
     from analyze_multirater_consensus import load_mask
+    from class_confusion_metrics import compute_instance_cls_conf
 
 
 # Fixed class palette (same ordering convention as existing per-class plots)
@@ -166,22 +168,30 @@ def infer_riga_mode(file_path: str) -> bool:
     return "riga" in lower_path and infer_file_ending(file_path) in {".png", ".tif", ".tiff"}
 
 
-def compute_class_confusion_matrix(
+def compute_instance_cls_conf_matrix(
     consensus_mask: np.ndarray, rater_mask: np.ndarray, classes: List[int]
 ) -> Dict[int, Dict[int, float]]:
-    """Compute a foreground-only class-transition matrix.
+    """Compute class transitions among matched foreground instances.
 
-    For a foreground source class, off-diagonal entries contain only the
-    fraction relabeled as another foreground class. The diagonal is the
-    complement of those foreground swaps, so foreground/background changes do
-    not affect this matrix. Background is retained for display as an identity
-    row/column: M[0, 0] = 1 and M[0, c] = M[c, 0] = 0.
+    Each foreground row is normalized over class-agnostically IoU-matched
+    consensus instances. Unmatched instances do not enter the matrix. Thus the
+    sum of its off-diagonal foreground entries is InstanceClsConf for that
+    source class. Background is retained for display as an identity row/column.
 
-    Rows for source classes absent from the consensus mask contain NaNs and are
-    ignored when matrices are averaged.
+    Rows without a matched consensus instance contain NaNs and are ignored when
+    matrices are averaged.
     """
     confusion_matrix: Dict[int, Dict[int, float]] = {}
     classes = sorted({int(class_id) for class_id in classes} | {0})
+    foreground_classes = [class_id for class_id in classes if class_id != 0]
+    result = compute_instance_cls_conf(
+        consensus_mask,
+        rater_mask,
+        foreground_classes=foreground_classes,
+        overlap_iou_threshold=0.1,
+    )
+    matches = result["matches"]
+
     for src_class in classes:
         confusion_matrix[int(src_class)] = {}
 
@@ -192,26 +202,25 @@ def compute_class_confusion_matrix(
                 )
             continue
 
-        consensus_class = consensus_mask == src_class
-        consensus_volume = np.sum(consensus_class)
-        if consensus_volume == 0:
+        class_matches = [
+            match for match in matches if match["reference_class"] == src_class
+        ]
+        if not class_matches:
             for dst_class in classes:
                 confusion_matrix[src_class][dst_class] = np.nan
             continue
 
-        foreground_swap_sum = 0.0
         for dst_class in classes:
             if dst_class == 0:
                 confusion_matrix[src_class][dst_class] = 0.0
-            elif dst_class != src_class:
-                rater_class = rater_mask == dst_class
-                swap_fraction = (
-                    np.sum(consensus_class & rater_class) / consensus_volume
+            else:
+                confusion_matrix[src_class][dst_class] = float(
+                    sum(
+                        match["prediction_class"] == dst_class
+                        for match in class_matches
+                    )
+                    / len(class_matches)
                 )
-                confusion_matrix[src_class][dst_class] = float(swap_fraction)
-                foreground_swap_sum += float(swap_fraction)
-
-        confusion_matrix[src_class][src_class] = float(1.0 - foreground_swap_sum)
 
     return confusion_matrix
 
@@ -251,7 +260,7 @@ def extract_avg_confusion_matrix(results: Dict) -> Tuple[np.ndarray, List[int]]:
             )
             all_classes.update(int(c) for c in classes)
             per_rater_matrices.append(
-                compute_class_confusion_matrix(consensus_mask, rater_mask, classes)
+                compute_instance_cls_conf_matrix(consensus_mask, rater_mask, classes)
             )
 
         if not per_rater_matrices:
@@ -447,7 +456,7 @@ def plot_multirater_consensus_violin_row(
             fontsize=BASE_FONT_SIZE,
         )
         # ax_cm.set_title(
-        #     "Class Confusion (C vs R)",
+        #     "InstanceClsConf (C vs R)",
         #     fontsize=TITLE_FONT_SIZE,
         #     # fontweight="bold",
         # )
@@ -456,17 +465,17 @@ def plot_multirater_consensus_violin_row(
     else:
         im = ax_cm.imshow(confusion_matrix, cmap=HEATMAP_CMAP, vmin=0.0, vmax=1.0)
         # ax_cm.set_title(
-        #     "Class Confusion (C vs R)",
+        #     "InstanceClsConf (C vs R)",
         #     fontsize=TITLE_FONT_SIZE,
         #     # fontweight="bold",
         # )
         ax_cm.set_xticks(range(len(confusion_classes)))
         ax_cm.set_yticks(range(len(confusion_classes)))
         ax_cm.set_xticklabels(
-            [f"R Cls {c}" for c in confusion_classes], fontsize=TICK_FONT_SIZE-10,
+            [f"R Cls {c}" for c in confusion_classes], fontsize=TICK_FONT_SIZE,
         )
         ax_cm.set_yticklabels(
-            [f"C Cls {c}" for c in confusion_classes], fontsize=TICK_FONT_SIZE-10,
+            [f"C Cls {c}" for c in confusion_classes], fontsize=TICK_FONT_SIZE,
         )
         plt.setp(
             ax_cm.get_yticklabels(),
@@ -521,7 +530,7 @@ def _add_confusion_heatmap_subplot(
     confusion_classes: List[int],
     add_colorbar: bool = True,
 ):
-    """Add the class confusion heatmap subplot."""
+    """Add the InstanceClsConf heatmap subplot."""
     if confusion_matrix.size == 0:
         ax.text(
             0.5,
@@ -533,7 +542,7 @@ def _add_confusion_heatmap_subplot(
             fontsize=BASE_FONT_SIZE,
         )
         # ax.set_title(
-        #     "Class Confusion (C vs R)",
+        #     "InstanceClsConf (C vs R)",
         #     fontsize=TITLE_FONT_SIZE,
         #     # fontweight="bold",
         # )
@@ -543,17 +552,17 @@ def _add_confusion_heatmap_subplot(
 
     im = ax.imshow(confusion_matrix, cmap=HEATMAP_CMAP, vmin=0.0, vmax=1.0)
     # ax.set_title(
-    #     "Class Confusion (C vs R)",
+    #     "InstanceClsConf (C vs R)",
     #     fontsize=TITLE_FONT_SIZE,
     #     # fontweight="bold",
     # )
     ax.set_xticks(range(len(confusion_classes)))
     ax.set_yticks(range(len(confusion_classes)))
     ax.set_xticklabels(
-        [f"R Cls {c}" for c in confusion_classes], fontsize=TICK_FONT_SIZE-10
+        [f"R Cls {c}" for c in confusion_classes], fontsize=TICK_FONT_SIZE
     )
     ax.set_yticklabels(
-        [f"C Cls {c}" for c in confusion_classes], fontsize=TICK_FONT_SIZE-10
+        [f"C Cls {c}" for c in confusion_classes], fontsize=TICK_FONT_SIZE
     )
     plt.setp(
         ax.get_yticklabels(),
@@ -590,7 +599,7 @@ def _add_confusion_heatmap_subplot(
 def _style_confusion_colorbar(cbar) -> None:
     """Apply consistent, compact formatting to a confusion-matrix colorbar."""
     cbar.set_label(
-        "FG Class Confusion (C vs R)",
+        "InstanceClsConf\n(C vs R)",
         fontsize=CONFUSION_COLORBAR_LABEL_SIZE,
         labelpad=10,
     )

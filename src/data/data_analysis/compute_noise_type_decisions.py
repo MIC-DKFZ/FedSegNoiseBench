@@ -2,11 +2,14 @@
 Compute per-sample noise-type decisions from noise-analysis JSON files.
 
 The script consumes the JSON files produced by analyze_noise_clean_noisy.py and
-marks each sample as clean/noisy with respect to three noise-sensitive metrics:
+marks each sample as clean/noisy with respect to three selected noise metrics:
 
 - contour noise: HD95 > threshold * median object diagonal for the dataset
 - instance noise: foreground-vs-background instance F1 < threshold
-- class-confusion noise: class-confusion score > configured threshold(s)
+- instance class-confusion noise: InstanceClsConf > configured threshold(s)
+
+PixelClsConf is retained as a diagnostic but does not contribute to the
+combined ``any_noise`` assignment.
 
 Dataset median object diagonals are measured from the clean/expert masks with
 compute_clean_object_diagonals.py and set below.
@@ -30,9 +33,10 @@ import numpy as np
 
 DEFAULT_INPUT = "./results/noise_analysis/noise_analysis_results_*.json"
 DEFAULT_OUTPUT_DIR = "./results/noise_analysis/noise_type_decisions"
-DEFAULT_CONTOUR_FRACTIONS = (0.01, 0.05, 0.1)
-DEFAULT_INSTANCE_F1_THRESHOLDS = (0.9, 0.99, 1.0)
-DEFAULT_CONFUSION_THRESHOLDS = (0.01, 0.05, 0.1)
+DEFAULT_CONTOUR_FRACTIONS = (0.05,)
+DEFAULT_INSTANCE_F1_THRESHOLDS = (1.0,)
+DEFAULT_PIXEL_CLS_CONF_THRESHOLDS = (0.05,)
+DEFAULT_INSTANCE_CLS_CONF_THRESHOLDS = (0.0,)
 
 DATASET_BY_CLEAN_IDS = {
     "041": "LIDC",
@@ -100,7 +104,9 @@ def dataset_from_entry(entry: dict[str, Any], source_path: Path) -> str:
     return source_path.stem
 
 
-def compute_confusion_score(overlap_matrix: dict[str, Any], fg_classes: list[int]) -> float | None:
+def compute_pixel_cls_conf_from_overlap(
+    overlap_matrix: dict[str, Any], fg_classes: list[int]
+) -> float | None:
     """
     Compute foreground-to-foreground class confusion from an overlap matrix.
 
@@ -109,12 +115,13 @@ def compute_confusion_score(overlap_matrix: dict[str, Any], fg_classes: list[int
     that are present in the sample. Transitions involving background are
     excluded in both directions.
 
-    The score is undefined for datasets with fewer than two foreground classes.
+    This is retained as a compatibility fallback for analysis JSON files made
+    before PixelClsConf was persisted explicitly.
     """
     foreground_classes = sorted(
         {int(class_id) for class_id in fg_classes if int(class_id) != 0}
     )
-    if len(foreground_classes) < 2:
+    if not foreground_classes:
         return None
 
     per_source_confusion = []
@@ -135,6 +142,31 @@ def compute_confusion_score(overlap_matrix: dict[str, Any], fg_classes: list[int
         per_source_confusion.append(confusion)
 
     return float(np.mean(per_source_confusion)) if per_source_confusion else None
+
+
+def sample_cls_conf(
+    entry: dict[str, Any], metric_name: str, fg_classes: list[int]
+) -> float | None:
+    value = to_float_or_none(
+        entry.get("class_confusion_metrics", {})
+        .get(metric_name, {})
+        .get("score")
+    )
+    if value is not None:
+        return value
+    if metric_name == "PixelClsConf":
+        return compute_pixel_cls_conf_from_overlap(
+            entry.get("class_overlap_matrix", {}), fg_classes
+        )
+    return None
+
+
+def sample_instance_cls_conf_coverage(entry: dict[str, Any]) -> float | None:
+    return to_float_or_none(
+        entry.get("class_confusion_metrics", {})
+        .get("InstanceClsConf", {})
+        .get("coverage")
+    )
 
 
 def sample_hd95(entry: dict[str, Any]) -> float | None:
@@ -187,7 +219,8 @@ def compute_decisions(
     json_files: list[Path],
     contour_fractions: list[float],
     instance_f1_thresholds: list[float],
-    confusion_thresholds: list[float],
+    pixel_cls_conf_thresholds: list[float],
+    instance_cls_conf_thresholds: list[float],
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     entries = []
 
@@ -222,7 +255,8 @@ def compute_decisions(
                 for fraction in contour_fractions
             },
             "instance_fgbg_f1_thresholds": instance_f1_thresholds,
-            "confusion_thresholds": confusion_thresholds,
+            "pixel_cls_conf_thresholds": pixel_cls_conf_thresholds,
+            "instance_cls_conf_thresholds": instance_cls_conf_thresholds,
             "class_confusion_foreground_classes": sorted(
                 foreground_classes_by_dataset[dataset]
             ),
@@ -233,10 +267,11 @@ def compute_decisions(
         hd95_value = sample_hd95(entry)
         instance_f1_value = sample_instance_f1(entry)
         fg_classes = sorted(foreground_classes_by_dataset[dataset])
-        confusion_value = compute_confusion_score(
-            entry.get("class_overlap_matrix", {}),
-            fg_classes,
+        pixel_cls_conf_value = sample_cls_conf(entry, "PixelClsConf", fg_classes)
+        instance_cls_conf_value = sample_cls_conf(
+            entry, "InstanceClsConf", fg_classes
         )
+        instance_cls_conf_coverage = sample_instance_cls_conf_coverage(entry)
 
         row = {
             "dataset": dataset,
@@ -247,7 +282,9 @@ def compute_decisions(
             "noisy_dataset_id": entry.get("noisy_dataset_id"),
             "hd95_value": hd95_value,
             "instance_fgbg_f1_value": instance_f1_value,
-            "class_confusion_value": confusion_value,
+            "pixel_cls_conf_value": pixel_cls_conf_value,
+            "instance_cls_conf_value": instance_cls_conf_value,
+            "instance_cls_conf_coverage": instance_cls_conf_coverage,
             "any_noise": False,
         }
 
@@ -271,9 +308,20 @@ def compute_decisions(
             row[decision_key] = noisy
             row["any_noise"] = row["any_noise"] or noisy
 
-        for threshold in confusion_thresholds:
-            key = decision_column("class_confusion_noisy", "gt", threshold)
-            noisy = confusion_value is not None and confusion_value > threshold
+        for threshold in pixel_cls_conf_thresholds:
+            key = decision_column("pixel_cls_conf_noisy", "gt", threshold)
+            noisy = (
+                pixel_cls_conf_value is not None
+                and pixel_cls_conf_value > threshold
+            )
+            row[key] = noisy
+
+        for threshold in instance_cls_conf_thresholds:
+            key = decision_column("instance_cls_conf_noisy", "gt", threshold)
+            noisy = (
+                instance_cls_conf_value is not None
+                and instance_cls_conf_value > threshold
+            )
             row[key] = noisy
             row["any_noise"] = row["any_noise"] or noisy
 
@@ -283,10 +331,21 @@ def compute_decisions(
         "thresholds_by_dataset": thresholds,
         "contour_fraction_thresholds": contour_fractions,
         "instance_fgbg_f1_thresholds": instance_f1_thresholds,
-        "confusion_thresholds": confusion_thresholds,
-        "class_confusion_definition": (
+        "pixel_cls_conf_thresholds": pixel_cls_conf_thresholds,
+        "instance_cls_conf_thresholds": instance_cls_conf_thresholds,
+        "pixel_cls_conf_definition": (
             "Macro-average over present clean foreground classes of the fraction "
-            "assigned to other foreground classes; background transitions excluded."
+            "assigned to other foreground classes; background transitions excluded. "
+            "Diagnostic only and excluded from any_noise."
+        ),
+        "instance_cls_conf_definition": (
+            "Fraction of class-agnostically IoU-matched foreground instance pairs "
+            "whose class labels differ; unmatched instances are excluded."
+        ),
+        "instance_cls_conf_coverage_definition": (
+            "Matched clean/reference foreground instances divided by all clean/"
+            "reference foreground instances. Diagnostic only; not part of "
+            "InstanceClsConf and not thresholded as a noise type."
         ),
         "summaries_by_dataset": {},
         "summary_all": {},
@@ -312,15 +371,18 @@ def compute_decisions(
                 "instance_fgbg_f1_value",
                 decision_key,
             )
-        for threshold in confusion_thresholds:
-            decision_key = decision_column("class_confusion_noisy", "gt", threshold)
-            dataset_summary[f"class_confusion_gt_{threshold:g}"] = {
-                **metric_summary(
-                    dataset_rows,
-                    "class_confusion_value",
-                    decision_key,
-                ),
-            }
+        for threshold in pixel_cls_conf_thresholds:
+            decision_key = decision_column("pixel_cls_conf_noisy", "gt", threshold)
+            dataset_summary[f"pixel_cls_conf_gt_{threshold:g}"] = metric_summary(
+                dataset_rows, "pixel_cls_conf_value", decision_key
+            )
+        for threshold in instance_cls_conf_thresholds:
+            decision_key = decision_column(
+                "instance_cls_conf_noisy", "gt", threshold
+            )
+            dataset_summary[f"instance_cls_conf_gt_{threshold:g}"] = metric_summary(
+                dataset_rows, "instance_cls_conf_value", decision_key
+            )
         metadata["summaries_by_dataset"][dataset] = dataset_summary
 
     all_rows = rows
@@ -338,15 +400,16 @@ def compute_decisions(
             "instance_fgbg_f1_value",
             decision_key,
         )
-    for threshold in confusion_thresholds:
-        decision_key = decision_column("class_confusion_noisy", "gt", threshold)
-        metadata["summary_all"][f"class_confusion_gt_{threshold:g}"] = {
-            **metric_summary(
-                all_rows,
-                "class_confusion_value",
-                decision_key,
-            ),
-        }
+    for threshold in pixel_cls_conf_thresholds:
+        decision_key = decision_column("pixel_cls_conf_noisy", "gt", threshold)
+        metadata["summary_all"][f"pixel_cls_conf_gt_{threshold:g}"] = metric_summary(
+            all_rows, "pixel_cls_conf_value", decision_key
+        )
+    for threshold in instance_cls_conf_thresholds:
+        decision_key = decision_column("instance_cls_conf_noisy", "gt", threshold)
+        metadata["summary_all"][f"instance_cls_conf_gt_{threshold:g}"] = metric_summary(
+            all_rows, "instance_cls_conf_value", decision_key
+        )
 
     return rows, metadata
 
@@ -395,11 +458,18 @@ def main() -> None:
         help="Instance fg-bg F1 values below each threshold are marked noisy.",
     )
     parser.add_argument(
-        "--confusion-thresholds",
+        "--pixel-cls-conf-thresholds",
         nargs="+",
         type=float,
-        default=list(DEFAULT_CONFUSION_THRESHOLDS),
-        help="Class-confusion thresholds; values above each threshold are marked noisy.",
+        default=list(DEFAULT_PIXEL_CLS_CONF_THRESHOLDS),
+        help="PixelClsConf thresholds; values above each threshold are marked noisy.",
+    )
+    parser.add_argument(
+        "--instance-cls-conf-thresholds",
+        nargs="+",
+        type=float,
+        default=list(DEFAULT_INSTANCE_CLS_CONF_THRESHOLDS),
+        help="InstanceClsConf thresholds; values above each threshold are marked noisy.",
     )
     args = parser.parse_args()
 
@@ -411,7 +481,8 @@ def main() -> None:
         json_files=json_files,
         contour_fractions=args.contour_fractions,
         instance_f1_thresholds=args.instance_f1_thresholds,
-        confusion_thresholds=args.confusion_thresholds,
+        pixel_cls_conf_thresholds=args.pixel_cls_conf_thresholds,
+        instance_cls_conf_thresholds=args.instance_cls_conf_thresholds,
     )
 
     output_dir = Path(args.output_dir)
@@ -435,6 +506,16 @@ def main() -> None:
             prevalence = summary[key]["prevalence_valid"]
             value = "n/a" if prevalence is None else f"{prevalence:.3f}"
             parts.append(f"instance<{threshold:g}={value}")
+        for threshold in args.pixel_cls_conf_thresholds:
+            key = f"pixel_cls_conf_gt_{threshold:g}"
+            prevalence = summary[key]["prevalence_valid"]
+            value = "n/a" if prevalence is None else f"{prevalence:.3f}"
+            parts.append(f"PixelClsConf>{threshold:g}={value}")
+        for threshold in args.instance_cls_conf_thresholds:
+            key = f"instance_cls_conf_gt_{threshold:g}"
+            prevalence = summary[key]["prevalence_valid"]
+            value = "n/a" if prevalence is None else f"{prevalence:.3f}"
+            parts.append(f"InstanceClsConf>{threshold:g}={value}")
         print(f"{dataset}: " + ", ".join(parts))
 
 

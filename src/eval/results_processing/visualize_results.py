@@ -91,15 +91,19 @@ SUPPORTED_CLASSWISE_METRICS = (
     "HD95",
     "InstanceF1",
     "FgBgInstanceF1",
-    "ClassConfusion",
+    "PixelClsConf",
+    "InstanceClsConf",
+    "InstanceClsConfCoverage",
 )
 BOUNDED_ZERO_ONE_METRICS = {
     "Dice",
     "InstanceF1",
     "FgBgInstanceF1",
-    "ClassConfusion",
+    "PixelClsConf",
+    "InstanceClsConf",
+    "InstanceClsConfCoverage",
 }
-LOWER_IS_BETTER_METRICS = {"HD95", "ClassConfusion"}
+LOWER_IS_BETTER_METRICS = {"HD95", "PixelClsConf", "InstanceClsConf"}
 BOXPLOT_TITLE_FONTSIZE = 16
 BOXPLOT_LABEL_FONTSIZE = 14
 BOXPLOT_TICK_FONTSIZE = 14
@@ -247,7 +251,10 @@ def metric_higher_is_better(metric_name: str) -> bool:
 
 
 def metric_display_params(metric_name: str) -> tuple[float, int]:
-    if metric_name in {"Dice", "InstanceF1", "FgBgInstanceF1", "ClassConfusion"}:
+    if metric_name in {
+        "Dice", "InstanceF1", "FgBgInstanceF1", "PixelClsConf",
+        "InstanceClsConf", "InstanceClsConfCoverage",
+    }:
         return 100.0, 1
     if metric_name == "HD95":
         return 1.0, 1
@@ -522,15 +529,21 @@ def metric_axis_label(metric_name: str) -> str:
         return "fg-bg Instance F1"
     if metric_name == "HD95":
         return "HD95 [mm]"
-    if metric_name == "ClassConfusion":
-        return "Class Confusion"
+    if metric_name == "PixelClsConf":
+        return "PixelClsConf"
+    if metric_name == "InstanceClsConf":
+        return "InstanceClsConf"
+    if metric_name == "InstanceClsConfCoverage":
+        return "InstanceClsConf coverage"
     return metric_name
 
 
 def boxplot_legend_location() -> str:
     return (
         "upper right"
-        if classwise_metric in {"HD95", "ClassConfusion", "FgBgInstanceF1"}
+        if classwise_metric in {
+            "HD95", "PixelClsConf", "InstanceClsConf", "FgBgInstanceF1"
+        }
         else "lower right"
     )
 

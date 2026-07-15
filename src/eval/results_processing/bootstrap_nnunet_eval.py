@@ -21,7 +21,19 @@ def _load_existing_bootstrap_results(results_file: Path) -> Dict:
     if not results_file.is_file():
         return {}
     with open(results_file, "r") as f:
-        return json.load(f)
+        results = json.load(f)
+
+    # The former ClassConfusion metric was PixelClsConf under an ambiguous
+    # name. Drop it so an incremental run computes both explicit replacements
+    # and does not retain a stale legacy metric beside them.
+    for label_key, metrics in results.items():
+        if label_key == "stats" or not isinstance(metrics, dict):
+            continue
+        metrics.pop("ClassConfusion", None)
+    for metrics in results.get("stats", {}).values():
+        if isinstance(metrics, dict):
+            metrics.pop("ClassConfusion", None)
+    return results
 
 
 def _metric_vector_is_complete(

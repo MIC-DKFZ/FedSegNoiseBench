@@ -26,6 +26,14 @@ from PIL import Image
 from scipy import ndimage
 from tqdm import tqdm
 
+try:
+	from .class_confusion_metrics import (
+		compute_instance_cls_conf,
+		compute_pixel_cls_conf,
+	)
+except ImportError:
+	from class_confusion_metrics import compute_instance_cls_conf, compute_pixel_cls_conf
+
 
 def compute_chunked_pairwise_distances(
 	coords1: np.ndarray,
@@ -676,8 +684,27 @@ def analyze_sample(
 			],
 		},
 		"per_class_metrics": {},
+		"class_confusion_metrics": {"consensus_vs_raters": {}},
 		"overall_metrics": {},
 	}
+
+	for r_id in rater_ids:
+		pixel_cls_conf = compute_pixel_cls_conf(
+			consensus_mask,
+			rater_masks[r_id],
+			foreground_classes=fg_classes,
+		)
+		instance_cls_conf = compute_instance_cls_conf(
+			consensus_mask,
+			rater_masks[r_id],
+			foreground_classes=fg_classes,
+			overlap_iou_threshold=instance_match_iou_threshold,
+		)
+		instance_cls_conf.pop("matches", None)
+		results["class_confusion_metrics"]["consensus_vs_raters"][r_id] = {
+			"PixelClsConf": pixel_cls_conf,
+			"InstanceClsConf": instance_cls_conf,
+		}
 
 	for class_id in fg_classes:
 		consensus_binary = consensus_mask == class_id
@@ -721,6 +748,19 @@ def analyze_sample(
 				"hd95": hd95,
 				"voxel_level_prf": voxel_prf,
 				"instance_level_prf": instance_prf,
+				"PixelClsConf": results["class_confusion_metrics"][
+					"consensus_vs_raters"
+				][r_id]["PixelClsConf"]["per_class"].get(int(class_id)),
+				"InstanceClsConf": results["class_confusion_metrics"][
+					"consensus_vs_raters"
+				][r_id]["InstanceClsConf"]["per_class"].get(
+					int(class_id), {}
+				).get("score"),
+				"InstanceClsConfCoverage": results["class_confusion_metrics"][
+					"consensus_vs_raters"
+				][r_id]["InstanceClsConf"]["per_class"].get(
+					int(class_id), {}
+				).get("coverage"),
 				"volume_rater": int(np.sum(rater_binary)),
 			}
 
@@ -766,6 +806,31 @@ def analyze_sample(
 		) = _nanmean_std(instance_f1_values)
 
 		results["per_class_metrics"][int(class_id)] = class_metrics
+
+	pixel_scores = [
+		metrics["PixelClsConf"]["score"]
+		for metrics in results["class_confusion_metrics"]["consensus_vs_raters"].values()
+		if metrics["PixelClsConf"]["score"] is not None
+	]
+	instance_scores = [
+		metrics["InstanceClsConf"]["score"]
+		for metrics in results["class_confusion_metrics"]["consensus_vs_raters"].values()
+		if metrics["InstanceClsConf"]["score"] is not None
+	]
+	instance_coverages = [
+		metrics["InstanceClsConf"]["coverage"]
+		for metrics in results["class_confusion_metrics"]["consensus_vs_raters"].values()
+		if metrics["InstanceClsConf"]["coverage"] is not None
+	]
+	results["class_confusion_metrics"]["mean_PixelClsConf"] = (
+		float(np.mean(pixel_scores)) if pixel_scores else None
+	)
+	results["class_confusion_metrics"]["mean_InstanceClsConf"] = (
+		float(np.mean(instance_scores)) if instance_scores else None
+	)
+	results["class_confusion_metrics"]["mean_InstanceClsConfCoverage"] = (
+		float(np.mean(instance_coverages)) if instance_coverages else None
+	)
 
 	if fg_classes:
 		valid_fleiss = [
@@ -1235,7 +1300,24 @@ def main(args):
 			)
 			persisted_results = {}
 
-	processed_sample_ids = set(persisted_results.keys())
+	processed_sample_ids = {
+		sample_id
+		for sample_id, result in persisted_results.items()
+		if result.get("class_confusion_metrics", {})
+		.get("consensus_vs_raters", {})
+		and all(
+			metrics.get("InstanceClsConf", {}).get("transition_matrix") is not None
+			for metrics in result["class_confusion_metrics"][
+				"consensus_vs_raters"
+			].values()
+		)
+	}
+	num_outdated = len(persisted_results) - len(processed_sample_ids)
+	if num_outdated:
+		print(
+			f"Recomputing {num_outdated} existing samples that predate "
+			"PixelClsConf/InstanceClsConf."
+		)
 	all_results = dict(persisted_results)
 
 	n_processed_now = 0

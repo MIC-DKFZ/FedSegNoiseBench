@@ -318,11 +318,26 @@ Then visualize the resulting agreement and error metrics:
 ```bash
 python3 ./src/data/data_analysis/visualize_multirater_consensus_violin.py \
     --input_json ./results/consensus_analysis/<YOUR-DATASET>/multirater_consensus.json \
-    --output_png ./results/consensus_analysis/<YOUR-DATASET>/fk_dice_hd95_if1_clsconf.png
+    --output_png ./results/consensus_analysis/<YOUR-DATASET>/fk_dice_hd95_if1_instance_clsconf.png
 ```
 
 The visualization covers class-wise Fleiss' kappa, Dice, HD95, instance-level
-F1, and class-confusion statistics against the consensus mask, to quantify rater variability, volume-based label alignment, and the three segmentation label noise types contour variations, missed/additional target structures, confused class labels of target structures.
+F1, and instance class-confusion statistics against the consensus mask.
+
+Class confusion is reported with two explicit definitions throughout the data
+analysis, nnU-Net evaluation, and bootstrap outputs:
+
+- `PixelClsConf` is the fraction of reference pixels of a foreground class that
+  changed to a different foreground class. Foreground/background transitions
+  are excluded.
+- `InstanceClsConf` first extracts connected components separately per
+  foreground class, matches reference and prediction instances one-to-one by
+  descending IoU (default threshold `0.1`) without using their class labels,
+  and then reports the fraction of matched pairs with different class labels.
+  Unmatched instances do not enter this score.
+- `InstanceClsConfCoverage` is stored only as a diagnostic: matched reference
+  instances divided by all reference instances. It is not part of
+  `InstanceClsConf` and is not used as a noise-type decision score.
 
 ##### Quantification of label noise
 
@@ -495,7 +510,7 @@ Force recomputation of specific metrics only:
 ```bash
 python3 ./src/eval/results_processing/bootstrap_parent.py \
     --folds 0 1 2 \
-    --force-metrics HD95 Dice \
+    --force-metrics PixelClsConf InstanceClsConf InstanceClsConfCoverage \
     --num-workers 8
 ```
 
@@ -541,13 +556,14 @@ reported group:
 
 ```bash
 python3 ./src/eval/results_processing/statistical_tests.py \
-    --metrics Dice HD95 FgBgInstanceF1 ClassConfusion \
+    --metrics Dice HD95 FgBgInstanceF1 PixelClsConf InstanceClsConf \
     --noise-scenarios clean roa roc noisy \
     --datasets LIDC RIGA Gleason MouseTumor MMIA MMIS \
     --datasets-for-metric Dice=LIDC,RIGA,Gleason,MouseTumor,MMIA,MMIS \
     --datasets-for-metric HD95=LIDC,RIGA,Gleason,MouseTumor,MMIA,MMIS \
     --datasets-for-metric FgBgInstanceF1=LIDC,RIGA,Gleason,MouseTumor,MMIA,MMIS \
-    --datasets-for-metric ClassConfusion=LIDC,RIGA,Gleason,MouseTumor,MMIA,MMIS
+    --datasets-for-metric PixelClsConf=LIDC,RIGA,Gleason,MouseTumor,MMIA,MMIS \
+    --datasets-for-metric InstanceClsConf=LIDC,RIGA,Gleason,MouseTumor,MMIA,MMIS
 ```
 
 #### Compile decision guide from ranking stability

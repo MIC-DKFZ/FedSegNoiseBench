@@ -2,7 +2,7 @@
 
 try:
     from .visualize_hd95_f1_confusion import (
-        compute_confusion_score,
+        compute_pixel_cls_conf_score,
         is_finite_number,
         load_hd95_f1_confusion_dataframe,
         main,
@@ -12,7 +12,7 @@ try:
     )
 except ImportError:
     from visualize_hd95_f1_confusion import (
-        compute_confusion_score,
+        compute_pixel_cls_conf_score,
         is_finite_number,
         load_hd95_f1_confusion_dataframe,
         main,
