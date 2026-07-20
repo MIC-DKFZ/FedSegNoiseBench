@@ -2,7 +2,7 @@
 Visualize HD95 vs fg-bg F1 with InstanceClsConf on the color axis.
 
 Single plot with:
-- X-axis: HD95 in its original millimetre values
+- X-axis: HD95 in native units (px for RIGA/Gleason, mm otherwise)
 - Y-axis: F1 score (foreground-vs-background)
 - Color: instance class-confusion score (foreground object relabeling)
 """
@@ -46,6 +46,7 @@ DEFAULT_INSTANCE_F1_THRESHOLD = 1.0
 DEFAULT_INSTANCE_CLS_CONF_THRESHOLD = 0.0
 THRESHOLD_LINE_COLOR = "#b8b8b8"
 THRESHOLD_LINE_WIDTH = 1.8
+PIXEL_HD95_DATASETS = {"RIGA", "Gleason"}
 
 
 def is_finite_number(value) -> bool:
@@ -231,7 +232,7 @@ def plot_hd95_vs_f1_confusion(
 ):
     """
     Create a single 2D scatter plot with:
-    - X: HD95 in millimetres
+    - X: HD95 in native dataset units
     - Y: F1 score (fg-vs-bg)
     - Color: InstanceClsConf (wrong foreground label among matched objects)
     - Optional: sample_id labels next to each point
@@ -258,6 +259,14 @@ def plot_hd95_vs_f1_confusion(
 
     if max_points is not None and max_points > 0:
         valid_data = valid_data.head(max_points).copy()
+
+    plotted_datasets = set(valid_data["dataset"].dropna().astype(str))
+    if plotted_datasets and plotted_datasets <= PIXEL_HD95_DATASETS:
+        hd95_unit_label = "px"
+    elif plotted_datasets and plotted_datasets.isdisjoint(PIXEL_HD95_DATASETS):
+        hd95_unit_label = "mm"
+    else:
+        hd95_unit_label = "native units (px/mm)"
 
     print(f"Plotting {len(valid_data)} samples")
 
@@ -398,7 +407,7 @@ def plot_hd95_vs_f1_confusion(
         f"{format_percent(cls_noisy, 'Confusion' in largest_noise_types)}"
     )
     ax.set_xlabel(
-        "HD95 [mm]", fontsize=BASE_FONT_SIZE
+        f"HD95 [{hd95_unit_label}]", fontsize=BASE_FONT_SIZE
     )
     ax.set_ylabel(y_axis_label, fontsize=BASE_FONT_SIZE)
     label_suffix = " with labels" if add_labels else ""
@@ -460,7 +469,8 @@ def plot_hd95_vs_f1_confusion(
     print(f"  Total samples: {len(valid_data)}")
     print(f"  Multiclass: {len(multiclass_all)}, Binary: {len(binary_data)}")
     print(
-        f"  HD95 range (x-axis): [{valid_data[x_col].min():.3f}, {valid_data[x_col].max():.3f}] mm"
+        f"  HD95 range (x-axis): [{valid_data[x_col].min():.3f}, "
+        f"{valid_data[x_col].max():.3f}] {hd95_unit_label}"
     )
     print(
         f"  F1 score range (y-axis): [{valid_data[y_col].min():.3f}, {valid_data[y_col].max():.3f}]"

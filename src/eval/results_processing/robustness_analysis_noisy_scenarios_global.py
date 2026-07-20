@@ -1640,19 +1640,21 @@ def plot_separate_scenarios_side_by_side(
     #     y=0.985,
     # )
 
-    fig.tight_layout(rect=[0.02, 0.03, 0.905, 0.93])
+    # Keep the original outer figure dimensions, but use the horizontal space
+    # previously reserved for the right-side legend for wider data panels.
+    fig.tight_layout(rect=[0.02, 0.03, 0.985, 0.88])
     if legend_handles is not None:
         dataset_handles, mean_handle, bootstrap_handle = legend_handles
-        right_ax_pos = axes[-1].get_position()
         fig.legend(
             handles=dataset_handles,  # + [mean_handle, bootstrap_handle],
-            loc="upper left",
-            bbox_to_anchor=(right_ax_pos.x1 + 0.006, right_ax_pos.y1),
+            loc="upper center",
+            bbox_to_anchor=(0.5, 0.985),
             bbox_transform=fig.transFigure,
             borderaxespad=0.0,
             framealpha=0.95,
             fontsize=SEPARATE_DOT_LEGEND_SIZE,
             title_fontsize=SEPARATE_DOT_LEGEND_SIZE,
+            ncol=len(dataset_handles),
         )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)

@@ -24,6 +24,7 @@ metric_col = "Mean(D_val)"
 
 target_algos = ["FedAvg", "FedA3I", "IOP-FL", "FedCorr", "FedSelect"]
 target_datasets = ["LIDC", "RIGA", "Gleason", "MouseTumor", "MMIS", "MMIA"]
+PIXEL_HD95_DATASETS = {"RIGA", "Gleason"}
 noise_order = ["0", "roa(p)", "roc(p)", "100"]  # plotting order
 
 # Include only results from these folds (fold numbers: 0, 1, 2, 3, 4)
@@ -524,11 +525,21 @@ def _plot_scenario_label(scenario_name: str) -> str:
     return PLOT_SCENARIO_LABELS.get(scenario_name, scenario_name)
 
 
-def metric_axis_label(metric_name: str) -> str:
+def hd95_unit_label(dataset_names=None) -> str:
+    """Return the correct HD95 unit label for the represented datasets."""
+    represented = set(target_datasets if dataset_names is None else dataset_names)
+    if represented and represented <= PIXEL_HD95_DATASETS:
+        return "px"
+    if represented and represented.isdisjoint(PIXEL_HD95_DATASETS):
+        return "mm"
+    return "mm/px; dataset-specific"
+
+
+def metric_axis_label(metric_name: str, dataset_names=None) -> str:
     if metric_name == "FgBgInstanceF1":
         return "fg-bg Instance F1"
     if metric_name == "HD95":
-        return "HD95 [mm]"
+        return f"HD95 [{hd95_unit_label(dataset_names)}]"
     if metric_name == "PixelClsConf":
         return "PixelClsConf"
     if metric_name == "InstanceClsConf":
@@ -760,6 +771,7 @@ def _draw_clean_roa_roc_noisy_boxplot_payload(
     show_ylabel: bool = True,
     y_limits: tuple[float, float] | None = None,
     legend_location: str | None = None,
+    dataset_names=None,
 ):
     positions = payload["positions"]
     box_data = payload["box_data"]
@@ -831,7 +843,7 @@ def _draw_clean_roa_roc_noisy_boxplot_payload(
     )
     if show_ylabel:
         ax.set_ylabel(
-            metric_axis_label(classwise_metric),
+            metric_axis_label(classwise_metric, dataset_names),
             fontsize=BOXPLOT_LABEL_FONTSIZE,
         )
     xmin = min(positions) - bplot_width
@@ -1124,7 +1136,7 @@ def plot_algorithm(df_all: pd.DataFrame, algo_name: str):
     ax.set_xticks(x)
     ax.set_xticklabels(noise_order, rotation=45, ha="right")
     ax.set_xlabel("Noise")
-    ax.set_ylabel(metric_col)
+    ax.set_ylabel(metric_axis_label(classwise_metric, target_datasets))
     ax.set_title(f"{algo_name}: Mean(D_val) per dataset & noise (overlay)")
     ax.grid(axis="y", linestyle="--", alpha=0.5)
     ax.legend(title="Dataset", loc="best")
@@ -1164,7 +1176,7 @@ def plot_dataset(df_all: pd.DataFrame, dataset_name: str):
     ax.set_xticks(x)
     ax.set_xticklabels(noise_order, rotation=45, ha="right")
     ax.set_xlabel("Noise")
-    ax.set_ylabel(metric_col)
+    ax.set_ylabel(metric_axis_label(classwise_metric, [dataset_name]))
     ax.set_title(f"{dataset_name}: Mean(D_val) per algorithm & noise (overlay)")
     ax.grid(axis="y", linestyle="--", alpha=0.5)
     ax.legend(title="Algorithm", loc="best")
@@ -1256,7 +1268,7 @@ def plot_dataset_per_class(df_all: pd.DataFrame, dataset_name: str):
     ax.set_xticks(x)
     ax.set_xticklabels(noise_order, rotation=45, ha="right")
     ax.set_xlabel("Noise")
-    ax.set_ylabel(metric_col)
+    ax.set_ylabel(metric_axis_label(classwise_metric, [dataset_name]))
     ax.set_title(f"{dataset_name}: Mean(D_val) per algorithm & noise (overlay)")
     ax.grid(axis="y", linestyle="--", alpha=0.5)
     ax.legend(title="Algorithm", loc="best")
@@ -2586,8 +2598,9 @@ def plot_boxplots_clean_roa_roc_noisy_bootstrapping(
                 algo_colors=algo_colors,
                 show_dataset_labels=False,
                 show_legend=False,
-                show_ylabel=idx % ncols == 0,
+                show_ylabel=True,
                 y_limits=panel_y_limits.get(ds),
+                dataset_names=[ds],
             )
             ax.set_title(
                 _plot_dataset_label(ds),
@@ -2628,6 +2641,7 @@ def plot_boxplots_clean_roa_roc_noisy_bootstrapping(
             show_dataset_labels=True,
             show_legend=True,
             show_ylabel=True,
+            dataset_names=target_datasets,
         )
         fig.tight_layout()
         fig.subplots_adjust(bottom=0.14)

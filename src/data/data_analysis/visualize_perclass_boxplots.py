@@ -46,6 +46,29 @@ ANNOTATION_FONT_SIZE = BASE_FONT_SIZE # - 1
 HEATMAP_CMAP = "Blues"
 REQUESTED_ROW_DEFAULT_WIDTH = 27.0
 REQUESTED_ROW_DEFAULT_HEIGHT = 5.4
+PIXEL_HD95_DATASETS = {"RIGA", "Gleason"}
+CLEAN_DATASET_ID_TO_NAME = {
+    "041": "LIDC",
+    "300": "RIGA",
+    "436": "Gleason",
+    "500": "MouseTumor",
+    "600": "MMIA",
+    "700": "MMIS",
+}
+
+
+def infer_hd95_unit(results: Dict) -> str:
+    """Infer whether HD95 values in one noise-analysis JSON are px or mm."""
+    dataset_names = {
+        CLEAN_DATASET_ID_TO_NAME.get(str(result.get("clean_dataset_id")))
+        for result in results.values()
+    }
+    dataset_names.discard(None)
+    if dataset_names and dataset_names <= PIXEL_HD95_DATASETS:
+        return "px"
+    if dataset_names and dataset_names.isdisjoint(PIXEL_HD95_DATASETS):
+        return "mm"
+    return "px/mm"
 
 
 def resolve_requested_row_figsize(
@@ -190,6 +213,7 @@ def plot_all_metrics_combined(
     overlap_matrix: np.ndarray,
     sorted_classes: List[int],
     output_path: str,
+    hd95_unit: str = "mm",
 ):
     """
     Create a comprehensive figure with all 9 metrics as subplots.
@@ -317,7 +341,7 @@ def plot_all_metrics_combined(
     add_violinplot(ax1, "nsd", "NSD", "Per-Class NSD")
     
     ax2 = fig.add_subplot(gs[0, 2])
-    add_violinplot(ax2, "hd95", "HD95 (mm)", "Per-Class HD95")
+    add_violinplot(ax2, "hd95", f"HD95 ({hd95_unit})", "Per-Class HD95")
     
     # Row 1: Relative volume diff, CC comparisons
     ax3 = fig.add_subplot(gs[1, 0])
@@ -381,6 +405,7 @@ def plot_requested_metrics_single_row(
     output_path: str,
     figsize: tuple[float, float] | None = None,
     keep_ratio: bool = False,
+    hd95_unit: str = "mm",
 ):
     """
     Create a single-row figure with 4 subplots:
@@ -467,7 +492,7 @@ def plot_requested_metrics_single_row(
     add_perclass_violinplot(
         axes[1],
         "hd95",
-        "HD95 (mm)",
+        f"HD95 ({hd95_unit})",
         "Class-wise HD95\n(Consensus vs Noisy)",
     )
     add_perclass_violinplot(
@@ -515,6 +540,7 @@ def plot_core_metrics_single_row(
     overlap_matrix: np.ndarray,
     sorted_classes: List[int],
     output_path: str,
+    hd95_unit: str = "mm",
 ):
     """
     Create a single-row figure with 5 subplots:
@@ -572,7 +598,7 @@ def plot_core_metrics_single_row(
 
     add_violinplot(axes[0], "dice", "Dice", "Per-Class Dice")
     add_violinplot(axes[1], "nsd", "NSD", "Per-Class NSD")
-    add_violinplot(axes[2], "hd95", "HD95 (mm)", "Per-Class HD95")
+    add_violinplot(axes[2], "hd95", f"HD95 ({hd95_unit})", "Per-Class HD95")
     add_violinplot(
         axes[3],
         "relative_volume_diff",
@@ -667,6 +693,7 @@ def main(args):
     # Load data
     print(f"Loading noise analysis results from: {args.input_json}")
     results = load_noise_analysis(args.input_json)
+    hd95_unit = infer_hd95_unit(results)
     
     print(f"Processing {len(results)} samples...")
     df = extract_perclass_data(results)
@@ -691,6 +718,7 @@ def main(args):
         overlap_matrix,
         sorted_classes,
         os.path.join(args.output_dir, "00_comprehensive_perclass_analysis.png"),
+        hd95_unit=hd95_unit,
     )
 
     print("Generating single-row core metrics visualization...")
@@ -699,6 +727,7 @@ def main(args):
         overlap_matrix,
         sorted_classes,
         os.path.join(args.output_dir, "01_core_metrics_single_row.png"),
+        hd95_unit=hd95_unit,
     )
 
     print("Generating single-row requested metrics (Dice, HD95, Instance F1, Confusion)...")
@@ -713,6 +742,7 @@ def main(args):
         os.path.join(args.output_dir, "02_requested_metrics_single_row.png"),
         figsize=requested_row_figsize,
         keep_ratio=args.requested_row_keep_ratio,
+        hd95_unit=hd95_unit,
     )
     
     # Print statistics

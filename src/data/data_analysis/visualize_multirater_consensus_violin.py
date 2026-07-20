@@ -37,10 +37,11 @@ BASE_FONT_SIZE = 30
 TITLE_FONT_SIZE = BASE_FONT_SIZE # + 1
 TICK_FONT_SIZE = BASE_FONT_SIZE # - 1
 ANNOTATION_FONT_SIZE = BASE_FONT_SIZE # - 1
+GLEASON_CONFUSION_TICK_FONT_SIZE = TICK_FONT_SIZE - 10
 HEATMAP_CMAP = "Blues"
-CONFUSION_COLORBAR_LABEL_SIZE = BASE_FONT_SIZE - 6
 # DEFAULT_MAX_SAMPLES = 50
 DEFAULT_MAX_SAMPLES = None
+PIXEL_HD95_DATASETS = {"RIGA", "Gleason"}
 
 METRICS_TO_PLOT = [
     (
@@ -55,7 +56,7 @@ METRICS_TO_PLOT = [
     ),
     (
         "mean_hd95",
-        "HD95 [mm] (C vs R)",
+        "HD95 (C vs R)",
         "HD95\n(C vs R)",
     ),
     (
@@ -73,7 +74,7 @@ QUESTION1_METRICS_TO_PLOT = [
     ),
     (
         "mean_hd95",
-        "HD95 [mm] (C vs R)",
+        "HD95 (C vs R)",
         "HD95\n(C vs R)",
     ),
     (
@@ -82,6 +83,35 @@ QUESTION1_METRICS_TO_PLOT = [
         "Instance F1\n(C vs R)",
     ),
 ]
+
+
+def infer_dataset_name(path: str) -> str | None:
+    """Infer the dataset represented by a consensus-analysis path."""
+    normalized_path = str(path).lower()
+    aliases = {
+        "lidc": "LIDC",
+        "riga": "RIGA",
+        "gleason": "Gleason",
+        "mousetumor": "MouseTumor",
+        "mouse_tumor": "MouseTumor",
+        "mmia": "MMIA",
+        "mmis": "MMIS",
+    }
+    return next(
+        (dataset for alias, dataset in aliases.items() if alias in normalized_path),
+        None,
+    )
+
+
+def hd95_unit_for_path(path: str) -> str:
+    dataset = infer_dataset_name(path)
+    return "px" if dataset in PIXEL_HD95_DATASETS else "mm"
+
+
+def hd95_aware_ylabel(metric: str, ylabel: str, hd95_unit: str) -> str:
+    if metric == "mean_hd95":
+        return f"HD95 [{hd95_unit}] (C vs R)"
+    return ylabel
 
 
 def is_finite_number(value) -> bool:
@@ -428,6 +458,7 @@ def plot_multirater_consensus_violin_row(
     confusion_matrix: np.ndarray,
     confusion_classes: List[int],
     output_path: str,
+    hd95_unit: str = "mm",
 ):
     """Create a single-row figure with 4 per-class violin subplots and 1 heatmap."""
     classes = sorted(df["class_id"].unique())
@@ -442,7 +473,14 @@ def plot_multirater_consensus_violin_row(
     )
 
     for ax, (metric, ylabel, title) in zip(axes, METRICS_TO_PLOT):
-        _add_violin_subplot(ax, df, classes, metric, ylabel, title)
+        _add_violin_subplot(
+            ax,
+            df,
+            classes,
+            metric,
+            hd95_aware_ylabel(metric, ylabel, hd95_unit),
+            title,
+        )
 
     ax_cm = axes[-1]
     if confusion_matrix.size == 0:
@@ -529,6 +567,7 @@ def _add_confusion_heatmap_subplot(
     confusion_matrix: np.ndarray,
     confusion_classes: List[int],
     add_colorbar: bool = True,
+    tick_fontsize: int = TICK_FONT_SIZE,
 ):
     """Add the InstanceClsConf heatmap subplot."""
     if confusion_matrix.size == 0:
@@ -559,10 +598,10 @@ def _add_confusion_heatmap_subplot(
     ax.set_xticks(range(len(confusion_classes)))
     ax.set_yticks(range(len(confusion_classes)))
     ax.set_xticklabels(
-        [f"R Cls {c}" for c in confusion_classes], fontsize=TICK_FONT_SIZE
+        [f"R Cls {c}" for c in confusion_classes], fontsize=tick_fontsize
     )
     ax.set_yticklabels(
-        [f"C Cls {c}" for c in confusion_classes], fontsize=TICK_FONT_SIZE
+        [f"C Cls {c}" for c in confusion_classes], fontsize=tick_fontsize
     )
     plt.setp(
         ax.get_yticklabels(),
@@ -599,8 +638,8 @@ def _add_confusion_heatmap_subplot(
 def _style_confusion_colorbar(cbar) -> None:
     """Apply consistent, compact formatting to a confusion-matrix colorbar."""
     cbar.set_label(
-        "InstanceClsConf\n(C vs R)",
-        fontsize=CONFUSION_COLORBAR_LABEL_SIZE,
+        "Instance ClsConf (C vs R)",
+        fontsize=BASE_FONT_SIZE,
         labelpad=10,
     )
     cbar.ax.tick_params(labelsize=TICK_FONT_SIZE)
@@ -612,6 +651,8 @@ def plot_multirater_consensus_question1_grid(
     confusion_matrix: np.ndarray,
     confusion_classes: List[int],
     output_path: str,
+    hd95_unit: str = "mm",
+    confusion_tick_fontsize: int = TICK_FONT_SIZE,
 ):
     """Create a 2x2 figure for question 1: kappa, HD95, F1, confusion."""
     classes = sorted(df["class_id"].unique())
@@ -632,7 +673,7 @@ def plot_multirater_consensus_question1_grid(
             df,
             classes,
             metric,
-            ylabel,
+            hd95_aware_ylabel(metric, ylabel, hd95_unit),
             title,
             ylabelpad=ylabelpad,
         )
@@ -643,7 +684,11 @@ def plot_multirater_consensus_question1_grid(
             ax.tick_params(axis="y", labelsize=TICK_FONT_SIZE, pad=4)
 
     im = _add_confusion_heatmap_subplot(
-        axes[3], confusion_matrix, confusion_classes, add_colorbar=False
+        axes[3],
+        confusion_matrix,
+        confusion_classes,
+        add_colorbar=False,
+        tick_fontsize=confusion_tick_fontsize,
     )
     axes[3].yaxis.set_label_position("right")
     axes[3].yaxis.tick_right()
@@ -709,14 +754,23 @@ def main(args):
 
     confusion_matrix, confusion_classes = extract_avg_confusion_matrix(results)
     output_path = args.output_png or default_output_path(args.input_json)
+    hd95_unit = hd95_unit_for_path(args.input_json)
+    dataset_name = infer_dataset_name(args.input_json)
+    confusion_tick_fontsize = (
+        GLEASON_CONFUSION_TICK_FONT_SIZE
+        if dataset_name == "Gleason"
+        else TICK_FONT_SIZE
+    )
     plot_multirater_consensus_violin_row(
-        df, confusion_matrix, confusion_classes, output_path
+        df, confusion_matrix, confusion_classes, output_path, hd95_unit=hd95_unit
     )
     plot_multirater_consensus_question1_grid(
         df,
         confusion_matrix,
         confusion_classes,
         question1_grid_output_path(output_path),
+        hd95_unit=hd95_unit,
+        confusion_tick_fontsize=confusion_tick_fontsize,
     )
 
 
