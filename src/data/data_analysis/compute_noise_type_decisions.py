@@ -4,15 +4,23 @@ Compute per-sample noise-type decisions from noise-analysis JSON files.
 The script consumes the JSON files produced by analyze_noise_clean_noisy.py and
 marks each sample as clean/noisy with respect to three selected noise metrics:
 
-- contour noise: HD95 > threshold * median object diagonal for the dataset
+- contour noise: per-sample normalized HD95 (nHD95) > threshold, where
+  nHD95_i = HD95_i / D_i and D_i is the diagonal of the bounding box around
+  the foreground object in sample i's clean/expert mask. This makes the
+  contour-noise decision scale-invariant per case instead of relying on a
+  single dataset-wide diagonal.
 - instance noise: foreground-vs-background instance F1 < threshold
 - instance class-confusion noise: InstanceClsConf > configured threshold(s)
 
 PixelClsConf is retained as a diagnostic but does not contribute to the
 combined ``any_noise`` assignment.
 
-Dataset median object diagonals are measured from the clean/expert masks with
-compute_clean_object_diagonals.py and set below.
+Per-sample object bounding-box diagonals (D_i) are measured from the
+clean/expert masks with compute_clean_object_diagonals.py, which writes them
+to the CSV path in DEFAULT_OBJECT_DIAGONALS_CSV. When a sample has multiple
+foreground classes (e.g. nested disc/cup), D_i is taken as the largest
+per-class bbox diagonal for that sample, since the union bbox of nested
+foreground regions equals the bbox of the outermost region.
 """
 
 from __future__ import annotations
@@ -33,6 +41,9 @@ import numpy as np
 
 DEFAULT_INPUT = "./results/noise_analysis/noise_analysis_results_*.json"
 DEFAULT_OUTPUT_DIR = "./results/noise_analysis/noise_type_decisions"
+DEFAULT_OBJECT_DIAGONALS_CSV = (
+    "./results/noise_analysis/clean_object_diagonals/clean_object_bbox_diagonals.csv"
+)
 DEFAULT_CONTOUR_FRACTIONS = (0.05,)
 DEFAULT_INSTANCE_F1_THRESHOLDS = (1.0,)
 DEFAULT_PIXEL_CLS_CONF_THRESHOLDS = (0.05,)
@@ -45,15 +56,6 @@ DATASET_BY_CLEAN_IDS = {
     "500": "MouseTumor",
     "600": "MMIA",
     "700": "MMIS",
-}
-
-DATASET_MEDIAN_OBJECT_DIAGONAL = {
-    "LIDC": 13.45362404707371,
-    "RIGA": 204.35997645345176,
-    "Gleason": 3762.265996740815,
-    "MouseTumor": 18.429204661310052,
-    "MMIA": 62.47277256164732,
-    "MMIS": 79.51469684833486,
 }
 
 
@@ -88,6 +90,28 @@ def resolve_json_files(input_path: str) -> list[Path]:
     if path.is_file():
         return [path]
     return []
+
+
+def load_object_bbox_diagonals(csv_path: Path) -> dict[tuple[str, str], float]:
+    """
+    Load per-sample foreground object bbox diagonals (D_i) from the CSV
+    written by compute_clean_object_diagonals.py.
+
+    Samples with multiple foreground classes (e.g. nested disc/cup) get one
+    row per class; D_i is taken as the largest per-class bbox diagonal, which
+    equals the bbox diagonal of the union of nested foreground regions.
+    """
+    diagonals_by_sample: dict[tuple[str, str], float] = {}
+    with csv_path.open("r", newline="") as f:
+        for row in csv.DictReader(f):
+            diagonal = to_float_or_none(row.get("bbox_diagonal"))
+            if diagonal is None:
+                continue
+            key = (row["dataset"], row["sample_id"])
+            existing = diagonals_by_sample.get(key)
+            if existing is None or diagonal > existing:
+                diagonals_by_sample[key] = diagonal
+    return diagonals_by_sample
 
 
 def dataset_from_entry(entry: dict[str, Any], source_path: Path) -> str:
@@ -217,6 +241,7 @@ def metric_summary(
 
 def compute_decisions(
     json_files: list[Path],
+    object_bbox_diagonals: dict[tuple[str, str], float],
     contour_fractions: list[float],
     instance_f1_thresholds: list[float],
     pixel_cls_conf_thresholds: list[float],
@@ -242,18 +267,8 @@ def compute_decisions(
         )
 
     for dataset in sorted({dataset for _, _, dataset, _ in entries}):
-        median_diagonal = DATASET_MEDIAN_OBJECT_DIAGONAL.get(dataset)
         thresholds[dataset] = {
-            "median_object_bbox_diagonal": median_diagonal,
-            "contour_fraction_thresholds": contour_fractions,
-            "hd95_contour_thresholds": {
-                f"{fraction:g}": (
-                    fraction * median_diagonal
-                    if median_diagonal is not None
-                    else None
-                )
-                for fraction in contour_fractions
-            },
+            "contour_normalized_hd95_fraction_thresholds": contour_fractions,
             "instance_fgbg_f1_thresholds": instance_f1_thresholds,
             "pixel_cls_conf_thresholds": pixel_cls_conf_thresholds,
             "instance_cls_conf_thresholds": instance_cls_conf_thresholds,
@@ -273,6 +288,15 @@ def compute_decisions(
         )
         instance_cls_conf_coverage = sample_instance_cls_conf_coverage(entry)
 
+        object_bbox_diagonal_value = object_bbox_diagonals.get((dataset, sample_id))
+        normalized_hd95_value = (
+            hd95_value / object_bbox_diagonal_value
+            if hd95_value is not None
+            and object_bbox_diagonal_value is not None
+            and object_bbox_diagonal_value > 0
+            else None
+        )
+
         row = {
             "dataset": dataset,
             "sample_id": sample_id,
@@ -281,6 +305,8 @@ def compute_decisions(
             "clean_dataset_id": entry.get("clean_dataset_id"),
             "noisy_dataset_id": entry.get("noisy_dataset_id"),
             "hd95_value": hd95_value,
+            "object_bbox_diagonal_value": object_bbox_diagonal_value,
+            "normalized_hd95_value": normalized_hd95_value,
             "instance_fgbg_f1_value": instance_f1_value,
             "pixel_cls_conf_value": pixel_cls_conf_value,
             "instance_cls_conf_value": instance_cls_conf_value,
@@ -288,16 +314,11 @@ def compute_decisions(
             "any_noise": False,
         }
 
-        hd95_thresholds = thresholds.get(dataset, {}).get("hd95_contour_thresholds", {})
         for fraction in contour_fractions:
-            threshold_key = f"{fraction:g}"
-            threshold_value = hd95_thresholds.get(threshold_key)
-            row[f"hd95_threshold_frac_{threshold_key}".replace(".", "_")] = threshold_value
             decision_key = decision_column("contour_noisy_frac", "gt", fraction)
             noisy = (
-                hd95_value is not None
-                and threshold_value is not None
-                and hd95_value > threshold_value
+                normalized_hd95_value is not None
+                and normalized_hd95_value > fraction
             )
             row[decision_key] = noisy
             row["any_noise"] = row["any_noise"] or noisy
@@ -333,6 +354,12 @@ def compute_decisions(
         "instance_fgbg_f1_thresholds": instance_f1_thresholds,
         "pixel_cls_conf_thresholds": pixel_cls_conf_thresholds,
         "instance_cls_conf_thresholds": instance_cls_conf_thresholds,
+        "contour_normalized_hd95_definition": (
+            "nHD95_i = HD95_i / D_i, where D_i is the bbox diagonal of the "
+            "foreground object in sample i's clean/expert mask (per-sample, "
+            "not a dataset-wide constant). A sample is contour-noisy if "
+            "nHD95_i exceeds the configured fraction threshold."
+        ),
         "pixel_cls_conf_definition": (
             "Macro-average over present clean foreground classes of the fraction "
             "assigned to other foreground classes; background transitions excluded. "
@@ -361,7 +388,7 @@ def compute_decisions(
             decision_key = decision_column("contour_noisy_frac", "gt", fraction)
             dataset_summary[f"contour_frac_gt_{fraction:g}"] = metric_summary(
                 dataset_rows,
-                "hd95_value",
+                "normalized_hd95_value",
                 decision_key,
             )
         for threshold in instance_f1_thresholds:
@@ -390,7 +417,7 @@ def compute_decisions(
         decision_key = decision_column("contour_noisy_frac", "gt", fraction)
         metadata["summary_all"][f"contour_frac_gt_{fraction:g}"] = metric_summary(
             all_rows,
-            "hd95_value",
+            "normalized_hd95_value",
             decision_key,
         )
     for threshold in instance_f1_thresholds:
@@ -441,13 +468,21 @@ def main() -> None:
     parser.add_argument("--input", default=DEFAULT_INPUT, help="Input JSON path/glob/directory.")
     parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR, help="Output directory.")
     parser.add_argument(
+        "--object-diagonals-csv",
+        default=DEFAULT_OBJECT_DIAGONALS_CSV,
+        help=(
+            "CSV of per-sample foreground object bbox diagonals (D_i), written "
+            "by compute_clean_object_diagonals.py."
+        ),
+    )
+    parser.add_argument(
         "--contour-fractions",
         nargs="+",
         type=float,
         default=list(DEFAULT_CONTOUR_FRACTIONS),
         help=(
-            "HD95 contour thresholds as fractions of median object diagonal; "
-            "values above each threshold are marked noisy."
+            "Normalized HD95 (HD95_i / D_i) thresholds; samples whose "
+            "per-sample normalized HD95 exceeds a threshold are marked noisy."
         ),
     )
     parser.add_argument(
@@ -477,8 +512,17 @@ def main() -> None:
     if not json_files:
         raise FileNotFoundError(f"No JSON files found for --input={args.input}")
 
+    object_diagonals_csv = Path(args.object_diagonals_csv)
+    if not object_diagonals_csv.is_file():
+        raise FileNotFoundError(
+            f"No object bbox diagonals CSV found at --object-diagonals-csv="
+            f"{object_diagonals_csv}. Run compute_clean_object_diagonals.py first."
+        )
+    object_bbox_diagonals = load_object_bbox_diagonals(object_diagonals_csv)
+
     rows, metadata = compute_decisions(
         json_files=json_files,
+        object_bbox_diagonals=object_bbox_diagonals,
         contour_fractions=args.contour_fractions,
         instance_f1_thresholds=args.instance_f1_thresholds,
         pixel_cls_conf_thresholds=args.pixel_cls_conf_thresholds,
@@ -500,7 +544,7 @@ def main() -> None:
             key = f"contour_frac_gt_{fraction:g}"
             prevalence = summary[key]["prevalence_valid"]
             value = "n/a" if prevalence is None else f"{prevalence:.3f}"
-            parts.append(f"contour>{fraction:g}diag={value}")
+            parts.append(f"nHD95>{fraction:g}={value}")
         for threshold in args.instance_f1_thresholds:
             key = f"instance_f1_lt_{threshold:g}"
             prevalence = summary[key]["prevalence_valid"]
