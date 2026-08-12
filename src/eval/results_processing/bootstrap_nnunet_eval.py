@@ -17,22 +17,25 @@ def _normalize_label_key(label: Union[int, str]) -> str:
     return str(label)
 
 
-def _load_existing_bootstrap_results(results_file: Path) -> Dict:
+def _load_existing_bootstrap_results(
+    results_file: Path,
+    drop_legacy_class_confusion: bool = True,
+) -> Dict:
     if not results_file.is_file():
         return {}
     with open(results_file, "r") as f:
         results = json.load(f)
 
-    # The former ClassConfusion metric was PixelClsConf under an ambiguous
-    # name. Drop it so an incremental run computes both explicit replacements
-    # and does not retain a stale legacy metric beside them.
-    for label_key, metrics in results.items():
-        if label_key == "stats" or not isinstance(metrics, dict):
-            continue
-        metrics.pop("ClassConfusion", None)
-    for metrics in results.get("stats", {}).values():
-        if isinstance(metrics, dict):
+    if drop_legacy_class_confusion:
+        # The former ClassConfusion metric was PixelClsConf under an ambiguous
+        # name. Normal incremental runs replace it with the explicit metrics.
+        for label_key, metrics in results.items():
+            if label_key == "stats" or not isinstance(metrics, dict):
+                continue
             metrics.pop("ClassConfusion", None)
+        for metrics in results.get("stats", {}).values():
+            if isinstance(metrics, dict):
+                metrics.pop("ClassConfusion", None)
     return results
 
 
@@ -80,6 +83,7 @@ def _infer_missing_metrics(
 def _resolve_forced_metrics(
     forced_metrics: Optional[List[str]],
     available_metric_names: List[str],
+    strict: bool = False,
 ) -> Set[str]:
     if not forced_metrics:
         return set()
@@ -88,9 +92,12 @@ def _resolve_forced_metrics(
     resolved = {metric for metric in forced_metrics if metric in available}
     unknown = sorted(set(forced_metrics) - available)
     if unknown:
-        print(
-            "Ignoring unknown forced metrics: " + ", ".join(unknown)
-        )
+        message = "Unknown requested metrics: " + ", ".join(unknown)
+        if strict:
+            raise ValueError(
+                message + ". Available metrics: " + ", ".join(sorted(available))
+            )
+        print("Ignoring unknown forced metrics: " + ", ".join(unknown))
     return resolved
 
 
@@ -275,6 +282,7 @@ def bootstrap_evaluate(
     file_ending: str = ".nii.gz",
     force: bool = False,
     force_metrics: Optional[List[str]] = None,
+    only_metrics: Optional[List[str]] = None,
     num_workers: int = 1,
 ) -> Dict:
     """
@@ -282,12 +290,25 @@ def bootstrap_evaluate(
 
     Default behavior is incremental: if bootstrap results already exist, only
     missing metrics are recomputed and merged into the existing JSON. With
-    --force, all metrics are recomputed from scratch.
+    --force, all metrics are recomputed from scratch. ``only_metrics`` strictly
+    recomputes and merges only the named metrics, preserving all other entries.
     """
+
+    if force and only_metrics:
+        raise ValueError("force and only_metrics are mutually exclusive")
+    if force_metrics and only_metrics:
+        raise ValueError("force_metrics and only_metrics are mutually exclusive")
 
     labels = [int(label) for label in labels]
     results_file = Path(folder_pred) / "bootstrap_evaluation_results.json"
-    existing_results = {} if force else _load_existing_bootstrap_results(results_file)
+    existing_results = (
+        {}
+        if force
+        else _load_existing_bootstrap_results(
+            results_file,
+            drop_legacy_class_confusion=not bool(only_metrics),
+        )
+    )
 
     example_file = subfiles(folder_ref, join=True)[0]
     reader_writer_cls = determine_reader_writer_from_file_ending(
@@ -316,9 +337,20 @@ def bootstrap_evaluate(
     )["metrics"]
     available_metric_names = list(first_case_metrics[labels[0]].keys())
     forced_metrics = _resolve_forced_metrics(force_metrics, available_metric_names)
+    selected_only_metrics = _resolve_forced_metrics(
+        only_metrics,
+        available_metric_names,
+        strict=True,
+    )
 
     metrics_to_compute = set(available_metric_names)
-    if not force and existing_results:
+    if selected_only_metrics:
+        metrics_to_compute = selected_only_metrics
+        print(
+            "Strict metric selection enabled. Recomputing only: "
+            + ", ".join(sorted(metrics_to_compute))
+        )
+    elif not force and existing_results:
         metrics_to_compute = _infer_missing_metrics(
             existing_results,
             labels,
@@ -414,19 +446,29 @@ def bootstrap_evaluate(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--exp_id", type=str, help="Experiment ID of bootstrapped model.")
-    parser.add_argument(
+    metric_mode = parser.add_mutually_exclusive_group()
+    metric_mode.add_argument(
         "--force",
         action="store_true",
         help="Force full re-evaluation of all bootstrap metrics, even if results exist.",
         default=False,
     )
-    parser.add_argument(
+    metric_mode.add_argument(
         "--force-metrics",
         nargs="+",
         default=None,
         help=(
             "Metric names to recompute even when already present, while leaving "
             "other metrics incremental. Example: --force-metrics HD95"
+        ),
+    )
+    metric_mode.add_argument(
+        "--only-metrics",
+        nargs="+",
+        default=None,
+        help=(
+            "Recompute only these metrics and merge them into the existing "
+            "bootstrap JSON without changing or removing any other metric."
         ),
     )
     parser.add_argument(
@@ -478,5 +520,6 @@ if __name__ == "__main__":
             file_ending=file_ending,
             force=args.force,
             force_metrics=args.force_metrics,
+            only_metrics=args.only_metrics,
             num_workers=args.num_workers,
         )
