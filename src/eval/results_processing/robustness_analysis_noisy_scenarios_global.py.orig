@@ -1689,7 +1689,6 @@ def plot_separate_scenarios_side_by_side(
         "Saved figures:\n"
         f"  - {output_path.resolve()}\n"
         f"  - {output_path.with_suffix('.svg').resolve()}"
-    )
 
 
 # ---------------------------------------------------------------------------

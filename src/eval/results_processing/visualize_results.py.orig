@@ -2634,7 +2634,7 @@ def plot_boxplots_clean_roa_roc_noisy_bootstrapping(
             )
             ax.set_title(
                 _plot_dataset_label(ds),
-                fontsize=BOXPLOT_TITLE_FONTSIZE,
+                fontsize=BOXPLOT_LABEL_FONTSIZE,
                 fontweight="bold",
             )
         for ax in axes_flat[len(panel_payloads) :]:
@@ -2648,7 +2648,7 @@ def plot_boxplots_clean_roa_roc_noisy_bootstrapping(
             loc="upper center",
             bbox_to_anchor=(0.5, 0.995),
             ncol=len(target_algos),
-            fontsize=BOXPLOT_TITLE_FONTSIZE,
+            fontsize=BOXPLOT_LEGEND_FONTSIZE,
             frameon=False,
         )
         fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.94))

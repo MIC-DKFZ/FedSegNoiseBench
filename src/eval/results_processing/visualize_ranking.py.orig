@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+try:
 # Use Computer Modern, LaTeX's default font, for all figure text.
 plt.rcParams.update(
     {
@@ -21,7 +22,6 @@ plt.rcParams.update(
     }
 )
 
-try:
     from .ranking import (
         DEFAULT_NNUNET_RESULTS_ROOT,
         OUTPUT_DIR,
